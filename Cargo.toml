@@ -1,0 +1,15 @@
+[package]
+name = "il2_mission_utility"
+version = "0.1.0"
+edition = "2024"
+description = "Native desktop utility to generate, duplicate, and link IL-2 Sturmovik .Group mission files"
+
+[dependencies]
+eframe = "0.32"
+egui = "0.32"
+geo = "0.28"
+geo-types = "0.7"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+nom = "8"
+resvg = "0.45"
+rfd = "0.15"
