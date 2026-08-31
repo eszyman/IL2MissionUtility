@@ -719,6 +719,7 @@ This mode does not write NodeGates, but is intended to be used with the Army Gen
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("Initial Placement:").strong());
+            let prev_layout = self.tpl_place_layout;
             egui::ComboBox::from_id_salt("tpl_place_layout")
                 .selected_text(self.tpl_place_layout.label())
                 .width(200.0)
@@ -727,13 +728,18 @@ This mode does not write NodeGates, but is intended to be used with the Army Gen
                         ui.selectable_value(&mut self.tpl_place_layout, layout, layout.label());
                     }
                 });
+            if self.tpl_place_layout != prev_layout {
+                self.tpl_per_group = self.tpl_place_layout.default_per_group();
+            }
             ui.label("Per group");
             ui.add(egui::DragValue::new(&mut self.tpl_per_group).range(1..=8));
         });
         ui.label(
-            RichText::new("Spacing is 150 m. Inverted Vee is finger-four. Ground and ships usually use Column.")
-                .italics()
-                .small(),
+            RichText::new(
+                "Spacing is 150 m. Inverted Vee is finger-four (4). Combat Box is two 3-ship vees (6). Ground and ships usually use Column.",
+            )
+            .italics()
+            .small(),
         );
         ui.add_space(6.0);
         ui.label(RichText::new("Checkzones").strong());

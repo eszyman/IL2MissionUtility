@@ -1217,6 +1217,7 @@ pub fn lead_has_followers(seats: &[TemplateSeat], lead: usize) -> bool {
 pub enum PlaceLayout {
     InvertedVee,
     Vee,
+    CombatBox,
     Pairs,
     EchelonRight,
     EchelonLeft,
@@ -1225,9 +1226,10 @@ pub enum PlaceLayout {
 }
 
 impl PlaceLayout {
-    pub const ALL: [PlaceLayout; 7] = [
+    pub const ALL: [PlaceLayout; 8] = [
         PlaceLayout::InvertedVee,
         PlaceLayout::Vee,
+        PlaceLayout::CombatBox,
         PlaceLayout::Pairs,
         PlaceLayout::EchelonRight,
         PlaceLayout::EchelonLeft,
@@ -1239,11 +1241,20 @@ impl PlaceLayout {
         match self {
             PlaceLayout::InvertedVee => "Inverted Vee (finger-four)",
             PlaceLayout::Vee => "Vee",
+            PlaceLayout::CombatBox => "Combat Box",
             PlaceLayout::Pairs => "Pairs",
             PlaceLayout::EchelonRight => "Echelon right",
             PlaceLayout::EchelonLeft => "Echelon left",
             PlaceLayout::LineAbreast => "Line abreast",
             PlaceLayout::Column => "Column",
+        }
+    }
+
+    /// Default **Per group** when this layout is chosen in Template Builder.
+    pub fn default_per_group(self) -> u32 {
+        match self {
+            PlaceLayout::CombatBox => 6,
+            _ => 4,
         }
     }
 }
@@ -1307,6 +1318,7 @@ pub fn place_offset(
 fn layout_seat(layout: PlaceLayout, seat: usize, per: usize, spacing: f64) -> (f64, f64) {
     match layout {
         PlaceLayout::InvertedVee => inverted_vee_seat(seat, spacing),
+        PlaceLayout::CombatBox => combat_box_seat(seat, spacing),
         PlaceLayout::Vee => {
             if seat == 0 {
                 (0.0, 0.0)
@@ -1352,6 +1364,23 @@ fn inverted_vee_seat(seat: usize, spacing: f64) -> (f64, f64) {
     };
     let back = -(cluster as f64) * spacing * 2.0;
     let side = (cluster as f64) * spacing * 1.5;
+    (back + dx, side + dz)
+}
+
+/// Six-ship combat box: two 3-plane vees, second element back and staggered right.
+fn combat_box_seat(seat: usize, spacing: f64) -> (f64, f64) {
+    let cluster = seat / 6;
+    let inner = seat % 6;
+    let (dx, dz) = match inner {
+        0 => (0.0, 0.0),
+        1 => (-spacing * 0.70, spacing),
+        2 => (-spacing * 0.70, -spacing),
+        3 => (-spacing * 2.00, spacing * 0.50),
+        4 => (-spacing * 2.70, spacing * 1.50),
+        _ => (-spacing * 2.70, -spacing * 0.50),
+    };
+    let back = -(cluster as f64) * spacing * 3.0;
+    let side = (cluster as f64) * spacing * 2.0;
     (back + dx, side + dz)
 }
 
@@ -3295,6 +3324,71 @@ mod tests {
             assert_eq!(
                 place_offset(PlaceLayout::InvertedVee, i, 4, 150.0),
                 finger_four_offset(i, 150.0)
+            );
+        }
+    }
+
+    #[test]
+    fn combat_box_defaults_to_six_per_group() {
+        assert_eq!(PlaceLayout::CombatBox.default_per_group(), 6);
+        assert_eq!(PlaceLayout::InvertedVee.default_per_group(), 4);
+        assert_eq!(PlaceLayout::ALL.iter().filter(|l| **l == PlaceLayout::CombatBox).count(), 1);
+    }
+
+    #[test]
+    fn combat_box_six_are_distinct_with_lead_forward() {
+        let spacing = 150.0;
+        let mut pts = Vec::new();
+        for i in 0..6 {
+            pts.push(place_offset(PlaceLayout::CombatBox, i, 6, spacing));
+        }
+        for i in 0..6 {
+            for j in (i + 1)..6 {
+                assert_ne!(pts[i], pts[j], "seats {i} and {j} overlap");
+            }
+        }
+        let lead = pts[0];
+        assert!((lead.0).abs() < 1e-9 && (lead.1).abs() < 1e-9);
+        for &(x, _) in &pts[1..] {
+            assert!(x < lead.0, "wingmen must sit behind the lead");
+        }
+        let second = place_offset(PlaceLayout::CombatBox, 6, 6, spacing);
+        assert_ne!(second, lead);
+        assert!(second.0 < lead.0);
+    }
+
+    #[test]
+    fn units_sit_in_combat_box() {
+        let mig = builtin_plane_catalog()
+            .into_iter()
+            .find(|u| u.script.contains("mig15bis"))
+            .unwrap();
+        let mut opts = TemplateOptions::default();
+        opts.place_layout = PlaceLayout::CombatBox;
+        opts.per_group = PlaceLayout::CombatBox.default_per_group();
+        opts.waypoint_count = 0;
+        opts.seats = (0..6)
+            .map(|i| {
+                let mut seat = TemplateSeat::new(mig.clone());
+                seat.number_in_formation = i as i32;
+                seat.altitude = 1000.0;
+                seat
+            })
+            .collect();
+        let pack = generate_template(&opts).unwrap();
+        let mut xz = Vec::new();
+        pack.for_each(&mut |e| {
+            if e.block_type == "Plane" {
+                xz.push(e.pos_xz().unwrap());
+            }
+        });
+        assert_eq!(xz.len(), 6);
+        assert_eq!(opts.per_group, 6);
+        for (i, &(x, z)) in xz.iter().enumerate() {
+            let (dx, dz) = place_offset(PlaceLayout::CombatBox, i, 6, 150.0);
+            assert!(
+                (x - (ORIGIN_X + dx)).abs() < 1.0 && (z - (ORIGIN_Z + dz)).abs() < 1.0,
+                "seat {i} at ({x}, {z})"
             );
         }
     }
