@@ -1,0 +1,39 @@
+MCU_CMD_Formation
+{
+  Index = 23921;
+  Name = "Vehicle - Road Column 1 way";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39847.271;
+  YPos = 0.000;
+  ZPos = 39717.534;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 4;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23922;
+  Name = "Vehicle - Road Column 2 way";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39847.271;
+  YPos = 0.000;
+  ZPos = 39817.534;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 18;
+FormationDensity = 1;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+

@@ -1,0 +1,1466 @@
+Group
+{
+  Name = "Russian BM13 Artillery";
+  Index = 2252;
+  Desc = "";
+  MCU_Counter
+  {
+    Index = 2253;
+    Name = "Arty Damaged Counter";
+    Desc = "";
+    Targets = [2254,2255];
+    Objects = [];
+    XPos = 147415.998;
+    YPos = 37.418;
+    ZPos = 253257.701;
+    XOri = 0;
+    YOri = 2.730138;
+    ZOri = 0;
+    Counter = 5;
+    Dropcount = 0;
+  }
+  
+
+  Group
+  {
+    Name = "Logic";
+    Index = 2256;
+    Desc = "";
+    MCU_CMD_AttackArea
+    {
+      Index = 2257;
+      Name = "AAA Defense command AttackArea";
+      Desc = "";
+      Targets = [];
+      Objects = [2258,2259];
+      XPos = 147076.310;
+      YPos = 36.087;
+      ZPos = 252691.356;
+      XOri = 0;
+      YOri = 358.7;
+      ZOri = 0;
+      AttackGround = 0;
+      AttackAir = 1;
+      AttackGTargets = 0;
+      AttackArea = 1500;
+      Time = 600;
+      Priority = 1;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2260;
+      Name = "1s";
+      Desc = "";
+      Targets = [2257];
+      Objects = [];
+      XPos = 146900.000;
+      YPos = 38.212;
+      ZPos = 253395.684;
+      XOri = 0;
+      YOri = 14.27;
+      ZOri = 0;
+      Time = 1;
+      Random = 100;
+    }
+    
+
+    MCU_TR_MissionBegin
+    {
+      Index = 2261;
+      Name = "Translator Mission Begin";
+      Desc = "";
+      Targets = [2262];
+      Objects = [];
+      XPos = 147268.282;
+      YPos = 36.804;
+      ZPos = 253345.225;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Enabled = 1;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2262;
+      Name = "3s";
+      Desc = "";
+      Targets = [2264];
+      Objects = [];
+      XPos = 147213.262;
+      YPos = 38.291;
+      ZPos = 253344.921;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 3;
+      Random = 100;
+    }
+    
+
+    MCU_CheckZone
+    {
+      Index = 2264;
+      Name = "Zone In";
+      Desc = "";
+      Targets = [2266,2267,2268,2269,2270];
+      Objects = [];
+      XPos = 146841.024;
+      YPos = 33.446;
+      ZPos = 252715.833;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Zone = 7500;
+      Cylinder = 1;
+      Closer = 1;
+      PlaneCoalitions = [1, 2];
+    }
+    
+
+    MCU_Deactivate
+    {
+      Index = 2266;
+      Name = "Self Deactivate";
+      Desc = "";
+      Targets = [2264];
+      Objects = [];
+      XPos = 147166.052;
+      YPos = 39.105;
+      ZPos = 253345.138;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2267;
+      Name = "Zone Out ReActivate";
+      Desc = "";
+      Targets = [2273];
+      Objects = [];
+      XPos = 147119.530;
+      YPos = 39.561;
+      ZPos = 253344.696;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2274;
+      Name = "Zone In ReActivate";
+      Desc = "";
+      Targets = [2264];
+      Objects = [];
+      XPos = 147073.645;
+      YPos = 39.827;
+      ZPos = 253345.839;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+    }
+    
+
+    MCU_CheckZone
+    {
+      Index = 2273;
+      Name = "Zone Out";
+      Desc = "";
+      Targets = [2274,2276,2277,2278];
+      Objects = [];
+      XPos = 146840.177;
+      YPos = 34.049;
+      ZPos = 252722.417;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Zone = 8500;
+      Cylinder = 1;
+      Closer = 0;
+      PlaneCoalitions = [1, 2];
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2268;
+      Name = "2s";
+      Desc = "";
+      Targets = [2273];
+      Objects = [];
+      XPos = 146981.107;
+      YPos = 37.010;
+      ZPos = 253346.143;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 2;
+      Random = 100;
+    }
+    
+
+    MCU_Deactivate
+    {
+      Index = 2276;
+      Name = "Self Deactivate";
+      Desc = "";
+      Targets = [2273];
+      Objects = [];
+      XPos = 147027.777;
+      YPos = 38.308;
+      ZPos = 253346.397;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+    }
+    
+
+    MCU_Deactivate
+    {
+      Index = 2281;
+      Name = "Deactivate Unit(s)";
+      Desc = "";
+      Targets = [];
+      Objects = [2259,2258,2282,2283,2284,2285,2286];
+      XPos = 146732.980;
+      YPos = 42.281;
+      ZPos = 253465.455;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2269;
+      Name = "Activate Unit(s)";
+      Desc = "";
+      Targets = [];
+      Objects = [2259,2258,2288,2282,2283,2284,2285,2286];
+      XPos = 146842.709;
+      YPos = 33.631;
+      ZPos = 252189.754;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2277;
+      Name = "2s";
+      Desc = "";
+      Targets = [2281];
+      Objects = [];
+      XPos = 146832.386;
+      YPos = 41.009;
+      ZPos = 253465.431;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 3;
+      Random = 100;
+    }
+    
+
+    MCU_CMD_ForceComplete
+    {
+      Index = 2278;
+      Name = "Force Complete";
+      Desc = "";
+      Targets = [];
+      Objects = [2259,2258,2288];
+      XPos = 146744.756;
+      YPos = 40.343;
+      ZPos = 253358.513;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Priority = 2;
+      EmergencyOrdnanceDrop = 0;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2270;
+      Name = "5s";
+      Desc = "";
+      Targets = [2292,2260];
+      Objects = [];
+      XPos = 146944.607;
+      YPos = 38.082;
+      ZPos = 253394.311;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 5;
+      Random = 100;
+    }
+    
+
+  }
+  
+
+  Group
+  {
+    Name = "Recc";
+    Index = 2293;
+    Desc = "";
+    Group
+    {
+      Name = "Destroyed";
+      Index = 2294;
+      Desc = "";
+      MCU_Deactivate
+      {
+        Index = 2295;
+        Name = "Trigger Deactivate";
+        Desc = "";
+        Targets = [2296];
+        Objects = [];
+        XPos = 147150.166;
+        YPos = 34.291;
+        ZPos = 252779.740;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2297;
+        Targets = [2298];
+        Objects = [];
+        XPos = 145307.180;
+        YPos = 80.828;
+        ZPos = 251147.236;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 573;
+        LCDesc = 574;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2298;
+        Targets = [];
+        Objects = [];
+        XPos = 148709.261;
+        YPos = 204.454;
+        ZPos = 254397.218;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 575;
+        LCDesc = 576;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2300;
+        Targets = [2301];
+        Objects = [];
+        XPos = 148631.386;
+        YPos = 33.651;
+        ZPos = 251060.424;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 577;
+        LCDesc = 578;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2301;
+        Targets = [];
+        Objects = [];
+        XPos = 145394.476;
+        YPos = 52.988;
+        ZPos = 254489.961;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 579;
+        LCDesc = 580;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Deactivate
+      {
+        Index = 2303;
+        Name = "Trigger Deactivate";
+        Desc = "";
+        Targets = [2304,2305,2306,2307];
+        Objects = [];
+        XPos = 147648.015;
+        YPos = 35.700;
+        ZPos = 253025.776;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+      }
+      
+
+      MCU_Timer
+      {
+        Index = 2255;
+        Name = "Deactivate Icons Timer";
+        Desc = "";
+        Targets = [2303];
+        Objects = [];
+        XPos = 147629.483;
+        YPos = 38.462;
+        ZPos = 253236.868;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Time = 60;
+        Random = 100;
+      }
+      
+
+      MCU_Timer
+      {
+        Index = 2254;
+        Name = "Activate Icons Timer";
+        Desc = "";
+        Targets = [2310];
+        Objects = [];
+        XPos = 147283.697;
+        YPos = 37.245;
+        ZPos = 253227.423;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Time = 120;
+        Random = 100;
+      }
+      
+
+      MCU_Activate
+      {
+        Index = 2310;
+        Name = "Trigger Activate";
+        Desc = "";
+        Targets = [2298,2297,2300,2301];
+        Objects = [];
+        XPos = 147274.932;
+        YPos = 43.825;
+        ZPos = 253523.526;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+      }
+      
+
+    }
+    
+
+    MCU_CheckZone
+    {
+      Index = 2296;
+      Name = "Trigger Check Zone";
+      Desc = "";
+      Targets = [2313,2295];
+      Objects = [];
+      XPos = 146855.855;
+      YPos = 34.644;
+      ZPos = 252924.191;
+      XOri = 0;
+      YOri = 357.0938;
+      ZOri = 0;
+      Zone = 1000;
+      Cylinder = 1;
+      Closer = 1;
+      PlaneCoalitions = [2];
+    }
+    
+
+    MCU_TR_MissionBegin
+    {
+      Index = 2314;
+      Name = "Translator Mission Begin";
+      Desc = "";
+      Targets = [2315];
+      Objects = [];
+      XPos = 147071.364;
+      YPos = 33.479;
+      ZPos = 252517.148;
+      XOri = 0;
+      YOri = 357.0938;
+      ZOri = 0;
+      Enabled = 1;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2315;
+      Name = "Trigger Timer";
+      Desc = "";
+      Targets = [2296];
+      Objects = [];
+      XPos = 146852.309;
+      YPos = 34.495;
+      ZPos = 252760.812;
+      XOri = 0;
+      YOri = 357.0938;
+      ZOri = 0;
+      Time = 0;
+      Random = 100;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2313;
+      Name = "Trigger Timer";
+      Desc = "";
+      Targets = [2318];
+      Objects = [];
+      XPos = 146562.097;
+      YPos = 32.998;
+      ZPos = 252934.318;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Time = 2;
+      Random = 100;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2318;
+      Name = "Trigger Activate";
+      Desc = "";
+      Targets = [2307,2306,2305,2304];
+      Objects = [];
+      XPos = 146568.451;
+      YPos = 38.124;
+      ZPos = 253173.983;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2305;
+      Targets = [2304];
+      Objects = [];
+      XPos = 147442.345;
+      YPos = 36.456;
+      ZPos = 250646.147;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 581;
+      LCDesc = 582;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2304;
+      Targets = [2307];
+      Objects = [];
+      XPos = 149052.003;
+      YPos = 51.363;
+      ZPos = 252602.737;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 583;
+      LCDesc = 584;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2307;
+      Targets = [2306];
+      Objects = [];
+      XPos = 146937.968;
+      YPos = 99.794;
+      ZPos = 254633.029;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 585;
+      LCDesc = 586;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2306;
+      Targets = [2305];
+      Objects = [];
+      XPos = 145011.855;
+      YPos = 34.293;
+      ZPos = 252784.354;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 587;
+      LCDesc = 588;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+  }
+  
+
+  MCU_CMD_AttackArea
+  {
+    Index = 2292;
+    Name = "command AttackArea";
+    Desc = "";
+    Targets = [];
+    Objects = [2282,2283,2284,2285,2286];
+    XPos = 156888.781;
+    YPos = 20.405;
+    ZPos = 252870.930;
+    XOri = 0;
+    YOri = 104.69;
+    ZOri = 0;
+    AttackGround = 1;
+    AttackAir = 0;
+    AttackGTargets = 0;
+    AttackArea = 1500;
+    Time = 600;
+    Priority = 1;
+  }
+  
+
+  Vehicle
+  {
+    Name = "AAA-zpu53";
+    Index = 2325;
+    LinkTrId = 2258;
+    XPos = 147207.217;
+    YPos = 22.935;
+    ZPos = 253203.916;
+    XOri = 0.08185;
+    YOri = 349.6609;
+    ZOri = 359.5512;
+    Script = "LuaScripts\WorldObjects\fixedobjects\zpuvz53.txt";
+    Model = "graphics\fixedobjects\zpuvz53\zpuvz53.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2258;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 147207.217;
+    YPos = 23.135;
+    ZPos = 253203.916;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2325;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "AAA-zpu53";
+    Index = 2327;
+    LinkTrId = 2259;
+    XPos = 146444.022;
+    YPos = 222.415;
+    ZPos = 252476.368;
+    XOri = 0;
+    YOri = 3.200435;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\fixedobjects\zpuvz53.txt";
+    Model = "graphics\fixedobjects\zpuvz53\zpuvz53.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2259;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 146444.022;
+    YPos = 222.615;
+    ZPos = 252476.368;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2327;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "AAA-zpu53";
+    Index = 2329;
+    LinkTrId = 2288;
+    XPos = 147200.413;
+    YPos = 68.549;
+    ZPos = 251991.429;
+    XOri = 4.304409;
+    YOri = 3.200435;
+    ZOri = 357.4536;
+    Script = "LuaScripts\WorldObjects\fixedobjects\zpuvz53.txt";
+    Model = "graphics\fixedobjects\zpuvz53\zpuvz53.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2288;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 147200.413;
+    YPos = 68.749;
+    ZPos = 251991.429;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2329;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "BM13";
+    Index = 2331;
+    LinkTrId = 2282;
+    XPos = 146910.058;
+    YPos = 222.415;
+    ZPos = 252711.540;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-bm13.txt";
+    Model = "graphics\vehicles\studebakerus6-bm13\studebakerus6-bm13.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 0;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 0;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "%20%20%20%20";
+    TCodeColor = "1111";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2282;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 146910.058;
+    YPos = 222.615;
+    ZPos = 252711.540;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2331;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "BM13";
+    Index = 2333;
+    LinkTrId = 2283;
+    XPos = 146924.045;
+    YPos = 222.415;
+    ZPos = 252610.833;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-bm13.txt";
+    Model = "graphics\vehicles\studebakerus6-bm13\studebakerus6-bm13.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 0;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 0;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "%20%20%20%20";
+    TCodeColor = "1111";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2283;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 146924.045;
+    YPos = 222.615;
+    ZPos = 252610.833;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2333;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "BM13";
+    Index = 2335;
+    LinkTrId = 2284;
+    XPos = 146932.438;
+    YPos = 222.415;
+    ZPos = 252526.911;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-bm13.txt";
+    Model = "graphics\vehicles\studebakerus6-bm13\studebakerus6-bm13.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 0;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 0;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "%20%20%20%20";
+    TCodeColor = "1111";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2284;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 146932.438;
+    YPos = 222.615;
+    ZPos = 252526.911;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2335;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "BM13";
+    Index = 2337;
+    LinkTrId = 2285;
+    XPos = 146963.209;
+    YPos = 222.415;
+    ZPos = 252448.583;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-bm13.txt";
+    Model = "graphics\vehicles\studebakerus6-bm13\studebakerus6-bm13.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 0;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 0;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "%20%20%20%20";
+    TCodeColor = "1111";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2285;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 146963.209;
+    YPos = 222.615;
+    ZPos = 252448.583;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2337;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "BM13";
+    Index = 2339;
+    LinkTrId = 2286;
+    XPos = 146982.791;
+    YPos = 222.415;
+    ZPos = 252381.446;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-bm13.txt";
+    Model = "graphics\vehicles\studebakerus6-bm13\studebakerus6-bm13.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 0;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 0;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "%20%20%20%20";
+    TCodeColor = "1111";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2286;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 146982.791;
+    YPos = 222.615;
+    ZPos = 252381.446;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2339;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 12;
+        TarId = 2253;
+      }
+    }
+  }
+  
+
+  Vehicle
+  {
+    Name = "gaz67b";
+    Index = 2341;
+    LinkTrId = 2342;
+    XPos = 146926.132;
+    YPos = 30.370;
+    ZPos = 252600.701;
+    XOri = 1.816491;
+    YOri = 16.95084;
+    ZOri = 356.5876;
+    Script = "LuaScripts\WorldObjects\vehicles\gaz67b.txt";
+    Model = "graphics\vehicles\gaz67b\gaz67b.mgm";
+    Desc = "";
+    Country = 503;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2342;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 146926.132;
+    YPos = 30.570;
+    ZPos = 252600.701;
+    XOri = 0;
+    YOri = 9.519794;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2341;
+  }
+  
+
+  Block
+  {
+    Name = "Block";
+    Index = 2345;
+    LinkTrId = 0;
+    XPos = 146914.488;
+    YPos = 31.509;
+    ZPos = 252593.757;
+    XOri = 0;
+    YOri = 247.1588;
+    ZOri = 0;
+    Model = "graphics\blocks\mil_ammoboxes_02.mgm";
+    Script = "LuaScripts\WorldObjects\Blocks\mil_ammoboxes_02.txt";
+    Country = 503;
+    Desc = "";
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    PinToTerrain = 1;
+    Flags = 0;
+  }
+  
+
+  Block
+  {
+    Name = "Block";
+    Index = 2346;
+    LinkTrId = 0;
+    XPos = 147177.909;
+    YPos = 70.099;
+    ZPos = 251988.586;
+    XOri = 0;
+    YOri = 200.3659;
+    ZOri = 0;
+    Model = "graphics\blocks\mil_ammoboxes_02.mgm";
+    Script = "LuaScripts\WorldObjects\Blocks\mil_ammoboxes_02.txt";
+    Country = 503;
+    Desc = "";
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    PinToTerrain = 1;
+    Flags = 0;
+  }
+  
+
+  Block
+  {
+    Name = "Block";
+    Index = 2347;
+    LinkTrId = 0;
+    XPos = 147204.147;
+    YPos = 22.928;
+    ZPos = 253187.881;
+    XOri = 0;
+    YOri = 271.0856;
+    ZOri = 0;
+    Model = "graphics\blocks\mil_ammoboxes_02.mgm";
+    Script = "LuaScripts\WorldObjects\Blocks\mil_ammoboxes_02.txt";
+    Country = 503;
+    Desc = "";
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    PinToTerrain = 1;
+    Flags = 0;
+  }
+  
+
+  Ground
+  {
+    Name = "Ground";
+    Index = 2352;
+    XPos = 147207.779;
+    YPos = 22.931;
+    ZPos = 253203.810;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 359.5438;
+    Model = "graphics\grounds\crater_tnt750kg.mgm";
+    Desc = "";
+    Baked = 0;
+  }
+  
+
+  Ground
+  {
+    Name = "Ground";
+    Index = 2353;
+    XPos = 147201.171;
+    YPos = 68.518;
+    ZPos = 251991.335;
+    XOri = 353.4257;
+    YOri = 0;
+    ZOri = 356.5826;
+    Model = "graphics\grounds\crater_tnt1000kg.mgm";
+    Desc = "";
+    Baked = 0;
+  }
+  
+
+  Block
+  {
+    Name = "Block";
+    Index = 2354;
+    LinkTrId = 0;
+    XPos = 146444.715;
+    YPos = 36.733;
+    ZPos = 252466.180;
+    XOri = 0;
+    YOri = 271.0856;
+    ZOri = 0;
+    Model = "graphics\blocks\mil_ammoboxes_02.mgm";
+    Script = "LuaScripts\WorldObjects\Blocks\mil_ammoboxes_02.txt";
+    Country = 503;
+    Desc = "";
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    PinToTerrain = 1;
+    Flags = 0;
+  }
+  
+
+}
+

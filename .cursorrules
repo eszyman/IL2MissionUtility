@@ -1,0 +1,9 @@
+Project IL-2 Group Generator
+Stack Rust, egui, nom
+
+Rules
+1. Do not use generic regex for parsing the .Group file. You must strictly use nom parser combinators.
+2. The AST must remain schema-agnostic. Ignore unrecognized keys.
+3. Never skip tests. If a cargo test fails, halt all generation and fix the parser immediately.
+4. Keep the GUI logic completely decoupled from the AST parsing logic. 
+5. UI must remain minimal, fast, and utilize native OS window framing.

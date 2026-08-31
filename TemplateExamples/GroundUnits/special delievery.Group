@@ -1,0 +1,331 @@
+Group
+{
+  Name = "special_delievery";
+  Index = 1491;
+  Desc = "";
+  Ship
+  {
+    Name = "Ship";
+    Index = 1476;
+    LinkTrId = 1485;
+    XPos = 61502.867;
+    YPos = 0.000;
+    ZPos = 235447.393;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\tankership.txt";
+    Model = "graphics\ships\tankership\tankership.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "%2520%2520";
+    TCodeColor = "11";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 1485;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 61502.867;
+    YPos = 0.200;
+    ZPos = 235447.393;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 1476;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 1477;
+    LinkTrId = 1486;
+    XPos = 60571.028;
+    YPos = 0.000;
+    ZPos = 236285.637;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\tankership.txt";
+    Model = "graphics\ships\tankership\tankership.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "%2520%2520";
+    TCodeColor = "11";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 1486;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 60571.028;
+    YPos = 0.200;
+    ZPos = 236285.637;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 1477;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 1478;
+    LinkTrId = 1487;
+    XPos = 61662.363;
+    YPos = 0.000;
+    ZPos = 236831.305;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\tankership.txt";
+    Model = "graphics\ships\tankership\tankership.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "%2520%2520";
+    TCodeColor = "11";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 1487;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 61662.363;
+    YPos = 0.200;
+    ZPos = 236831.305;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 1478;
+  }
+  
+
+  MCU_CheckZone
+  {
+    Index = 1479;
+    Name = "Trigger Check Zone";
+    Desc = "";
+    Targets = [1484,1488];
+    Objects = [];
+    XPos = 61520.015;
+    YPos = 0.000;
+    ZPos = 233960.619;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Zone = 1000;
+    Cylinder = 1;
+    Closer = 1;
+    PlaneCoalitions = [2];
+  }
+  
+
+  MCU_Deactivate
+  {
+    Index = 1480;
+    Name = "Trigger Deactivate";
+    Desc = "";
+    Targets = [];
+    Objects = [1487,1486,1485];
+    XPos = 61638.638;
+    YPos = 0.000;
+    ZPos = 242762.473;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+  }
+  
+
+  MCU_Timer
+  {
+    Index = 1481;
+    Name = "Trigger Timer";
+    Desc = "";
+    Targets = [1480];
+    Objects = [];
+    XPos = 63370.539;
+    YPos = 0.000;
+    ZPos = 241196.645;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Time = 600;
+    Random = 100;
+  }
+  
+
+  MCU_Timer
+  {
+    Index = 1482;
+    Name = "Trigger Timer";
+    Desc = "";
+    Targets = [1479];
+    Objects = [];
+    XPos = 63939.931;
+    YPos = 0.000;
+    ZPos = 233960.619;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Time = 1;
+    Random = 100;
+  }
+  
+
+  MCU_TR_MissionBegin
+  {
+    Index = 1483;
+    Name = "Translator Mission Begin";
+    Desc = "";
+    Targets = [1482];
+    Objects = [];
+    XPos = 64794.019;
+    YPos = 0.000;
+    ZPos = 232371.066;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+  }
+  
+
+  MCU_Activate
+  {
+    Index = 1484;
+    Name = "Trigger Activate";
+    Desc = "";
+    Targets = [];
+    Objects = [1485,1486,1487];
+    XPos = 60049.085;
+    YPos = 0.000;
+    ZPos = 233960.619;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+  }
+  
+
+  MCU_Timer
+  {
+    Index = 1488;
+    Name = "Trigger Timer";
+    Desc = "";
+    Targets = [1481,1489];
+    Objects = [];
+    XPos = 63370.539;
+    YPos = 0.000;
+    ZPos = 236783.855;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Time = 1;
+    Random = 100;
+  }
+  
+
+  MCU_Waypoint
+  {
+    Index = 1489;
+    Name = "Trigger Waypoint";
+    Desc = "";
+    Targets = [1490];
+    Objects = [1487,1486,1485];
+    XPos = 59669.490;
+    YPos = 0.000;
+    ZPos = 239037.699;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Area = 20;
+    Speed = 100;
+    Priority = 1;
+  }
+  
+
+  MCU_Waypoint
+  {
+    Index = 1490;
+    Name = "Trigger Waypoint";
+    Desc = "";
+    Targets = [1480];
+    Objects = [1487,1486,1485];
+    XPos = 59645.765;
+    YPos = 0.000;
+    ZPos = 241244.094;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Area = 20;
+    Speed = 100;
+    Priority = 1;
+  }
+  
+
+  MCU_CheckZone
+  {
+    Index = 1492;
+    Name = "Trigger Check Zone";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 63002.353;
+    YPos = 0.000;
+    ZPos = 234797.538;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Zone = 1;
+    Cylinder = 1;
+    Closer = 1;
+  }
+  
+
+}
+

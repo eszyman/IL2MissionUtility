@@ -1,0 +1,152 @@
+MCU_CMD_Formation
+{
+  Index = 23912;
+  Name = "Command Formation - Pairs";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 40036.103;
+  YPos = 0.000;
+  ZPos = 39701.311;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 19;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23913;
+  Name = "Command Formation - Wedge";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39986.137;
+  YPos = 0.000;
+  ZPos = 39700.014;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 20;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23914;
+  Name = "Command Formation - Right";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39935.522;
+  YPos = 0.000;
+  ZPos = 39701.311;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 21;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23915;
+  Name = "Command Formation - Left";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39891.397;
+  YPos = 0.000;
+  ZPos = 39703.907;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 22;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23916;
+  Name = "Command Formation - Heavy Wedge";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39840.133;
+  YPos = 0.000;
+  ZPos = 39703.258;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 23;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23917;
+  Name = "Command - Heavy Echelon Right";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39786.274;
+  YPos = 0.000;
+  ZPos = 39705.854;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 24;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23918;
+  Name = "Command - Heavy Combat Box";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39731.117;
+  YPos = 0.000;
+  ZPos = 39705.854;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 26;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23919;
+  Name = "Command Formation - User";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 39671.417;
+  YPos = 0.000;
+  ZPos = 39705.205;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 27;
+FormationDensity = 0;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+

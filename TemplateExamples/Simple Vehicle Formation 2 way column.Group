@@ -1,0 +1,357 @@
+Vehicle
+{
+  Name = "Vehicle";
+  Index = 23681;
+  LinkTrId = 23682;
+  XPos = 27966.351;
+  YPos = 0.000;
+  ZPos = 29243.258;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Script = "LuaScripts\WorldObjects\vehicles\ba64b.txt";
+  Model = "graphics\vehicles\ba64b\ba64b.mgm";
+  Desc = "";
+  Country = 0;
+  NumberInFormation = 0;
+  Vulnerable = 1;
+  Engageable = 1;
+  LimitAmmo = 1;
+  AILevel = 2;
+  DamageReport = 50;
+  DamageThreshold = 1;
+  DeleteAfterDeath = 1;
+  CoopStart = 0;
+  Spotter = -1;
+  BeaconChannel = 0;
+  Callsign = 0;
+  PayloadId = 0;
+  ModMask = 1;
+  Fuel = 1;
+  Callnum = 0;
+  Skin = "";
+  BotSkin = "";
+  RepairTimeMultiplier = 0;
+  RehealTimeMultiplier = 0;
+  RearmTimeMultiplier = 0;
+  RefuelTimeMultiplier = 0;
+  MaintenanceRadius = 10;
+  TCode = "";
+  TCodeColor = "";
+  TrailerAtStart = 1;
+  PinToTerrain = 1;
+}
+
+MCU_TR_Entity
+{
+  Index = 23682;
+  Name = "Vehicle entity";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 27966.351;
+  YPos = 0.200;
+  ZPos = 29243.258;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Enabled = 1;
+  MisObjID = 23681;
+}
+
+Vehicle
+{
+  Name = "Vehicle";
+  Index = 23687;
+  LinkTrId = 23688;
+  XPos = 25530.407;
+  YPos = 0.000;
+  ZPos = 29361.126;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Script = "LuaScripts\WorldObjects\vehicles\ba64b.txt";
+  Model = "graphics\vehicles\ba64b\ba64b.mgm";
+  Desc = "";
+  Country = 0;
+  NumberInFormation = 1;
+  Vulnerable = 1;
+  Engageable = 1;
+  LimitAmmo = 1;
+  AILevel = 2;
+  DamageReport = 50;
+  DamageThreshold = 1;
+  DeleteAfterDeath = 1;
+  CoopStart = 0;
+  Spotter = -1;
+  BeaconChannel = 0;
+  Callsign = 0;
+  PayloadId = 0;
+  ModMask = 1;
+  Fuel = 1;
+  Callnum = 0;
+  Skin = "";
+  BotSkin = "";
+  RepairTimeMultiplier = 0;
+  RehealTimeMultiplier = 0;
+  RearmTimeMultiplier = 0;
+  RefuelTimeMultiplier = 0;
+  MaintenanceRadius = 10;
+  TCode = "";
+  TCodeColor = "";
+  TrailerAtStart = 1;
+  PinToTerrain = 1;
+}
+
+MCU_TR_Entity
+{
+  Index = 23688;
+  Name = "Vehicle entity";
+  Desc = "";
+  Targets = [23682];
+  Objects = [];
+  XPos = 25530.407;
+  YPos = 0.200;
+  ZPos = 29361.126;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Enabled = 1;
+  MisObjID = 23687;
+}
+
+Vehicle
+{
+  Name = "Vehicle";
+  Index = 23690;
+  LinkTrId = 23691;
+  XPos = 22976.595;
+  YPos = 0.000;
+  ZPos = 29321.836;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Script = "LuaScripts\WorldObjects\vehicles\ba64b.txt";
+  Model = "graphics\vehicles\ba64b\ba64b.mgm";
+  Desc = "";
+  Country = 0;
+  NumberInFormation = 2;
+  Vulnerable = 1;
+  Engageable = 1;
+  LimitAmmo = 1;
+  AILevel = 2;
+  DamageReport = 50;
+  DamageThreshold = 1;
+  DeleteAfterDeath = 1;
+  CoopStart = 0;
+  Spotter = -1;
+  BeaconChannel = 0;
+  Callsign = 0;
+  PayloadId = 0;
+  ModMask = 1;
+  Fuel = 1;
+  Callnum = 0;
+  Skin = "";
+  BotSkin = "";
+  RepairTimeMultiplier = 0;
+  RehealTimeMultiplier = 0;
+  RearmTimeMultiplier = 0;
+  RefuelTimeMultiplier = 0;
+  MaintenanceRadius = 10;
+  TCode = "";
+  TCodeColor = "";
+  TrailerAtStart = 1;
+  PinToTerrain = 1;
+}
+
+MCU_TR_Entity
+{
+  Index = 23691;
+  Name = "Vehicle entity";
+  Desc = "";
+  Targets = [23682];
+  Objects = [];
+  XPos = 22976.595;
+  YPos = 0.200;
+  ZPos = 29321.836;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Enabled = 1;
+  MisObjID = 23690;
+}
+
+Vehicle
+{
+  Name = "Vehicle";
+  Index = 23693;
+  LinkTrId = 23694;
+  XPos = 20737.098;
+  YPos = 0.000;
+  ZPos = 29321.836;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Script = "LuaScripts\WorldObjects\vehicles\ba64b.txt";
+  Model = "graphics\vehicles\ba64b\ba64b.mgm";
+  Desc = "";
+  Country = 0;
+  NumberInFormation = 3;
+  Vulnerable = 1;
+  Engageable = 1;
+  LimitAmmo = 1;
+  AILevel = 2;
+  DamageReport = 50;
+  DamageThreshold = 1;
+  DeleteAfterDeath = 1;
+  CoopStart = 0;
+  Spotter = -1;
+  BeaconChannel = 0;
+  Callsign = 0;
+  PayloadId = 0;
+  ModMask = 1;
+  Fuel = 1;
+  Callnum = 0;
+  Skin = "";
+  BotSkin = "";
+  RepairTimeMultiplier = 0;
+  RehealTimeMultiplier = 0;
+  RearmTimeMultiplier = 0;
+  RefuelTimeMultiplier = 0;
+  MaintenanceRadius = 10;
+  TCode = "";
+  TCodeColor = "";
+  TrailerAtStart = 1;
+  PinToTerrain = 1;
+}
+
+MCU_TR_Entity
+{
+  Index = 23694;
+  Name = "Vehicle entity";
+  Desc = "";
+  Targets = [23682];
+  Objects = [];
+  XPos = 20737.098;
+  YPos = 0.200;
+  ZPos = 29321.836;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Enabled = 1;
+  MisObjID = 23693;
+}
+
+Vehicle
+{
+  Name = "Vehicle";
+  Index = 23696;
+  LinkTrId = 23697;
+  XPos = 18340.443;
+  YPos = 0.000;
+  ZPos = 29282.547;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Script = "LuaScripts\WorldObjects\vehicles\ba64b.txt";
+  Model = "graphics\vehicles\ba64b\ba64b.mgm";
+  Desc = "";
+  Country = 0;
+  NumberInFormation = 4;
+  Vulnerable = 1;
+  Engageable = 1;
+  LimitAmmo = 1;
+  AILevel = 2;
+  DamageReport = 50;
+  DamageThreshold = 1;
+  DeleteAfterDeath = 1;
+  CoopStart = 0;
+  Spotter = -1;
+  BeaconChannel = 0;
+  Callsign = 0;
+  PayloadId = 0;
+  ModMask = 1;
+  Fuel = 1;
+  Callnum = 0;
+  Skin = "";
+  BotSkin = "";
+  RepairTimeMultiplier = 0;
+  RehealTimeMultiplier = 0;
+  RearmTimeMultiplier = 0;
+  RefuelTimeMultiplier = 0;
+  MaintenanceRadius = 10;
+  TCode = "";
+  TCodeColor = "";
+  TrailerAtStart = 1;
+  PinToTerrain = 1;
+}
+
+MCU_TR_Entity
+{
+  Index = 23697;
+  Name = "Vehicle entity";
+  Desc = "";
+  Targets = [23682];
+  Objects = [];
+  XPos = 18340.443;
+  YPos = 0.200;
+  ZPos = 29282.547;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Enabled = 1;
+  MisObjID = 23696;
+}
+
+MCU_TR_MissionBegin
+{
+  Index = 23699;
+  Name = "Translator Mission Begin";
+  Desc = "";
+  Targets = [23700];
+  Objects = [];
+  XPos = 32523.924;
+  YPos = 0.000;
+  ZPos = 23860.607;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Enabled = 1;
+}
+
+MCU_Timer
+{
+  Index = 23700;
+  Name = "Trigger Timer";
+  Desc = "";
+  Targets = [23701];
+  Objects = [];
+  XPos = 30913.058;
+  YPos = 0.000;
+  ZPos = 25550.052;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Time = 5;
+  Random = 100;
+}
+
+MCU_CMD_Formation
+{
+  Index = 23701;
+  Name = "Command Formation";
+  Desc = "";
+  Targets = [];
+  Objects = [23682];
+  XPos = 30913.058;
+  YPos = 0.000;
+  ZPos = 28064.575;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+FormationType = 18;
+FormationDensity = 1;
+FlightSize = 1;
+WaitForWingmen = 1;
+}
+

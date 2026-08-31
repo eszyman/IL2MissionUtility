@@ -1,0 +1,3953 @@
+Group
+{
+  Name = "All Planes";
+  Index = 23707;
+  Desc = "";
+  Plane
+  {
+    Name = "Plane";
+    Index = 23681;
+    LinkTrId = 23694;
+    XPos = 39124.547;
+    YPos = 0.000;
+    ZPos = 12452.411;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\b29.txt";
+    Model = "graphics\planes\b29\b29.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23694;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 39124.547;
+    YPos = 0.200;
+    ZPos = 12452.411;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23681;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23682;
+    LinkTrId = 23695;
+    XPos = 37120.786;
+    YPos = 0.000;
+    ZPos = 12491.700;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\c47b.txt";
+    Model = "graphics\planes\c47b\c47b.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23695;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 37120.786;
+    YPos = 0.200;
+    ZPos = 12491.700;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23682;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23683;
+    LinkTrId = 23696;
+    XPos = 35117.026;
+    YPos = 0.000;
+    ZPos = 12452.411;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f51d.txt";
+    Model = "graphics\planes\f51d\f51d.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23696;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 35117.026;
+    YPos = 0.200;
+    ZPos = 12452.411;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23683;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23684;
+    LinkTrId = 23697;
+    XPos = 33152.555;
+    YPos = 0.000;
+    ZPos = 12413.121;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f80c10.txt";
+    Model = "graphics\planes\f80c10\f80c10.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23697;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 33152.555;
+    YPos = 0.200;
+    ZPos = 12413.121;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23684;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23685;
+    LinkTrId = 23698;
+    XPos = 31070.216;
+    YPos = 0.000;
+    ZPos = 12452.411;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f84e.txt";
+    Model = "graphics\planes\f84e\f84e.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23698;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 31070.216;
+    YPos = 0.200;
+    ZPos = 12452.411;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23685;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23686;
+    LinkTrId = 23699;
+    XPos = 29223.613;
+    YPos = 0.000;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f86a5.txt";
+    Model = "graphics\planes\f86a5\f86a5.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23699;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 29223.613;
+    YPos = 0.200;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23686;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23687;
+    LinkTrId = 23700;
+    XPos = 27337.721;
+    YPos = 0.000;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\il10.txt";
+    Model = "graphics\planes\il10\il10.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23700;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 27337.721;
+    YPos = 0.200;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23687;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23688;
+    LinkTrId = 23701;
+    XPos = 25058.934;
+    YPos = 0.000;
+    ZPos = 12413.121;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\la11.txt";
+    Model = "graphics\planes\la11\la11.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23701;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 25058.934;
+    YPos = 0.200;
+    ZPos = 12413.121;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23688;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23689;
+    LinkTrId = 23702;
+    XPos = 22976.595;
+    YPos = 0.000;
+    ZPos = 12530.990;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\li2t.txt";
+    Model = "graphics\planes\li2t\li2t.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23702;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 22976.595;
+    YPos = 0.200;
+    ZPos = 12530.990;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23689;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23690;
+    LinkTrId = 23703;
+    XPos = 21051.413;
+    YPos = 0.000;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\mig15bis.txt";
+    Model = "graphics\planes\mig15bis\mig15bis.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23703;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 21051.413;
+    YPos = 0.200;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23690;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23691;
+    LinkTrId = 23704;
+    XPos = 19165.521;
+    YPos = 0.000;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\simpleb29.txt";
+    Model = "graphics\planes\b29\simpleb29.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23704;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 19165.521;
+    YPos = 0.200;
+    ZPos = 12570.279;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23691;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23692;
+    LinkTrId = 23705;
+    XPos = 17476.076;
+    YPos = 0.000;
+    ZPos = 12530.990;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\tu2.txt";
+    Model = "graphics\planes\tu2\tu2.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23705;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 17476.076;
+    YPos = 0.200;
+    ZPos = 12530.990;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23692;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 23693;
+    LinkTrId = 23706;
+    XPos = 15983.078;
+    YPos = 0.000;
+    ZPos = 12648.858;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\yak9p.txt";
+    Model = "graphics\planes\yak9p\yak9p.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "";
+    TCodeColor = "";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23706;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 15983.078;
+    YPos = 0.200;
+    ZPos = 12648.858;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23693;
+  }
+  
+
+}
+
+Group
+{
+  Name = "All Vehicles";
+  Index = 23784;
+  Desc = "";
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23708;
+    LinkTrId = 23745;
+    XPos = 40067.493;
+    YPos = 0.000;
+    ZPos = 20074.559;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\ba64b.txt";
+    Model = "graphics\vehicles\ba64b\ba64b.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23745;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 40067.493;
+    YPos = 0.200;
+    ZPos = 20074.559;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23708;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23709;
+    LinkTrId = 23746;
+    XPos = 38535.206;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\dodgewc52.txt";
+    Model = "graphics\vehicles\dodgewc52\dodgewc52.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23746;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 38535.206;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23709;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23710;
+    LinkTrId = 23747;
+    XPos = 37081.497;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\dodgewc54.txt";
+    Model = "graphics\vehicles\dodgewc54\dodgewc54.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23747;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 37081.497;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23710;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23711;
+    LinkTrId = 23748;
+    XPos = 35627.788;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\gaz55.txt";
+    Model = "graphics\vehicles\gaz55\gaz55.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23748;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 35627.788;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23711;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23712;
+    LinkTrId = 23749;
+    XPos = 34252.659;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\gaz63.txt";
+    Model = "graphics\vehicles\gaz63\gaz63.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23749;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 34252.659;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23712;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23713;
+    LinkTrId = 23750;
+    XPos = 32956.108;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\gaz67b.txt";
+    Model = "graphics\vehicles\gaz67b\gaz67b.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23750;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 32956.108;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23713;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23714;
+    LinkTrId = 23751;
+    XPos = 31502.399;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\gmc-cckw.txt";
+    Model = "graphics\vehicles\gmc-cckw\gmc-cckw.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23751;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 31502.399;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23714;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23715;
+    LinkTrId = 23752;
+    XPos = 30087.980;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\gmc-cckw-refueler.txt";
+    Model = "graphics\vehicles\gmc-cckw-refueler\gmc-cckw-refueler.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23752;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 30087.980;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23715;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23716;
+    LinkTrId = 23753;
+    XPos = 28712.850;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\is2.txt";
+    Model = "graphics\vehicles\is2\is2.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23753;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 28712.850;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23716;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23717;
+    LinkTrId = 23754;
+    XPos = 27337.721;
+    YPos = 0.000;
+    ZPos = 20035.269;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\isu122.txt";
+    Model = "graphics\vehicles\isu122\isu122.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23754;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 27337.721;
+    YPos = 0.200;
+    ZPos = 20035.269;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23717;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23718;
+    LinkTrId = 23755;
+    XPos = 25962.591;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m16-mgmc.txt";
+    Model = "graphics\vehicles\m16-mgmc\m16-mgmc.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23755;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 25962.591;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23718;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23719;
+    LinkTrId = 23756;
+    XPos = 24469.593;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m19.txt";
+    Model = "graphics\vehicles\m19\m19.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23756;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 24469.593;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23719;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23720;
+    LinkTrId = 23757;
+    XPos = 23055.174;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m3a1-halftrack.txt";
+    Model = "graphics\vehicles\m3a1-halftrack\m3a1-halftrack.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23757;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 23055.174;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23720;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23721;
+    LinkTrId = 23758;
+    XPos = 21640.755;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m40.txt";
+    Model = "graphics\vehicles\m40\m40.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23758;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 21640.755;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23721;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23722;
+    LinkTrId = 23759;
+    XPos = 20304.914;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m46.txt";
+    Model = "graphics\vehicles\m46\m46.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23759;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 20304.914;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23722;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23723;
+    LinkTrId = 23760;
+    XPos = 19008.363;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m4a3e8.txt";
+    Model = "graphics\vehicles\m4a3e8\m4a3e8.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23760;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 19008.363;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23723;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23724;
+    LinkTrId = 23761;
+    XPos = 17790.391;
+    YPos = 0.000;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m6-tractor.txt";
+    Model = "graphics\vehicles\m6-tractor\m6-tractor.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23761;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 17790.391;
+    YPos = 0.200;
+    ZPos = 19995.980;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23724;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23725;
+    LinkTrId = 23762;
+    XPos = 16493.840;
+    YPos = 0.000;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\m7b1.txt";
+    Model = "graphics\vehicles\m7b1\m7b1.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23762;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 16493.840;
+    YPos = 0.200;
+    ZPos = 19956.691;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23725;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23726;
+    LinkTrId = 23763;
+    XPos = 40263.940;
+    YPos = 0.000;
+    ZPos = 22706.950;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-mg-1950-dprk.txt";
+    Model = "graphics\vehicles\infantry\squad-mg-1950-dprk.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23763;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 40263.940;
+    YPos = 0.200;
+    ZPos = 22706.950;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23726;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23727;
+    LinkTrId = 23764;
+    XPos = 38810.231;
+    YPos = 0.000;
+    ZPos = 22746.239;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-mg-1950-prc.txt";
+    Model = "graphics\vehicles\infantry\squad-mg-1950-prc.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23764;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 38810.231;
+    YPos = 0.200;
+    ZPos = 22746.239;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23727;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23728;
+    LinkTrId = 23765;
+    XPos = 37277.944;
+    YPos = 0.000;
+    ZPos = 22746.239;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-mg-1950-usa.txt";
+    Model = "graphics\vehicles\infantry\squad-mg-1950-usa.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23765;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 37277.944;
+    YPos = 0.200;
+    ZPos = 22746.239;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23728;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23729;
+    LinkTrId = 23766;
+    XPos = 35549.210;
+    YPos = 0.000;
+    ZPos = 22667.661;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-rifle-1950-dprk.txt";
+    Model = "graphics\vehicles\infantry\squad-rifle-1950-dprk.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23766;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 35549.210;
+    YPos = 0.200;
+    ZPos = 22667.661;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23729;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23730;
+    LinkTrId = 23767;
+    XPos = 33859.764;
+    YPos = 0.000;
+    ZPos = 22746.239;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-rifle-1950-prc.txt";
+    Model = "graphics\vehicles\infantry\squad-rifle-1950-prc.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23767;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 33859.764;
+    YPos = 0.200;
+    ZPos = 22746.239;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23730;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23731;
+    LinkTrId = 23768;
+    XPos = 32563.214;
+    YPos = 0.000;
+    ZPos = 22824.818;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-rifle-1950-usa.txt";
+    Model = "graphics\vehicles\infantry\squad-rifle-1950-usa.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23768;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 32563.214;
+    YPos = 0.200;
+    ZPos = 22824.818;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23731;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23732;
+    LinkTrId = 23769;
+    XPos = 30952.347;
+    YPos = 0.000;
+    ZPos = 22864.108;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-smg-1950-dprk.txt";
+    Model = "graphics\vehicles\infantry\squad-smg-1950-dprk.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23769;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 30952.347;
+    YPos = 0.200;
+    ZPos = 22864.108;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23732;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23733;
+    LinkTrId = 23770;
+    XPos = 29577.218;
+    YPos = 0.000;
+    ZPos = 22942.687;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-smg-1950-prc.txt";
+    Model = "graphics\vehicles\infantry\squad-smg-1950-prc.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23770;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 29577.218;
+    YPos = 0.200;
+    ZPos = 22942.687;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23733;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23734;
+    LinkTrId = 23771;
+    XPos = 27927.062;
+    YPos = 0.000;
+    ZPos = 22942.687;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\squad-smg-1950-usa.txt";
+    Model = "graphics\vehicles\infantry\squad-smg-1950-usa.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23771;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 27927.062;
+    YPos = 0.200;
+    ZPos = 22942.687;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23734;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23735;
+    LinkTrId = 23772;
+    XPos = 40342.519;
+    YPos = 0.000;
+    ZPos = 24946.447;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6.txt";
+    Model = "graphics\vehicles\studebakerus6\studebakerus6.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23772;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 40342.519;
+    YPos = 0.200;
+    ZPos = 24946.447;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23735;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23736;
+    LinkTrId = 23773;
+    XPos = 38967.389;
+    YPos = 0.000;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-bm13.txt";
+    Model = "graphics\vehicles\studebakerus6-bm13\studebakerus6-bm13.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23773;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 38967.389;
+    YPos = 0.200;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23736;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23737;
+    LinkTrId = 23774;
+    XPos = 37631.549;
+    YPos = 0.000;
+    ZPos = 25025.026;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-refueler.txt";
+    Model = "graphics\vehicles\studebakerus6-refueler\studebakerus6-refueler.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23774;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 37631.549;
+    YPos = 0.200;
+    ZPos = 25025.026;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23737;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23738;
+    LinkTrId = 23775;
+    XPos = 36217.130;
+    YPos = 0.000;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\studebakerus6-tanker.txt";
+    Model = "graphics\vehicles\studebakerus6-tanker\studebakerus6-tanker.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23775;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 36217.130;
+    YPos = 0.200;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23738;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23739;
+    LinkTrId = 23776;
+    XPos = 34802.711;
+    YPos = 0.000;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\su76m.txt";
+    Model = "graphics\vehicles\su76m\su76m.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23776;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 34802.711;
+    YPos = 0.200;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23739;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23740;
+    LinkTrId = 23777;
+    XPos = 33427.581;
+    YPos = 0.000;
+    ZPos = 24946.447;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\t34-85.txt";
+    Model = "graphics\vehicles\t34-85\t34-85.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23777;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 33427.581;
+    YPos = 0.200;
+    ZPos = 24946.447;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23740;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23741;
+    LinkTrId = 23778;
+    XPos = 31973.872;
+    YPos = 0.000;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\u7144.txt";
+    Model = "graphics\vehicles\u7144\u7144.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    Trailers
+    {
+      "luascripts\worldobjects\vehicles\trailers\f2-semitrailer.txt";
+    }
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23778;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 31973.872;
+    YPos = 0.200;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23741;
+  }
+  
+
+  Vehicle
+  {
+    Name = "Vehicle";
+    Index = 23742;
+    LinkTrId = 23779;
+    XPos = 30559.453;
+    YPos = 0.000;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\vehicles\willysmb.txt";
+    Model = "graphics\vehicles\willysmb\willysmb.mgm";
+    Desc = "";
+    Country = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    CoopStart = 0;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    PayloadId = 0;
+    ModMask = 1;
+    Fuel = 1;
+    Callnum = 0;
+    Skin = "";
+    BotSkin = "";
+    RepairTimeMultiplier = 0;
+    RehealTimeMultiplier = 0;
+    RearmTimeMultiplier = 0;
+    RefuelTimeMultiplier = 0;
+    MaintenanceRadius = 10;
+    TCode = "";
+    TCodeColor = "";
+    TrailerAtStart = 1;
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23779;
+    Name = "Vehicle entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 30559.453;
+    YPos = 0.200;
+    ZPos = 24985.737;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23742;
+  }
+  
+
+}
+
+Group
+{
+  Name = "All Trains";
+  Index = 23785;
+  Desc = "";
+  Train
+  {
+    Name = "Train";
+    Index = 23780;
+    LinkTrId = 23782;
+    XPos = 40499.677;
+    YPos = 0.000;
+    ZPos = 28561.074;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Trains\type475-1.txt";
+    Model = "graphics\trains\type475-1\type475-1.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    Carriages
+    {
+      "LuaScripts\WorldObjects\Trains\type475-1-tender.txt";
+      "LuaScripts\WorldObjects\Trains\carbox.txt";
+      "LuaScripts\WorldObjects\Trains\cargondola.txt";
+      "LuaScripts\WorldObjects\Trains\carmail.txt";
+      "LuaScripts\WorldObjects\Trains\carpassenger.txt";
+      "LuaScripts\WorldObjects\Trains\carplatform.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-61k.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-boforsl60.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-dshk.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-m1919.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-m2.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-sg.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-zpuvz53.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa.txt";
+      "LuaScripts\WorldObjects\Trains\cartank.txt";
+    }
+    
+    PayloadId = 0;
+    ModMask = 1;
+    Skin = "";
+    TCode = "";
+    TCodeColor = "";
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23782;
+    Name = "Train entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 40499.677;
+    YPos = 0.200;
+    ZPos = 28561.074;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23780;
+  }
+  
+
+  Train
+  {
+    Name = "Train";
+    Index = 23781;
+    LinkTrId = 23783;
+    XPos = 38613.784;
+    YPos = 0.000;
+    ZPos = 28561.074;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Trains\usatc-s160.txt";
+    Model = "graphics\trains\usatc-s160\usatc-s160.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    Carriages
+    {
+      "LuaScripts\WorldObjects\Trains\usatc-s160-tender.txt";
+      "LuaScripts\WorldObjects\Trains\carbox.txt";
+      "LuaScripts\WorldObjects\Trains\cargondola.txt";
+      "LuaScripts\WorldObjects\Trains\carmail.txt";
+      "LuaScripts\WorldObjects\Trains\carpassenger.txt";
+      "LuaScripts\WorldObjects\Trains\carplatform.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-61k.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-boforsl60.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-dshk.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-m1919.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-m2.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-sg.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa-zpuvz53.txt";
+      "LuaScripts\WorldObjects\Trains\carplatformaa.txt";
+      "LuaScripts\WorldObjects\Trains\cartank.txt";
+    }
+    
+    PayloadId = 0;
+    ModMask = 1;
+    Skin = "";
+    TCode = "%20%20%20%20%20";
+    TCodeColor = "11111";
+    PinToTerrain = 1;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23783;
+    Name = "Train entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 38613.784;
+    YPos = 0.200;
+    ZPos = 28561.074;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23781;
+  }
+  
+
+}
+
+Group
+{
+  Name = "All Ships";
+  Index = 23818;
+  Desc = "";
+  Ship
+  {
+    Name = "Ship";
+    Index = 23786;
+    LinkTrId = 23802;
+    XPos = 40106.782;
+    YPos = 0.000;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\cargoship1.txt";
+    Model = "graphics\ships\cargoship1\cargoship1.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23802;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 40106.782;
+    YPos = 0.200;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23786;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23787;
+    LinkTrId = 23803;
+    XPos = 38495.916;
+    YPos = 0.000;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\cargoship2.txt";
+    Model = "graphics\ships\cargoship2\cargoship2.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23803;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 38495.916;
+    YPos = 0.200;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23787;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23788;
+    LinkTrId = 23804;
+    XPos = 36924.339;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\g5.txt";
+    Model = "graphics\ships\g5\g5.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23804;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 36924.339;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23788;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23789;
+    LinkTrId = 23805;
+    XPos = 35234.894;
+    YPos = 0.000;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\gleaves.txt";
+    Model = "graphics\ships\gleaves\gleaves.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23805;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 35234.894;
+    YPos = 0.200;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23789;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23790;
+    LinkTrId = 23806;
+    XPos = 33781.186;
+    YPos = 0.000;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\lci.txt";
+    Model = "graphics\ships\lci\lci.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23806;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 33781.186;
+    YPos = 0.200;
+    ZPos = 35004.539;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23790;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23791;
+    LinkTrId = 23807;
+    XPos = 32366.766;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\lcvp.txt";
+    Model = "graphics\ships\lcvp\lcvp.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23807;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 32366.766;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23791;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23792;
+    LinkTrId = 23808;
+    XPos = 30913.058;
+    YPos = 0.000;
+    ZPos = 34925.960;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\libertyship.txt";
+    Model = "graphics\ships\libertyship\libertyship.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23808;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 30913.058;
+    YPos = 0.200;
+    ZPos = 34925.960;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23792;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23793;
+    LinkTrId = 23809;
+    XPos = 29655.796;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\lst.txt";
+    Model = "graphics\ships\lst\lst.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23809;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 29655.796;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23793;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23794;
+    LinkTrId = 23810;
+    XPos = 28241.377;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\pinnace.txt";
+    Model = "graphics\ships\pinnace\pinnace.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23810;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 28241.377;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23794;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23795;
+    LinkTrId = 23811;
+    XPos = 26866.247;
+    YPos = 0.000;
+    ZPos = 34925.960;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\pinnace-gunboat.txt";
+    Model = "graphics\ships\pinnace-gunboat\pinnace-gunboat.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23811;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 26866.247;
+    YPos = 0.200;
+    ZPos = 34925.960;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23795;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23796;
+    LinkTrId = 23812;
+    XPos = 25412.539;
+    YPos = 0.000;
+    ZPos = 34925.960;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\pinnace-landingcraft.txt";
+    Model = "graphics\ships\pinnace-landingcraft\pinnace-landingcraft.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23812;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 25412.539;
+    YPos = 0.200;
+    ZPos = 34925.960;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23796;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23797;
+    LinkTrId = 23813;
+    XPos = 23998.120;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\sampan.txt";
+    Model = "graphics\ships\sampan\sampan.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23813;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 23998.120;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23797;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23798;
+    LinkTrId = 23814;
+    XPos = 22583.701;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\sampan-landingcraft.txt";
+    Model = "graphics\ships\sampan-landingcraft\sampan-landingcraft.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23814;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 22583.701;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23798;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23799;
+    LinkTrId = 23815;
+    XPos = 21326.439;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\seiner.txt";
+    Model = "graphics\ships\seiner\seiner.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23815;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 21326.439;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23799;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23800;
+    LinkTrId = 23816;
+    XPos = 19951.309;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\seiner-gunboat.txt";
+    Model = "graphics\ships\seiner-gunboat\seiner-gunboat.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23816;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 19951.309;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23800;
+  }
+  
+
+  Ship
+  {
+    Name = "Ship";
+    Index = 23801;
+    LinkTrId = 23817;
+    XPos = 18536.890;
+    YPos = 0.000;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\tankership.txt";
+    Model = "graphics\ships\tankership\tankership.mgm";
+    Desc = "";
+    Country = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 23817;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 18536.890;
+    YPos = 0.200;
+    ZPos = 34965.250;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 23801;
+  }
+  
+
+}
+

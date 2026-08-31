@@ -1,0 +1,99 @@
+Group
+{
+  Name = "Defend";
+  Index = 50804;
+  Desc = "";
+  MCU_Icon
+  {
+    Index = 50800;
+    Targets = [50801];
+    Objects = [];
+    XPos = 104514.949;
+    YPos = 62.020;
+    ZPos = 291197.122;
+    XOri = 0;
+    YOri = 259.0859;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1170;
+    LCDesc = 1171;
+    IconId = 0;
+    RColor = 0;
+    GColor = 150;
+    BColor = 200;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50801;
+    Targets = [50802];
+    Objects = [];
+    XPos = 106046.235;
+    YPos = 62.020;
+    ZPos = 292571.345;
+    XOri = 0;
+    YOri = 259.0859;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1172;
+    LCDesc = 1173;
+    IconId = 0;
+    RColor = 0;
+    GColor = 150;
+    BColor = 200;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50802;
+    Targets = [50803];
+    Objects = [];
+    XPos = 108609.568;
+    YPos = 62.020;
+    ZPos = 292139.596;
+    XOri = 0;
+    YOri = 259.0859;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1174;
+    LCDesc = 1175;
+    IconId = 0;
+    RColor = 0;
+    GColor = 150;
+    BColor = 200;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50803;
+    Targets = [];
+    Objects = [];
+    XPos = 109462.372;
+    YPos = 62.020;
+    ZPos = 290191.551;
+    XOri = 0;
+    YOri = 259.0859;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1176;
+    LCDesc = 1177;
+    IconId = 0;
+    RColor = 0;
+    GColor = 150;
+    BColor = 200;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+}
+

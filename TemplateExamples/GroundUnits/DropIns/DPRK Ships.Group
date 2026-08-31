@@ -1,0 +1,1025 @@
+Group
+{
+  Name = "Larger Shipos";
+  Index = 2355;
+  Desc = "";
+  Ship
+  {
+    Name = "GunBoat";
+    Index = 2356;
+    LinkTrId = 2357;
+    XPos = 139445.335;
+    YPos = 0.000;
+    ZPos = 230629.197;
+    XOri = 0;
+    YOri = 0.22768;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\seiner-gunboat.txt";
+    Model = "graphics\ships\seiner-gunboat\seiner-gunboat.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2357;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 139445.335;
+    YPos = 0.200;
+    ZPos = 230629.197;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2356;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 13;
+        TarId = 2497;
+      }
+    }
+  }
+  
+
+  Ship
+  {
+    Name = "GunBoat";
+    Index = 2359;
+    LinkTrId = 2360;
+    XPos = 137449.729;
+    YPos = 0.000;
+    ZPos = 232331.332;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\seiner-gunboat.txt";
+    Model = "graphics\ships\seiner-gunboat\seiner-gunboat.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2360;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 137449.729;
+    YPos = 0.200;
+    ZPos = 232331.332;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2359;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 13;
+        TarId = 2497;
+      }
+    }
+  }
+  
+
+  Ship
+  {
+    Name = "GunBoat";
+    Index = 2362;
+    LinkTrId = 2363;
+    XPos = 134789.652;
+    YPos = 0.000;
+    ZPos = 230696.714;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\seiner-gunboat.txt";
+    Model = "graphics\ships\seiner-gunboat\seiner-gunboat.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2363;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 134789.652;
+    YPos = 0.200;
+    ZPos = 230696.714;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2362;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 13;
+        TarId = 2497;
+      }
+    }
+  }
+  
+
+  MCU_Counter
+  {
+    Index = 2497;
+    Name = "Damaged Counter";
+    Desc = "";
+    Targets = [2505,2506];
+    Objects = [];
+    XPos = 138891.075;
+    YPos = 15.260;
+    ZPos = 231616.015;
+    XOri = 0;
+    YOri = 2.730138;
+    ZOri = 0;
+    Counter = 2;
+    Dropcount = 0;
+  }
+  
+
+  Group
+  {
+    Name = "Logic";
+    Index = 2507;
+    Desc = "";
+    MCU_CMD_AttackArea
+    {
+      Index = 2508;
+      Name = "AAA Defense command AttackArea";
+      Desc = "";
+      Targets = [];
+      Objects = [2357,2360,2363,2567,2571,2575];
+      XPos = 137166.875;
+      YPos = 10.374;
+      ZPos = 230866.322;
+      XOri = 0;
+      YOri = 358.7;
+      ZOri = 0;
+      AttackGround = 0;
+      AttackAir = 1;
+      AttackGTargets = 0;
+      AttackArea = 2500;
+      Time = 600;
+      Priority = 1;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2509;
+      Name = "Defend AA";
+      Desc = "";
+      Targets = [2508];
+      Objects = [];
+      XPos = 137185.651;
+      YPos = 14.179;
+      ZPos = 231206.536;
+      XOri = 0;
+      YOri = 14.27;
+      ZOri = 0;
+      Time = 45;
+      Random = 100;
+    }
+    
+
+    MCU_TR_MissionBegin
+    {
+      Index = 2510;
+      Name = "Translator Mission Begin";
+      Desc = "";
+      Targets = [2511];
+      Objects = [];
+      XPos = 137528.339;
+      YPos = 13.309;
+      ZPos = 231036.639;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Enabled = 1;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2511;
+      Name = "3s";
+      Desc = "";
+      Targets = [2513];
+      Objects = [];
+      XPos = 137473.319;
+      YPos = 12.249;
+      ZPos = 231036.335;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 3;
+      Random = 100;
+    }
+    
+
+    MCU_CheckZone
+    {
+      Index = 2513;
+      Name = "Zone In";
+      Desc = "";
+      Targets = [2515,2516,2517,2518,2519];
+      Objects = [];
+      XPos = 137166.875;
+      YPos = 10.443;
+      ZPos = 230866.322;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Zone = 7500;
+      Cylinder = 1;
+      Closer = 1;
+      PlaneCoalitions = [1, 2];
+    }
+    
+
+    MCU_Deactivate
+    {
+      Index = 2515;
+      Name = "Self Deactivate";
+      Desc = "";
+      Targets = [2513];
+      Objects = [];
+      XPos = 137426.109;
+      YPos = 12.666;
+      ZPos = 231036.552;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2516;
+      Name = "Zone Out ReActivate";
+      Desc = "";
+      Targets = [2522];
+      Objects = [];
+      XPos = 137379.587;
+      YPos = 11.376;
+      ZPos = 231036.110;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2523;
+      Name = "Zone In ReActivate";
+      Desc = "";
+      Targets = [2513];
+      Objects = [];
+      XPos = 137333.702;
+      YPos = 12.102;
+      ZPos = 231037.253;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+    }
+    
+
+    MCU_CheckZone
+    {
+      Index = 2522;
+      Name = "Zone Out";
+      Desc = "";
+      Targets = [2523,2525,2526,2527];
+      Objects = [];
+      XPos = 137166.875;
+      YPos = 11.175;
+      ZPos = 230866.322;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Zone = 8500;
+      Cylinder = 1;
+      Closer = 0;
+      PlaneCoalitions = [1, 2];
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2517;
+      Name = "2s";
+      Desc = "";
+      Targets = [2522];
+      Objects = [];
+      XPos = 137241.164;
+      YPos = 12.383;
+      ZPos = 231037.557;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 2;
+      Random = 100;
+    }
+    
+
+    MCU_Deactivate
+    {
+      Index = 2525;
+      Name = "Self Deactivate";
+      Desc = "";
+      Targets = [2522];
+      Objects = [];
+      XPos = 137287.834;
+      YPos = 11.932;
+      ZPos = 231037.811;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+    }
+    
+
+    MCU_Deactivate
+    {
+      Index = 2530;
+      Name = "Deactivate Unit(s)";
+      Desc = "";
+      Targets = [];
+      Objects = [2357,2360,2363,2567,2571,2575];
+      XPos = 136998.156;
+      YPos = 15.555;
+      ZPos = 231339.438;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2518;
+      Name = "Activate Unit(s)";
+      Desc = "";
+      Targets = [];
+      Objects = [2357,2360,2363,2567,2571,2575];
+      XPos = 136958.509;
+      YPos = 10.222;
+      ZPos = 230545.338;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2526;
+      Name = "2s";
+      Desc = "";
+      Targets = [2530];
+      Objects = [];
+      XPos = 137097.562;
+      YPos = 14.508;
+      ZPos = 231339.414;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 3;
+      Random = 100;
+    }
+    
+
+    MCU_CMD_ForceComplete
+    {
+      Index = 2527;
+      Name = "Force Complete";
+      Desc = "";
+      Targets = [];
+      Objects = [2357,2360,2363,2567,2571,2575];
+      XPos = 136951.609;
+      YPos = 15.588;
+      ZPos = 231338.206;
+      XOri = 0;
+      YOri = 14.57;
+      ZOri = 0;
+      Priority = 2;
+      EmergencyOrdnanceDrop = 0;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2519;
+      Name = "ORDERS";
+      Desc = "";
+      Targets = [2509];
+      Objects = [];
+      XPos = 137230.258;
+      YPos = 13.819;
+      ZPos = 231205.163;
+      XOri = 0;
+      YOri = 14.08;
+      ZOri = 0;
+      Time = 10;
+      Random = 100;
+    }
+    
+
+  }
+  
+
+  Group
+  {
+    Name = "Recc";
+    Index = 2535;
+    Desc = "";
+    Group
+    {
+      Name = "Destroyed";
+      Index = 2536;
+      Desc = "";
+      MCU_Deactivate
+      {
+        Index = 2537;
+        Name = "Trigger Deactivate";
+        Desc = "";
+        Targets = [2538];
+        Objects = [];
+        XPos = 137318.229;
+        YPos = 11.134;
+        ZPos = 230876.988;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2539;
+        Targets = [2540];
+        Objects = [];
+        XPos = 135475.243;
+        YPos = 19.118;
+        ZPos = 229244.483;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 621;
+        LCDesc = 622;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2540;
+        Targets = [];
+        Objects = [];
+        XPos = 138877.324;
+        YPos = 26.806;
+        ZPos = 232494.465;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 623;
+        LCDesc = 624;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2542;
+        Targets = [2543];
+        Objects = [];
+        XPos = 138799.450;
+        YPos = 10.949;
+        ZPos = 229157.672;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 625;
+        LCDesc = 626;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Icon
+      {
+        Index = 2543;
+        Targets = [];
+        Objects = [];
+        XPos = 135562.539;
+        YPos = 14.841;
+        ZPos = 232587.208;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Enabled = 0;
+        LCName = 627;
+        LCDesc = 628;
+        IconId = 0;
+        RColor = 0;
+        GColor = 0;
+        BColor = 0;
+        LineType = 1;
+        Coalitions = [1, 2];
+      }
+      
+
+      MCU_Deactivate
+      {
+        Index = 2545;
+        Name = "Trigger Deactivate";
+        Desc = "";
+        Targets = [2546,2547,2548,2549];
+        Objects = [];
+        XPos = 137816.078;
+        YPos = 16.618;
+        ZPos = 231123.023;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+      }
+      
+
+      MCU_Timer
+      {
+        Index = 2506;
+        Name = "Deactivate Icons Timer";
+        Desc = "";
+        Targets = [2545];
+        Objects = [];
+        XPos = 137797.546;
+        YPos = 21.611;
+        ZPos = 231334.115;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Time = 60;
+        Random = 100;
+      }
+      
+
+      MCU_Timer
+      {
+        Index = 2505;
+        Name = "Activate Icons Timer";
+        Desc = "";
+        Targets = [2552];
+        Objects = [];
+        XPos = 137451.760;
+        YPos = 12.415;
+        ZPos = 231324.670;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+        Time = 120;
+        Random = 100;
+      }
+      
+
+      MCU_Activate
+      {
+        Index = 2552;
+        Name = "Trigger Activate";
+        Desc = "";
+        Targets = [2540,2539,2542,2543];
+        Objects = [];
+        XPos = 137442.995;
+        YPos = 14.678;
+        ZPos = 231620.773;
+        XOri = 0;
+        YOri = 358.5042;
+        ZOri = 0;
+      }
+      
+
+    }
+    
+
+    MCU_CheckZone
+    {
+      Index = 2538;
+      Name = "Trigger Check Zone";
+      Desc = "";
+      Targets = [2555,2537];
+      Objects = [];
+      XPos = 137176.468;
+      YPos = 10.789;
+      ZPos = 230871.974;
+      XOri = 0;
+      YOri = 357.0938;
+      ZOri = 0;
+      Zone = 1000;
+      Cylinder = 1;
+      Closer = 1;
+      PlaneCoalitions = [2];
+    }
+    
+
+    MCU_TR_MissionBegin
+    {
+      Index = 2556;
+      Name = "Translator Mission Begin";
+      Desc = "";
+      Targets = [2557];
+      Objects = [];
+      XPos = 137211.798;
+      YPos = 10.925;
+      ZPos = 230815.906;
+      XOri = 0;
+      YOri = 357.0938;
+      ZOri = 0;
+      Enabled = 1;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2557;
+      Name = "Trigger Timer";
+      Desc = "";
+      Targets = [2538];
+      Objects = [];
+      XPos = 137212.271;
+      YPos = 10.843;
+      ZPos = 230872.119;
+      XOri = 0;
+      YOri = 357.0938;
+      ZOri = 0;
+      Time = 0;
+      Random = 100;
+    }
+    
+
+    MCU_Timer
+    {
+      Index = 2555;
+      Name = "Trigger Timer";
+      Desc = "";
+      Targets = [2560];
+      Objects = [];
+      XPos = 137135.718;
+      YPos = 9.928;
+      ZPos = 230871.204;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Time = 2;
+      Random = 100;
+    }
+    
+
+    MCU_Activate
+    {
+      Index = 2560;
+      Name = "Trigger Activate";
+      Desc = "";
+      Targets = [2549,2548,2547,2546];
+      Objects = [];
+      XPos = 137135.813;
+      YPos = 12.998;
+      ZPos = 230925.626;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2547;
+      Targets = [2546];
+      Objects = [];
+      XPos = 137334.143;
+      YPos = 7.938;
+      ZPos = 225963.383;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 629;
+      LCDesc = 630;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2546;
+      Targets = [2549];
+      Objects = [];
+      XPos = 141586.051;
+      YPos = 16.214;
+      ZPos = 230889.518;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 631;
+      LCDesc = 632;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2549;
+      Targets = [2548];
+      Objects = [];
+      XPos = 137197.120;
+      YPos = 19.821;
+      ZPos = 236004.393;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 633;
+      LCDesc = 634;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+    MCU_Icon
+    {
+      Index = 2548;
+      Targets = [2547];
+      Objects = [];
+      XPos = 132350.095;
+      YPos = 3.086;
+      ZPos = 231112.996;
+      XOri = 0;
+      YOri = 358.5042;
+      ZOri = 0;
+      Enabled = 0;
+      LCName = 635;
+      LCDesc = 636;
+      IconId = 0;
+      RColor = 150;
+      GColor = 0;
+      BColor = 0;
+      LineType = 3;
+      Coalitions = [1, 2];
+    }
+    
+
+  }
+  
+
+  Ship
+  {
+    Name = "Tanker";
+    Index = 2566;
+    LinkTrId = 2567;
+    XPos = 139140.786;
+    YPos = 0.000;
+    ZPos = 230245.277;
+    XOri = 0;
+    YOri = 0.22768;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\tankership.txt";
+    Model = "graphics\ships\tankership\tankership.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2567;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 139140.786;
+    YPos = 0.200;
+    ZPos = 230245.277;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2566;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 13;
+        TarId = 2497;
+      }
+    }
+  }
+  
+
+  Ship
+  {
+    Name = "Tanker";
+    Index = 2570;
+    LinkTrId = 2571;
+    XPos = 137176.084;
+    YPos = 0.000;
+    ZPos = 232128.680;
+    XOri = 0;
+    YOri = 0.22768;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\tankership.txt";
+    Model = "graphics\ships\tankership\tankership.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2571;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 137176.084;
+    YPos = 0.200;
+    ZPos = 232128.680;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2570;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 13;
+        TarId = 2497;
+      }
+    }
+  }
+  
+
+  Ship
+  {
+    Name = "Seiner";
+    Index = 2574;
+    LinkTrId = 2575;
+    XPos = 135624.648;
+    YPos = 0.000;
+    ZPos = 229981.058;
+    XOri = 0;
+    YOri = 0.22768;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Ships\seiner.txt";
+    Model = "graphics\ships\seiner\seiner.mgm";
+    Desc = "";
+    Country = 503;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    AILevel = 2;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    DeleteAfterDeath = 1;
+    Spotter = -1;
+    BeaconChannel = 0;
+    Callsign = 0;
+    TCode = "";
+    TCodeColor = "";
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 2575;
+    Name = "Ship entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 135624.648;
+    YPos = 0.200;
+    ZPos = 229981.058;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 0;
+    MisObjID = 2574;
+    OnEvents
+    {
+      OnEvent
+      {
+        Type = 13;
+        TarId = 2497;
+      }
+    }
+  }
+  
+
+}
+

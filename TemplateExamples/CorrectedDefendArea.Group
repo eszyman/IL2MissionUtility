@@ -1,0 +1,145 @@
+Group
+{
+  Name = "DefendArea_Corrected";
+  Index = 50799;
+  Desc = "";
+  MCU_Icon
+  {
+    Index = 50792;
+    Targets = [50794];
+    Objects = [];
+    XPos = 124495.061;
+    YPos = 354.029;
+    ZPos = 269997.572;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1156;
+    LCDesc = 1157;
+    IconId = 0;
+    RColor = 170;
+    GColor = 0;
+    BColor = 0;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50794;
+    Targets = [50795];
+    Objects = [];
+    XPos = 112540.350;
+    YPos = 354.029;
+    ZPos = 263415.765;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1160;
+    LCDesc = 1161;
+    IconId = 0;
+    RColor = 170;
+    GColor = 0;
+    BColor = 0;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50795;
+    Targets = [50796];
+    Objects = [];
+    XPos = 101257.252;
+    YPos = 354.029;
+    ZPos = 269863.249;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1162;
+    LCDesc = 1163;
+    IconId = 0;
+    RColor = 170;
+    GColor = 0;
+    BColor = 0;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50796;
+    Targets = [50797];
+    Objects = [];
+    XPos = 101190.091;
+    YPos = 354.029;
+    ZPos = 287996.800;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1164;
+    LCDesc = 1165;
+    IconId = 0;
+    RColor = 170;
+    GColor = 0;
+    BColor = 0;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50797;
+    Targets = [50798];
+    Objects = [];
+    XPos = 113413.447;
+    YPos = 354.029;
+    ZPos = 294914.414;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1166;
+    LCDesc = 1167;
+    IconId = 0;
+    RColor = 170;
+    GColor = 0;
+    BColor = 0;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+  MCU_Icon
+  {
+    Index = 50798;
+    Targets = [50792];
+    Objects = [];
+    XPos = 124427.900;
+    YPos = 354.029;
+    ZPos = 287325.187;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    LCName = 1168;
+    LCDesc = 1169;
+    IconId = 0;
+    RColor = 170;
+    GColor = 0;
+    BColor = 0;
+    LineType = 12;
+    Coalitions = [1, 2];
+  }
+  
+
+}
+

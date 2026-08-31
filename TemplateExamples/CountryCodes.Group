@@ -1,0 +1,337 @@
+Group
+{
+  Name = "Group";
+  Index = 8686;
+  Desc = "";
+  Plane
+  {
+    Name = "Plane";
+    Index = 8675;
+    LinkTrId = 8681;
+    XPos = 208675.285;
+    YPos = 510.870;
+    ZPos = 316131.463;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f51d.txt";
+    Model = "graphics\planes\f51d\f51d.mgm";
+    Country = 501;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "%20%20%20%20%20%20";
+    TCodeColor = "000000";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 8681;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 208675.285;
+    YPos = 511.070;
+    ZPos = 316131.463;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 8675;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 8676;
+    LinkTrId = 8682;
+    XPos = 204041.156;
+    YPos = 510.870;
+    ZPos = 316400.109;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f80c10.txt";
+    Model = "graphics\planes\f80c10\f80c10.mgm";
+    Country = 502;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "%20%20%20%20%20%20%20";
+    TCodeColor = "0000000";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 8682;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 204041.156;
+    YPos = 511.070;
+    ZPos = 316400.109;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 8676;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 8677;
+    LinkTrId = 8683;
+    XPos = 199742.833;
+    YPos = 510.870;
+    ZPos = 316601.592;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f84e.txt";
+    Model = "graphics\planes\f84e\f84e.mgm";
+    Country = 503;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "%20%20%20%20%20%20%20%20";
+    TCodeColor = "00000000";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 8683;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 199742.833;
+    YPos = 511.070;
+    ZPos = 316601.592;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 8677;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 8678;
+    LinkTrId = 8684;
+    XPos = 195713.155;
+    YPos = 510.870;
+    ZPos = 316131.463;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\f86a5.txt";
+    Model = "graphics\planes\f86a5\f86a5.mgm";
+    Country = 601;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "%20%20%20%20%20%20";
+    TCodeColor = "000000";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 8684;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 195713.155;
+    YPos = 511.070;
+    ZPos = 316131.463;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 8678;
+  }
+  
+
+  Plane
+  {
+    Name = "Plane";
+    Index = 8679;
+    LinkTrId = 8685;
+    XPos = 191146.186;
+    YPos = 510.870;
+    ZPos = 315862.818;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Script = "LuaScripts\WorldObjects\Planes\la11.txt";
+    Model = "graphics\planes\la11\la11.mgm";
+    Country = 0;
+    Desc = "";
+    Skin = "";
+    BotSkin = "";
+    AILevel = 2;
+    CoopStart = 0;
+    NumberInFormation = 0;
+    Vulnerable = 1;
+    Engageable = 1;
+    LimitAmmo = 1;
+    StartType = 0;
+    Callsign = 0;
+    Callnum = 0;
+    DamageReport = 50;
+    DamageThreshold = 1;
+    PayloadId = 0;
+    ModMask = 1;
+    AiRTBDecision = 0;
+    DeleteAfterDeath = 1;
+    DeleteAfterLand = 1;
+    Spotter = -1;
+    Fuel = 1;
+    TCode = "%20%20";
+    TCodeColor = "11";
+    GunLoad = [];
+    GunBelt = [];
+    VictoryCount = 0;
+    Emblem = 0;
+  }
+  
+
+  MCU_TR_Entity
+  {
+    Index = 8685;
+    Name = "Plane entity";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 191146.186;
+    YPos = 511.070;
+    ZPos = 315862.818;
+    XOri = 0;
+    YOri = 0;
+    ZOri = 0;
+    Enabled = 1;
+    MisObjID = 8679;
+  }
+  
+
+  MCU_CheckZone
+  {
+    Index = 8687;
+    Name = "Zone IN";
+    Desc = "";
+    Targets = [];
+    Objects = [];
+    XPos = 201685.820;
+    YPos = 275.047;
+    ZPos = 316261.385;
+    XOri = 0;
+    YOri = 180.1131;
+    ZOri = 0;
+    Zone = 16000;
+    Cylinder = 1;
+    Closer = 1;
+    PlaneCoalitions = [1];
+  }
+  
+
+}
+
