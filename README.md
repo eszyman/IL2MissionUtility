@@ -1,0 +1,2 @@
+Added [MapHelper](MapHelper/maphelper.md) - a fast, lightweight desktop utility designed for IL-2 Sturmovik: Great Battles mission mapping and map management. Built in Rust and powered by the `egui` framework, it provides an efficient and responsive interface for handling map data and mission files.
+This utility is designed to provide a data set for the Mission Utility to use when placing units either on land or at sea.
