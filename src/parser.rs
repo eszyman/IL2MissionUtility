@@ -546,6 +546,20 @@ mod tests {
         assert!(plane_count > 0, "expected Plane entities");
     }
 
+    #[test]
+    fn parse_improved_cooldown_logic() {
+        let src = include_str!("../TemplateExamples/ImprovedCooldownLogic.Group");
+        let entity = parse_group_file(src).expect("parse ImprovedCooldownLogic");
+        assert_eq!(entity.block_type, "Group");
+        assert_eq!(count_block_type(&entity, "MCU_ModifierSetVal"), 1);
+        assert_eq!(count_block_type(&entity, "MCU_Spawner"), 1);
+        let modifier = entity.find_by_name("Modifier Set Value").unwrap();
+        assert_eq!(modifier.property("ParamIndex"), Some("0"));
+        assert_eq!(modifier.property("Data0"), Some("0"));
+        let death = entity.find_by_name("DeathCount").unwrap();
+        assert_eq!(modifier.targets, vec![death.index.unwrap()]);
+    }
+
     fn count_block_type(entity: &Il2Entity, block_type: &str) -> usize {
         let mut n = usize::from(entity.block_type == block_type);
         for child in &entity.children {

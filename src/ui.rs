@@ -709,7 +709,7 @@ This mode does not write NodeGates, but is intended to be used with the Army Gen
             });
             ui.label(
                 RichText::new(
-                    "One-shot: leave unchecked. Repeat spawn: check and set how long Zone IN stays closed after Zone Out.",
+                    "One-shot: leave unchecked. Repeat spawn: Zone Out always cleans up and zeros DeathCount. If every unit is destroyed (OnPlaneDestroyed / OnKilled), cooldown pulses the spawner even while the player stays. A hiding unit is cleaned up when the player leaves, not mid-fight.",
                 )
                 .italics()
                 .small(),

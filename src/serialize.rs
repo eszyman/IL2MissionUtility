@@ -151,6 +151,22 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_improved_cooldown_logic() {
+        let src = include_str!("../TemplateExamples/ImprovedCooldownLogic.Group");
+        let original = parse_group_file(src).expect("parse ImprovedCooldownLogic");
+        let text = serialize_group(&original);
+        assert!(text.contains("MCU_ModifierSetVal"));
+        assert!(text.contains("ParamIndex = 0;"));
+        let reparsed = parse_group_file(&text).expect("reparse ImprovedCooldownLogic");
+        assert_eq!(original.max_index(), reparsed.max_index());
+        assert_eq!(count_nodes(&original), count_nodes(&reparsed));
+        let modifier = reparsed.find_by_name("Modifier Set Value").unwrap();
+        let death = reparsed.find_by_name("DeathCount").unwrap();
+        assert_eq!(modifier.targets, vec![death.index.unwrap()]);
+        assert_eq!(modifier.property("ParamIndex"), Some("0"));
+    }
+
+    #[test]
     fn serialize_after_duplication_uses_new_ids() {
         let src = r#"MCU_Timer
 {

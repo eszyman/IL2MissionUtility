@@ -1711,6 +1711,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     begin.set_property("Enabled", "1");
 
     let mut pulse = timer("ENABLE / PULSE IN", 0.1, &mut next_id, zx, zz);
+    let mut pulse_out = timer("PULSE OUT", 0.1, &mut next_id, zx, zz);
 
     let mut zone_in_mcu = checkzone("Zone IN", zone_in, true, coalitions, &mut next_id, zx, zz);
     let mut zone_out_mcu = checkzone("Zone Out", zone_out, false, coalitions, &mut next_id, zx, zz);
@@ -1719,7 +1720,8 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     let mut react_out = mcu("MCU_Activate", "Zone Out ReActivate", &mut next_id, zx, zz);
     let mut deact_out = mcu("MCU_Deactivate", "Self Deactivate", &mut next_id, zx, zz);
     let mut react_in = mcu("MCU_Activate", "Zone In ReActivate", &mut next_id, zx, zz);
-    let cooldown_s = if bring_up == BringUp::Spawn && opts.allow_multiple_spawns {
+    let repeat = bring_up == BringUp::Spawn && opts.allow_multiple_spawns;
+    let cooldown_s = if repeat {
         opts.spawn_cooldown_min.max(0.0) as f64 * 60.0
     } else {
         0.0
@@ -1731,41 +1733,62 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     let mut activate = None;
     let mut spawn = None;
     let mut spawn_count = None;
-    match bring_up {
-        BringUp::Activate => {
-            let mut a = mcu(
-                "MCU_Activate",
-                "Activate Units",
-                &mut next_id,
-                bring_ox,
-                bring_oz,
-            );
-            a.set_objects(entity_ids.clone());
-            activate = Some(a);
-        }
-        BringUp::Spawn => {
-            let mut s = mcu(
-                "MCU_Spawner",
-                "Trigger Spawner",
-                &mut next_id,
-                bring_ox,
-                bring_oz,
-            );
-            s.set_property("SpawnAtMe", "0");
-            s.set_objects(entity_ids.clone());
-            let drop = i32::from(opts.allow_multiple_spawns);
-            let mut c = mcu(
-                "MCU_Counter",
-                "SpawnCount",
-                &mut next_id,
-                bring_ox,
-                bring_oz,
-            );
-            c.set_property("Counter", "1");
-            c.set_property("Dropcount", drop.to_string());
-            spawn = Some(s);
-            spawn_count = Some(c);
-        }
+    if bring_up == BringUp::Activate {
+        let mut a = mcu(
+            "MCU_Activate",
+            "Activate Units",
+            &mut next_id,
+            bring_ox,
+            bring_oz,
+        );
+        a.set_objects(entity_ids.clone());
+        activate = Some(a);
+    }
+    if bring_up == BringUp::Spawn {
+        let mut s = mcu(
+            "MCU_Spawner",
+            "Trigger Spawner",
+            &mut next_id,
+            bring_ox,
+            bring_oz,
+        );
+        s.set_property("SpawnAtMe", "0");
+        s.set_objects(entity_ids.clone());
+        let drop = i32::from(repeat);
+        let c = counter("SpawnCount", 1, drop, &mut next_id, bring_ox, bring_oz);
+        spawn = Some(s);
+        spawn_count = Some(c);
+    }
+
+    let mut death_count = None;
+    let mut death_on = None;
+    let mut death_off = None;
+    let mut reset_counter = None;
+    let mut reset_modifier = None;
+    if repeat {
+        death_count = Some(counter(
+            "DeathCount",
+            opts.seats.len().max(1) as i32,
+            1,
+            &mut next_id,
+            zx,
+            zz,
+        ));
+        death_on = Some(mcu("MCU_Activate", "DeathCount ReActivate", &mut next_id, zx, zz));
+        death_off = Some(mcu(
+            "MCU_Deactivate",
+            "DeathCount Deactivate",
+            &mut next_id,
+            zx,
+            zz,
+        ));
+        reset_modifier = Some(modifier_set_val(
+            "Modifier Set Value",
+            &mut next_id,
+            zx,
+            zz,
+        ));
+        reset_counter = Some(timer("Reset Counter", 0.5, &mut next_id, zx, zz));
     }
 
     let bring_up_name = match bring_up {
@@ -2069,6 +2092,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     let zone_in_id = zone_in_mcu.index.unwrap();
     let zone_out_id = zone_out_mcu.index.unwrap();
     let pulse_id = pulse.index.unwrap();
+    let pulse_out_id = pulse_out.index.unwrap();
     let force_id = force.index.unwrap();
     let deactivate_id = deactivate_units.index.unwrap();
     let delete_id = delete.index.unwrap();
@@ -2087,31 +2111,48 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     let activate_id = activate.as_ref().and_then(|a| a.index);
     let spawn_id = spawn.as_ref().and_then(|s| s.index);
     let spawn_count_id = spawn_count.as_ref().and_then(|c| c.index);
+    let death_count_id = death_count.as_ref().and_then(|c| c.index);
+    let death_on_id = death_on.as_ref().and_then(|m| m.index);
+    let death_off_id = death_off.as_ref().and_then(|m| m.index);
+    let reset_counter_id = reset_counter.as_ref().and_then(|t| t.index);
+    let reset_modifier_id = reset_modifier.as_ref().and_then(|m| m.index);
 
     begin.set_targets(vec![pulse_id]);
     pulse.set_targets(vec![zone_in_id]);
+    pulse_out.set_targets(vec![zone_out_id]);
 
-    zone_in_mcu.set_targets(vec![deact_in_id, react_out_id, bring_up_timer_id]);
+    let mut zone_in_targets = vec![deact_in_id, react_out_id, pulse_out_id, bring_up_timer_id];
+    if let Some(id) = death_on_id {
+        zone_in_targets.push(id);
+    }
+    zone_in_mcu.set_targets(zone_in_targets);
 
     deact_in.set_targets(vec![zone_in_id]);
     react_out.set_targets(vec![zone_out_id]);
+    if let (Some(on), Some(id)) = (death_on.as_mut(), death_count_id) {
+        on.set_targets(vec![id]);
+    }
+    if let (Some(off), Some(id)) = (death_off.as_mut(), death_count_id) {
+        off.set_targets(vec![id]);
+    }
+    if let (Some(md), Some(id)) = (reset_modifier.as_mut(), death_count_id) {
+        md.set_targets(vec![id]);
+    }
+    if let (Some(tm), Some(id)) = (reset_counter.as_mut(), reset_modifier_id) {
+        tm.set_targets(vec![id]);
+    }
 
     let mut bring_up_targets = vec![after_bring_up_id];
-    match bring_up {
-        BringUp::Activate => {
-            if let Some(id) = activate_id {
-                bring_up_targets.insert(0, id);
-            }
+    if bring_up == BringUp::Spawn {
+        if let Some(id) = spawn_count_id {
+            bring_up_targets.insert(0, id);
         }
-        BringUp::Spawn => {
-            if let Some(id) = spawn_count_id {
-                bring_up_targets.insert(0, id);
-            }
-        }
+    } else if let Some(id) = activate_id {
+        bring_up_targets.insert(0, id);
     }
     bring_up_timer.set_targets(bring_up_targets);
-    if let (Some(counter), Some(spawner_id)) = (spawn_count.as_mut(), spawn_id) {
-        counter.set_targets(vec![spawner_id]);
+    if let (Some(count), Some(spawner_id)) = (spawn_count.as_mut(), spawn_id) {
+        count.set_targets(vec![spawner_id]);
     }
 
     let mut after_targets = Vec::new();
@@ -2164,9 +2205,29 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
 
     wire_waypoint_chain(&mut waypoints, &emitted);
 
-    zone_out_mcu.set_targets(vec![deact_out_id, cooldown_id, mission_end_id]);
+    if repeat {
+        // Zone Out always cleans up and resets DeathCount. A full wipe only
+        // starts COOLDOWN, which pulses the spawner so a new wave can appear
+        // while the player is still inside.
+        let mut out_targets = vec![deact_out_id, mission_end_id, react_in_id, pulse_id];
+        if let Some(id) = death_off_id {
+            out_targets.insert(0, id);
+        }
+        if let Some(id) = reset_counter_id {
+            out_targets.push(id);
+        }
+        zone_out_mcu.set_targets(out_targets);
+        if let Some(id) = spawn_id {
+            cooldown.set_targets(vec![id]);
+        }
+        if let Some(dc) = death_count.as_mut() {
+            dc.set_targets(vec![cooldown_id]);
+        }
+    } else {
+        zone_out_mcu.set_targets(vec![deact_out_id, cooldown_id, mission_end_id]);
+        cooldown.set_targets(vec![react_in_id, pulse_id]);
+    }
     deact_out.set_targets(vec![zone_out_id]);
-    cooldown.set_targets(vec![react_in_id]);
     react_in.set_targets(vec![zone_in_id]);
     mission_end.set_targets(vec![mission_end_orders_id, delayed_end_id]);
     let mut end_order_targets = vec![force_id];
@@ -2229,9 +2290,17 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
         }
     }
 
+    if let Some(id) = death_count_id {
+        for (i, unit) in placed.iter_mut().enumerate() {
+            let kind = opts.seats.get(i).map(|s| s.unit.kind).unwrap_or(UnitKind::Plane);
+            attach_event(&mut unit.entity, EntityEvent::default_for(kind).type_id(), id);
+        }
+    }
+
     logic.children.extend([
         begin,
         pulse,
+        pulse_out,
         zone_in_mcu,
         zone_out_mcu,
         deact_in,
@@ -2260,6 +2329,17 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     }
     if let Some(s) = spawn {
         logic.children.push(s);
+    }
+    for extra in [
+        death_count,
+        death_on,
+        death_off,
+        reset_modifier,
+        reset_counter,
+    ] {
+        if let Some(e) = extra {
+            logic.children.push(e);
+        }
     }
     for steps in &emitted {
         logic.children.extend(steps.iter().map(|s| s.delay.clone()));
@@ -2672,6 +2752,23 @@ fn timer(name: &str, time: f64, next_id: &mut i32, x: f64, z: f64) -> Il2Entity 
     e
 }
 
+fn counter(name: &str, count: i32, drop: i32, next_id: &mut i32, x: f64, z: f64) -> Il2Entity {
+    let mut e = mcu("MCU_Counter", name, next_id, x, z);
+    e.set_property("Counter", count.to_string());
+    e.set_property("Dropcount", drop.to_string());
+    e
+}
+
+fn modifier_set_val(name: &str, next_id: &mut i32, x: f64, z: f64) -> Il2Entity {
+    let mut e = mcu("MCU_ModifierSetVal", name, next_id, x, z);
+    e.set_property("ParamIndex", "0");
+    e.set_property("Data0", "0");
+    e.set_property("Data1", "0");
+    e.set_property("Data2", "0");
+    e.set_property("Data3", "0");
+    e
+}
+
 fn format_time(t: f64) -> String {
     if (t.fract()).abs() < 1e-6 {
         format!("{:.0}", t)
@@ -3069,6 +3166,7 @@ mod tests {
         assert!(pack.find_by_name("Zone IN").is_some());
         assert!(pack.find_by_name("Zone Out").is_some());
         assert!(pack.find_by_name("ENABLE / PULSE IN").is_some());
+        assert!(pack.find_by_name("PULSE OUT").is_some());
         assert!(pack.find_by_name("COOLDOWN").is_some());
         assert!(pack.find_by_name("END").is_none());
         assert!(pack.find_by_name("MISSION END").is_some());
@@ -3153,6 +3251,86 @@ mod tests {
     }
 
     #[test]
+    fn zone_in_activates_then_pulses_zone_out() {
+        let pack = generate_template(&four_migs()).unwrap();
+        let zone_in = pack.find_by_name("Zone IN").unwrap();
+        let zone_out = pack.find_by_name("Zone Out").unwrap();
+        let react_out = pack.find_by_name("Zone Out ReActivate").unwrap();
+        let pulse_out = pack.find_by_name("PULSE OUT").unwrap();
+        assert_eq!(pulse_out.block_type, "MCU_Timer");
+        assert_eq!(pulse_out.property("Time"), Some("0.10"));
+        assert!(zone_in.targets.contains(&react_out.index.unwrap()));
+        assert!(zone_in.targets.contains(&pulse_out.index.unwrap()));
+        assert!(react_out.targets.contains(&zone_out.index.unwrap()));
+        assert!(pulse_out.targets.contains(&zone_out.index.unwrap()));
+        assert_eq!(react_out.block_type, "MCU_Activate");
+    }
+
+    fn assert_repeat_spawn_graph(root: &Il2Entity) {
+        assert!(root.find_by_name("SpawnCount ReActivate").is_none());
+        assert!(root.find_by_name("SpawnCount Deactivate").is_none());
+        assert!(root.find_by_name("CATCH ALL").is_none());
+
+        let spawn_count = root.find_by_name("SpawnCount").unwrap();
+        let spawner = root.find_by_name("Trigger Spawner").unwrap();
+        let death = root.find_by_name("DeathCount").unwrap();
+        let cooldown = root.find_by_name("COOLDOWN").unwrap();
+        let zone_in = root.find_by_name("Zone IN").unwrap();
+        let zone_out = root.find_by_name("Zone Out").unwrap();
+        let mission_end = root.find_by_name("MISSION END").unwrap();
+        let react_in = root.find_by_name("Zone In ReActivate").unwrap();
+        let pulse_in = root.find_by_name("ENABLE / PULSE IN").unwrap();
+        let death_on = root.find_by_name("DeathCount ReActivate").unwrap();
+        let death_off = root.find_by_name("DeathCount Deactivate").unwrap();
+        let reset = root.find_by_name("Reset Counter").unwrap();
+        let modifier = root.find_by_name("Modifier Set Value").unwrap();
+
+        assert_eq!(spawn_count.property("Dropcount"), Some("1"));
+        assert_eq!(spawn_count.targets, vec![spawner.index.unwrap()]);
+
+        assert_eq!(modifier.block_type, "MCU_ModifierSetVal");
+        assert_eq!(modifier.property("ParamIndex"), Some("0"));
+        assert_eq!(modifier.property("Data0"), Some("0"));
+        assert_eq!(modifier.targets, vec![death.index.unwrap()]);
+        assert_eq!(reset.block_type, "MCU_Timer");
+        assert_eq!(reset.targets, vec![modifier.index.unwrap()]);
+
+        assert_eq!(death.targets, vec![cooldown.index.unwrap()]);
+        assert_eq!(cooldown.targets, vec![spawner.index.unwrap()]);
+        assert!(
+            !death.targets.contains(&mission_end.index.unwrap()),
+            "a wipe must not cleanup mid-fight"
+        );
+
+        assert!(zone_in.targets.contains(&death_on.index.unwrap()));
+        assert!(zone_out.targets.contains(&death_off.index.unwrap()));
+        assert!(zone_out.targets.contains(&mission_end.index.unwrap()));
+        assert!(zone_out.targets.contains(&react_in.index.unwrap()));
+        assert!(zone_out.targets.contains(&pulse_in.index.unwrap()));
+        assert!(zone_out.targets.contains(&reset.index.unwrap()));
+        assert!(
+            !zone_out.targets.contains(&cooldown.index.unwrap()),
+            "Zone Out must not start cooldown"
+        );
+    }
+
+    #[test]
+    fn improved_cooldown_logic_example_matches_repeat_spawn_contract() {
+        let root = parse_group_file(include_str!(
+            "../TemplateExamples/ImprovedCooldownLogic.Group"
+        ))
+        .expect("parse ImprovedCooldownLogic.Group");
+        assert_repeat_spawn_graph(&root);
+        let death = root.find_by_name("DeathCount").unwrap();
+        let events = entity_events(&root);
+        let hits = events
+            .iter()
+            .filter(|(t, tar)| *t == 4 && *tar == death.index.unwrap())
+            .count();
+        assert_eq!(hits, 4);
+    }
+
+    #[test]
     fn spawn_uses_counter_reset() {
         let mut opts = one_mig();
         opts.bring_up = BringUp::Spawn;
@@ -3163,9 +3341,7 @@ mod tests {
         assert!(pack.find_by_name("Activate Units").is_none());
         let counter = pack.find_by_name("SpawnCount").unwrap();
         assert_eq!(counter.property("Counter"), Some("1"));
-        assert_eq!(counter.property("Dropcount"), Some("1"));
         let spawner = pack.find_by_name("Trigger Spawner").unwrap();
-        assert!(counter.targets.contains(&spawner.index.unwrap()));
         assert_eq!(spawner.objects.len(), 1);
         let mut entities = Vec::new();
         pack.for_each(&mut |e| {
@@ -3177,11 +3353,57 @@ mod tests {
         assert!(pack.find_by_name("SPAWN UNITS").is_some());
         let cooldown = pack.find_by_name("COOLDOWN").unwrap();
         assert_eq!(cooldown.property("Time"), Some("300"));
+        let death = pack.find_by_name("DeathCount").unwrap();
+        assert_eq!(death.property("Counter"), Some("1"));
+        assert_repeat_spawn_graph(&pack);
+        let delete = pack.find_by_name("Trigger Delete").unwrap();
+        let mut planes = Vec::new();
+        pack.for_each(&mut |e| {
+            if e.block_type == "Plane" {
+                planes.push(e.index.unwrap());
+            }
+        });
+        assert_eq!(delete.objects, planes);
+        let events = entity_events(&pack);
+        assert!(
+            events.iter().any(|(t, tar)| *t == 4 && *tar == death.index.unwrap()),
+            "aircraft OnPlaneDestroyed should pulse DeathCount, got {events:?}"
+        );
+        let text = serialize_group(&pack);
+        assert!(text.contains("MCU_ModifierSetVal"));
+        assert!(text.contains("ParamIndex = 0;"));
+    }
+
+    #[test]
+    fn repeat_spawn_counts_every_destroyed_unit() {
+        let mig = builtin_plane_catalog()
+            .into_iter()
+            .find(|u| u.script.contains("mig15bis"))
+            .unwrap();
+        let mut opts = TemplateOptions::default();
+        opts.bring_up = BringUp::Spawn;
+        opts.allow_multiple_spawns = true;
+        opts.spawn_cooldown_min = 5.0;
+        opts.waypoint_count = 0;
+        opts.seats = (0..3)
+            .map(|_| {
+                let mut seat = TemplateSeat::new(mig.clone());
+                seat.role = FlightRole::Independent;
+                seat
+            })
+            .collect();
+        let pack = generate_template(&opts).unwrap();
+        let death = pack.find_by_name("DeathCount").unwrap();
+        assert_eq!(death.property("Counter"), Some("3"));
+        let death_id = death.index.unwrap();
+        let events = entity_events(&pack);
+        let hits = events.iter().filter(|(t, tar)| *t == 4 && *tar == death_id).count();
+        assert_eq!(hits, 3);
+        assert_repeat_spawn_graph(&pack);
         let zone_out = pack.find_by_name("Zone Out").unwrap();
-        let react_in = pack.find_by_name("Zone In ReActivate").unwrap();
-        assert!(zone_out.targets.contains(&cooldown.index.unwrap()));
-        assert!(!zone_out.targets.contains(&react_in.index.unwrap()));
-        assert!(cooldown.targets.contains(&react_in.index.unwrap()));
+        let mission_end = pack.find_by_name("MISSION END").unwrap();
+        assert!(zone_out.targets.contains(&mission_end.index.unwrap()));
+        assert!(!death.targets.contains(&mission_end.index.unwrap()));
     }
 
     #[test]
@@ -3194,6 +3416,14 @@ mod tests {
         assert_eq!(counter.property("Counter"), Some("1"));
         assert_eq!(counter.property("Dropcount"), Some("0"));
         assert_eq!(pack.find_by_name("COOLDOWN").unwrap().property("Time"), Some("0"));
+        assert!(pack.find_by_name("DeathCount").is_none());
+        assert!(pack.find_by_name("Reset Counter").is_none());
+        assert!(pack.find_by_name("Modifier Set Value").is_none());
+        let zone_out = pack.find_by_name("Zone Out").unwrap();
+        let cooldown = pack.find_by_name("COOLDOWN").unwrap();
+        let mission_end = pack.find_by_name("MISSION END").unwrap();
+        assert!(zone_out.targets.contains(&cooldown.index.unwrap()));
+        assert!(zone_out.targets.contains(&mission_end.index.unwrap()));
     }
 
     #[test]

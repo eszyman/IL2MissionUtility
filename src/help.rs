@@ -320,6 +320,10 @@ mod tests {
         let s = section_for(HelpTopic::Template);
         assert!(s.contains("Zone IN"));
         assert!(s.contains("ENABLE / PULSE IN"));
+        assert!(s.contains("PULSE OUT"));
+        assert!(s.contains("DeathCount"));
+        assert!(s.contains("Reset Counter"));
+        assert!(s.contains("Modifier Set Value"));
         assert!(s.contains("finger-four"));
         assert!(s.contains("Planes"));
         assert!(s.contains("MCU_TR_Entity"));
