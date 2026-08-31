@@ -54,6 +54,8 @@ A full-color RGB composite image for visually verifying the morphological filter
 * **Red Channel:** Roads
 * **Green Channel:** Open Areas
 
+ ![Composite Terrain Preview](combined_preview.png)
+
 ### 2. `combined_terrain.bin`
 A flattened, bit-packed binary file containing the merged terrain data. 
 
