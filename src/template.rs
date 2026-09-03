@@ -215,6 +215,14 @@ impl OrderKind {
         self.block_type().is_some()
     }
 
+    /// Attack / Time on Target start together from the waypoint, not in series.
+    pub fn is_wp_parallel(self) -> bool {
+        matches!(
+            self,
+            OrderKind::Attack | OrderKind::AttackArea | OrderKind::TimeOnTarget
+        )
+    }
+
     fn block_type(self) -> Option<&'static str> {
         match self {
             OrderKind::Attack => Some("MCU_CMD_AttackTarget"),
@@ -859,8 +867,9 @@ pub fn copy_seat_attributes(seats: &mut [TemplateSeat], from: usize) {
     }
 }
 
-/// Append a unit, copying country / skill / fuel flags from the last seat and
-/// altitude from the last plane (new planes sit near that height).
+/// Append a unit. Each unit keeps its own country (nation) from the catalog.
+/// Skill / fuel flags are copied from the last seat and altitude from the last
+/// plane (new planes sit near that height).
 /// If a Lead is already set, the new unit follows it and `#` in formation
 /// is numbered 1, 2, 3, …
 pub fn append_seat(seats: &mut Vec<TemplateSeat>, unit: CatalogUnit, per_group: u32) {
@@ -874,7 +883,7 @@ pub fn append_seat(seats: &mut Vec<TemplateSeat>, unit: CatalogUnit, per_group: 
     let prev = seats.last().cloned();
     let mut seat = TemplateSeat::new(unit);
     if let Some(p) = prev {
-        seat.country = p.country;
+        // Keep the unit's own country from the catalog (its own nation).
         seat.skill = p.skill;
         seat.fuel = p.fuel;
         seat.payload_id = p.payload_id;
@@ -1127,6 +1136,42 @@ pub fn normalize_order_chain(
     let new_keep = mapping[keep];
     *orders = out.into_iter().map(|(_, o)| o).collect();
     new_keep
+}
+
+/// Columns of the order tree. Sequential hops stay in line; Attack / AttackArea
+/// / Time on Target that sit together are stacked as a parallel branch.
+pub fn order_tree_columns(orders: &[OrderSpec]) -> Vec<Vec<usize>> {
+    let mut cols = Vec::new();
+    let mut i = 0;
+    while i < orders.len() {
+        if orders[i].kind.is_wp_parallel() {
+            let mut col = vec![i];
+            i += 1;
+            while i < orders.len() {
+                let k = orders[i].kind;
+                if k.is_wp_parallel() || k.is_report() {
+                    col.push(i);
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+            cols.push(col);
+            continue;
+        }
+        let mut col = vec![i];
+        i += 1;
+        if i < orders.len() {
+            if let Some(follows) = orders[i].kind.report_follows() {
+                if orders[col[0]].kind == follows {
+                    col.push(i);
+                    i += 1;
+                }
+            }
+        }
+        cols.push(col);
+    }
+    cols
 }
 
 /// Set or insert the command that follows a report in the chain.
@@ -1401,7 +1446,7 @@ pub fn builtin_plane_catalog() -> Vec<CatalogUnit> {
 
 /// Planes, vehicles, trains, ships, and fixed objects from the bundled catalogs.
 pub fn bundled_catalog() -> Vec<CatalogUnit> {
-    let mut cat = match parse_il2_document(include_str!("../TemplateExamples/ModelTypes.Group")) {
+    let mut cat = match parse_il2_document(include_str!("../assets/Models.Group")) {
         Ok(root) => load_catalog(&root),
         Err(_) => Vec::new(),
     };
@@ -1415,10 +1460,6 @@ pub fn bundled_catalog() -> Vec<CatalogUnit> {
         } else {
             cat.push(plane);
         }
-    }
-    if let Ok(fixed) = parse_il2_document(include_str!("../TemplateExamples/Unit_Template_Fixed.Group"))
-    {
-        merge_catalog(&mut cat, load_catalog(&fixed));
     }
     if cat.is_empty() {
         builtin_plane_catalog()
@@ -1577,6 +1618,9 @@ fn collect_objects(root: &Il2Entity, kind: UnitKind, out: &mut Vec<CatalogUnit>)
 }
 
 fn display_name(name: &str, script: &str) -> String {
+    if let Some(spec) = crate::model_spec::spec_for(script) {
+        return spec.label.to_string();
+    }
     let generic = name.is_empty()
         || matches!(
             name,
@@ -2175,11 +2219,8 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
 
     for si in 0..emitted.len() {
         for oi in 0..emitted[si].len() {
-            let is_report = emitted[si][oi].report.is_some();
-            let next_is_report = emitted[si]
-                .get(oi + 1)
-                .is_some_and(|s| s.report.is_some());
             let mut targets = Vec::new();
+            let is_report = emitted[si][oi].report.is_some();
             if !is_report {
                 if let Some(cmd) = &emitted[si][oi].cmd {
                     targets.push(cmd.index.unwrap());
@@ -2192,12 +2233,8 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
             }
             if emitted[si][oi].mission_complete {
                 targets.push(mission_end_id);
-            } else if oi + 1 < emitted[si].len() {
-                if (is_report || !next_is_report)
-                    && !skip_delay_chain(&emitted[si], oi)
-                {
-                    targets.push(emitted[si][oi + 1].delay.index.unwrap());
-                }
+            } else if let Some(next_i) = chain_delay_to(&emitted[si], oi) {
+                targets.push(emitted[si][next_i].delay.index.unwrap());
             }
             emitted[si][oi].delay.set_targets(targets);
         }
@@ -2389,7 +2426,8 @@ fn is_attack_emitted(step: &EmittedOrder) -> bool {
     })
 }
 
-/// Time on Target is pulsed from the waypoint before the attack, not the previous delay.
+/// Time on Target is pulsed from the waypoint, not the previous delay — even
+/// when it is listed before Attack / AttackArea.
 fn tot_owned_by_wp(steps: &[EmittedOrder], tot_oi: usize) -> bool {
     for s in steps[..tot_oi].iter().rev() {
         if s.report.is_some() || s.time_on_target || s.mission_complete {
@@ -2403,23 +2441,114 @@ fn tot_owned_by_wp(steps: &[EmittedOrder], tot_oi: usize) -> bool {
     false
 }
 
-fn skip_delay_chain(steps: &[EmittedOrder], oi: usize) -> bool {
-    let Some(next) = steps.get(oi + 1) else {
-        return false;
-    };
-    let cur = &steps[oi];
-    if next.time_on_target {
-        return tot_owned_by_wp(steps, oi + 1);
+fn hop_end(steps: &[EmittedOrder], after: usize) -> usize {
+    steps[after..]
+        .iter()
+        .position(|s| s.goto_wp.is_some())
+        .map(|p| after + p)
+        .unwrap_or(steps.len())
+}
+
+fn hop_has_tot(steps: &[EmittedOrder], goto_oi: usize) -> bool {
+    steps[goto_oi + 1..hop_end(steps, goto_oi + 1)]
+        .iter()
+        .any(|s| s.time_on_target)
+}
+
+fn hop_has_attack(steps: &[EmittedOrder], goto_oi: usize) -> bool {
+    steps[goto_oi + 1..hop_end(steps, goto_oi + 1)]
+        .iter()
+        .any(is_attack_emitted)
+}
+
+fn prev_goto(steps: &[EmittedOrder], oi: usize) -> Option<usize> {
+    steps[..oi].iter().rposition(|s| s.goto_wp.is_some())
+}
+
+fn tot_in_same_hop(steps: &[EmittedOrder], oi: usize) -> bool {
+    prev_goto(steps, oi).is_some_and(|g| hop_has_tot(steps, g))
+}
+
+/// After TOT expires, skip sibling attacks and jump to the next real order.
+fn first_after_wp_cluster(steps: &[EmittedOrder], tot_oi: usize) -> Option<usize> {
+    for (j, s) in steps[tot_oi + 1..].iter().enumerate() {
+        if s.time_on_target || is_attack_emitted(s) || s.report.is_some() {
+            continue;
+        }
+        return Some(tot_oi + 1 + j);
     }
-    if cur.goto_wp.is_some() && (is_attack_emitted(next) || next.goto_wp.is_some()) {
+    None
+}
+
+fn pulse_from_wp(extra: &mut [Vec<i32>], wp_idx: usize, delay: &Il2Entity) {
+    if let Some(id) = delay.index {
+        if !extra[wp_idx].contains(&id) {
+            extra[wp_idx].push(id);
+        }
+    }
+}
+
+/// Goto WP delay only pulses the WP MCU. On arrival the WP owns Attack, TOT,
+/// the next Goto (when there is no attack/TOT), and Mission Complete when the
+/// hop has neither an attack nor TOT.
+fn wp_owns_next(steps: &[EmittedOrder], goto_oi: usize, next_oi: usize) -> bool {
+    let hop = goto_oi + 1..hop_end(steps, goto_oi + 1);
+    if next_oi == hop.end && next_oi < steps.len() && steps[next_oi].goto_wp.is_some() {
+        return !hop_has_attack(steps, goto_oi) && !hop_has_tot(steps, goto_oi);
+    }
+    if !hop.contains(&next_oi) {
+        return false;
+    }
+    let s = &steps[next_oi];
+    if is_attack_emitted(s) || s.time_on_target {
         return true;
+    }
+    if s.mission_complete {
+        return !hop_has_attack(steps, goto_oi) && !hop_has_tot(steps, goto_oi);
     }
     false
 }
 
-/// On arrival WP n pulses the next order's timer (Attack / AttackArea delay,
-/// Time on Target, or the next Goto WP delay). The next waypoint MCU is reached
-/// through that delay, not a WP n → WP n+1 MCU link.
+fn chain_delay_to(steps: &[EmittedOrder], oi: usize) -> Option<usize> {
+    let cur = &steps[oi];
+    if cur.mission_complete {
+        return None;
+    }
+    if cur.goto_wp.is_some() {
+        let next = oi + 1;
+        if next >= steps.len() || wp_owns_next(steps, oi, next) {
+            return None;
+        }
+        if steps[next].report.is_some() && cur.report.is_none() {
+            return None;
+        }
+        return Some(next);
+    }
+    if cur.time_on_target && tot_owned_by_wp(steps, oi) {
+        return first_after_wp_cluster(steps, oi);
+    }
+    let next = oi + 1;
+    if next >= steps.len() {
+        return None;
+    }
+    if steps[next].report.is_some() && cur.report.is_none() {
+        return None;
+    }
+    if steps[next].time_on_target && tot_owned_by_wp(steps, next) {
+        return None;
+    }
+    if is_attack_emitted(cur) && tot_in_same_hop(steps, oi) {
+        let n = &steps[next];
+        if n.time_on_target || is_attack_emitted(n) || n.mission_complete || n.goto_wp.is_some() {
+            return None;
+        }
+    }
+    Some(next)
+}
+
+/// On arrival WP n pulses Attack / AttackArea and Time on Target together
+/// (order in the list does not matter). TOT expiry continues the chain.
+/// Mission Complete after a bare Goto WP is also pulsed from the waypoint.
 fn wire_waypoint_chain(waypoints: &mut [Il2Entity], emitted: &[Vec<EmittedOrder>]) {
     let mut extra: Vec<Vec<i32>> = vec![Vec::new(); waypoints.len()];
     for steps in emitted {
@@ -2432,39 +2561,32 @@ fn wire_waypoint_chain(waypoints: &mut [Il2Entity], emitted: &[Vec<EmittedOrder>
                 continue;
             }
             let mut saw_attack = false;
+            let mut saw_tot = false;
             for later in &steps[oi + 1..] {
+                if later.goto_wp.is_some() {
+                    if !saw_attack && !saw_tot {
+                        pulse_from_wp(&mut extra, idx, &later.delay);
+                    }
+                    break;
+                }
                 if later.mission_complete {
+                    if !saw_attack && !saw_tot {
+                        pulse_from_wp(&mut extra, idx, &later.delay);
+                    }
                     break;
                 }
                 if later.report.is_some() {
                     break;
                 }
-                if later.goto_wp.is_some() {
-                    if !saw_attack {
-                        if let Some(id) = later.delay.index {
-                            if !extra[idx].contains(&id) {
-                                extra[idx].push(id);
-                            }
-                        }
-                    }
-                    break;
-                }
                 if is_attack_emitted(later) {
-                    if let Some(id) = later.delay.index {
-                        if !extra[idx].contains(&id) {
-                            extra[idx].push(id);
-                        }
-                    }
+                    pulse_from_wp(&mut extra, idx, &later.delay);
                     saw_attack = true;
                     continue;
                 }
                 if later.time_on_target {
-                    if let Some(id) = later.delay.index {
-                        if !extra[idx].contains(&id) {
-                            extra[idx].push(id);
-                        }
-                    }
-                    break;
+                    pulse_from_wp(&mut extra, idx, &later.delay);
+                    saw_tot = true;
+                    continue;
                 }
                 break;
             }
@@ -3048,7 +3170,7 @@ mod tests {
     #[test]
     fn catalog_reads_all_trains_from_model_types() {
         let root =
-            parse_il2_document(include_str!("../TemplateExamples/ModelTypes.Group")).unwrap();
+            parse_il2_document(include_str!("../assets/Models.Group")).unwrap();
         let cat = load_catalog(&root);
         assert!(cat.iter().any(|u| u.kind == UnitKind::Plane));
         assert!(cat.iter().any(|u| u.kind == UnitKind::Vehicle));
@@ -3126,7 +3248,7 @@ mod tests {
             !cat.iter().any(|u| u.kind == UnitKind::UserAdded),
             "User Added stays empty until the user appends a group"
         );
-        let src = include_str!("../TemplateExamples/Unit_Template_Fixed.Group");
+        let src = include_str!("../assets/Models.Group");
         let expected: Vec<String> = src
             .lines()
             .filter_map(|line| {
@@ -3142,7 +3264,7 @@ mod tests {
             .collect();
         assert!(
             !expected.is_empty(),
-            "Unit_Template_Fixed.Group should list fixed-object scripts"
+            "Models.Group should list fixed-object scripts"
         );
         let mut loaded: Vec<String> = cat
             .iter()
@@ -3156,8 +3278,20 @@ mod tests {
         loaded.dedup();
         assert_eq!(
             loaded, expected,
-            "Fixed Units catalog should include every prototype in Unit_Template_Fixed.Group"
+            "Fixed Units catalog should include every prototype in Models.Group"
         );
+    }
+
+    #[test]
+    fn bundled_catalog_units_have_model_specs() {
+        for unit in bundled_catalog() {
+            assert!(
+                crate::model_spec::spec_for(&unit.script).is_some(),
+                "missing ModelSpec for {} ({})",
+                unit.label(),
+                unit.script
+            );
+        }
     }
 
     #[test]
@@ -4434,6 +4568,139 @@ mod tests {
         assert!(tot.targets.contains(&done.index.unwrap()));
         assert!(done.targets.contains(&hub.index.unwrap()));
         assert!(pack.find_by_name("WP DELAY").is_none());
+    }
+
+    #[test]
+    fn time_on_target_before_attack_is_parallel_from_wp() {
+        let mut opts = one_mig();
+        opts.waypoint_count = 2;
+        opts.seats[0].orders = vec![
+            OrderSpec {
+                kind: OrderKind::GotoWaypoint,
+                waypoint: 1,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::TimeOnTarget,
+                time_s: DEFAULT_TIME_ON_TARGET_S,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::AttackArea,
+                attack_ground: true,
+                attack_air: false,
+                attack_g_targets: true,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::GotoWaypoint,
+                waypoint: 2,
+                ..OrderSpec::default()
+            },
+        ];
+        let pack = generate_template(&opts).unwrap();
+        let wp1 = pack.find_by_name("WP 1").unwrap();
+        let wp2 = pack.find_by_name("WP 2").unwrap();
+        let atk_delay = pack.find_by_name("AttackArea 1").unwrap();
+        let tot = pack.find_by_name("Time on Target 1").unwrap();
+        let goto1 = pack.find_by_name("Goto WP 1").unwrap();
+        assert!(wp1.targets.contains(&atk_delay.index.unwrap()));
+        assert!(wp1.targets.contains(&tot.index.unwrap()));
+        assert!(!tot.targets.contains(&atk_delay.index.unwrap()));
+        assert!(!goto1.targets.contains(&tot.index.unwrap()));
+        assert!(!goto1.targets.contains(&atk_delay.index.unwrap()));
+        let tot_targets = tot.targets.clone();
+        let wp2_id = wp2.index.unwrap();
+        let mut next_pulses_wp2 = false;
+        pack.for_each(&mut |e| {
+            if e.block_type == "MCU_Timer" && tot_targets.contains(&e.index.unwrap()) {
+                next_pulses_wp2 |= e.targets.contains(&wp2_id);
+            }
+        });
+        assert!(
+            next_pulses_wp2,
+            "TOT should skip the sibling attack and pulse the next Goto WP timer"
+        );
+    }
+
+    #[test]
+    fn mission_complete_after_goto_is_pulsed_from_waypoint() {
+        let mut opts = one_mig();
+        opts.waypoint_count = 1;
+        opts.seats[0].orders = vec![
+            OrderSpec {
+                kind: OrderKind::GotoWaypoint,
+                waypoint: 1,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::MissionComplete,
+                ..OrderSpec::default()
+            },
+        ];
+        let pack = generate_template(&opts).unwrap();
+        let wp1 = pack.find_by_name("WP 1").unwrap();
+        let goto = pack.find_by_name("Goto WP 1").unwrap();
+        let done = pack.find_by_name("Mission Complete 1").unwrap();
+        let hub = pack.find_by_name("MISSION END").unwrap();
+        assert!(goto.targets.contains(&wp1.index.unwrap()));
+        assert!(
+            !goto.targets.contains(&done.index.unwrap()),
+            "Goto timer must not start Mission Complete before arrival, got {:?}",
+            goto.targets
+        );
+        assert!(wp1.targets.contains(&done.index.unwrap()));
+        assert!(done.targets.contains(&hub.index.unwrap()));
+    }
+
+    #[test]
+    fn order_tree_stacks_tot_with_attack() {
+        let orders = vec![
+            OrderSpec {
+                kind: OrderKind::Formation,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::GotoWaypoint,
+                waypoint: 1,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::TimeOnTarget,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::AttackArea,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::MissionComplete,
+                ..OrderSpec::default()
+            },
+        ];
+        assert_eq!(
+            order_tree_columns(&orders),
+            vec![vec![0], vec![1], vec![2, 3], vec![4]]
+        );
+        let after_attack = vec![
+            OrderSpec {
+                kind: OrderKind::GotoWaypoint,
+                waypoint: 1,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::AttackArea,
+                ..OrderSpec::default()
+            },
+            OrderSpec {
+                kind: OrderKind::TimeOnTarget,
+                ..OrderSpec::default()
+            },
+        ];
+        assert_eq!(
+            order_tree_columns(&after_attack),
+            vec![vec![0], vec![1, 2]]
+        );
     }
 
     #[test]

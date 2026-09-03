@@ -326,6 +326,8 @@ mod tests {
         assert!(s.contains("Modifier Set Value"));
         assert!(s.contains("finger-four"));
         assert!(s.contains("Planes"));
+        assert!(s.contains("light flak"));
+        assert!(s.contains("cruise speed"));
         assert!(s.contains("MCU_TR_Entity"));
         assert!(s.contains("Carriages"));
     }

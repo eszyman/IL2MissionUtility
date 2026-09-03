@@ -14,6 +14,7 @@ mod mapground;
 mod mapload;
 mod mapnet;
 mod mapshipping;
+mod model_spec;
 mod pack;
 mod placement;
 mod parser;
