@@ -45,6 +45,7 @@ use crate::mapground::{
 use crate::mapnet;
 use crate::mapshipping::{place_ships, MapShipLayout, ShipSpot, GROUP_DELAY_S, START_DELAY_S};
 use crate::model_spec::{self, ModelClass};
+use crate::payloads;
 use crate::placement::PlaceOpts;
 use crate::pack::{builtin_template, generate_pack, generate_pack_at, park_rtbs, zone_in_radius};
 use crate::parser::{parse_group_file, parse_il2_document};
@@ -62,12 +63,13 @@ use crate::template::{
     copy_seat_attributes, flight_lead_of, formation_label, formations_for, generate_template,
     has_linked_wingmen, is_follower, lead_indexes, load_catalog, load_catalog_as_user_added,
     insert_goto_waypoint_after, merge_catalog, move_seat, next_waypoint_number,
-    normalize_order_chain, order_seat_indexes, order_tree_columns, place_offset, receives_orders,
+    normalize_order_chain, order_seat_indexes, order_tree_layout, place_offset, receives_orders,
     refresh_attack_areas_for_seat, remap_event_then, remap_index_vec, remap_seat_index,
-    set_report_following, used_waypoint_count, BringUp, CatalogUnit, EntityEvent, EventHook,
-    EventThen, FlightRole, OrderKind, OrderSpec, PlaceLayout, TemplateOptions, TemplateSeat,
-    UnitKind as CatalogKind, ZoneCoalition, DEFAULT_TIME_ON_TARGET_S, PLACEMENT_SPACING,
-    attack_area_range_limit, carriage_label, catalog_carriage_scripts,
+    set_report_following, used_waypoint_count, waypoint_display_altitude, BringUp, CatalogUnit,
+    EntityEvent, EventHook, EventThen, FlightRole, OrderKind, OrderSpec, OrderTreeNode,
+    PlaceLayout, TemplateOptions, TemplateSeat, UnitKind as CatalogKind, ZoneCoalition,
+    DEFAULT_TIME_ON_TARGET_S, PLACEMENT_SPACING, attack_area_range_limit, carriage_label,
+    catalog_carriage_scripts,
 };
 use crate::weapon_range::{self, ArmyUnitKind};
 
@@ -356,6 +358,7 @@ struct GroupGeneratorApp {
     tpl_zone_out: f32,
     tpl_wp_spacing: f32,
     tpl_wp_speed: f32,
+    tpl_wp_altitude: f32,
     tpl_zone_coalition: ZoneCoalition,
     tpl_view_zoom: f32,
     tpl_view_pan: Vec2,
@@ -366,6 +369,136 @@ enum TplSelect {
     Seat(usize),
     Order { seat: usize, order: usize },
     Event { seat: usize, event: usize },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AddTreeItem {
+    Order { seat: usize, kind: OrderKind },
+    Event { seat: usize, kind: EntityEvent },
+}
+
+fn order_spec_for_added_kind(unit: &CatalogUnit, kind: OrderKind, next_wp: u32) -> OrderSpec {
+    let mut spec = OrderSpec::for_unit(unit);
+    spec.kind = kind;
+    if kind == OrderKind::GotoWaypoint {
+        spec.waypoint = next_wp.max(1);
+    }
+    if kind == OrderKind::TimeOnTarget {
+        spec.time_s = DEFAULT_TIME_ON_TARGET_S;
+    }
+    spec
+}
+
+fn apply_order_kind(seats: &mut [TemplateSeat], seat: usize, order: usize, k: OrderKind) {
+    let unit_kind = if seats[seat].unit.is_air() {
+        CatalogKind::Plane
+    } else {
+        CatalogKind::Vehicle
+    };
+    let was_goto = seats[seat].orders[order].kind == OrderKind::GotoWaypoint;
+    let next_wp = next_waypoint_number(seats);
+    seats[seat].orders[order].kind = k;
+    if k == OrderKind::GotoWaypoint && !was_goto {
+        seats[seat].orders[order].waypoint = next_wp;
+    }
+    if k == OrderKind::Formation {
+        let presets = formations_for(unit_kind);
+        let id = seats[seat].orders[order].formation_type;
+        if !presets.iter().any(|p| p.id == id) {
+            seats[seat].orders[order].formation_type =
+                OrderSpec::for_kind(unit_kind).formation_type;
+        }
+    }
+    if k == OrderKind::TimeOnTarget {
+        seats[seat].orders[order].time_s = DEFAULT_TIME_ON_TARGET_S;
+    }
+    if k == OrderKind::AttackArea {
+        apply_suggested_attack_area(seats, seat, order);
+    }
+}
+
+fn kinds_in_same_group(kind: OrderKind, unit_kind: CatalogKind) -> Vec<OrderKind> {
+    if kind.is_report() {
+        OrderKind::reports(unit_kind).collect()
+    } else if kind.is_special() {
+        OrderKind::specials(unit_kind).collect()
+    } else {
+        OrderKind::commands(unit_kind).collect()
+    }
+}
+
+fn draw_tree_add_buttons(
+    ui: &mut egui::Ui,
+    si: usize,
+    unit_kind: CatalogKind,
+    can_orders: bool,
+    add: &mut Option<AddTreeItem>,
+) {
+    if can_orders {
+        egui::Grid::new(format!("tree_add_{si}"))
+            .num_columns(2)
+            .spacing([2.0, 2.0])
+            .show(ui, |ui| {
+                ui.menu_button("+ Command", |ui| {
+                    for k in OrderKind::commands(unit_kind) {
+                        if ui.button(k.label()).clicked() {
+                            *add = Some(AddTreeItem::Order { seat: si, kind: k });
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Add a command to the order tree");
+                ui.menu_button("+ Event", |ui| {
+                    ui.set_max_height(280.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for k in EntityEvent::available(unit_kind) {
+                            if ui.button(k.label()).clicked() {
+                                *add = Some(AddTreeItem::Event { seat: si, kind: *k });
+                                ui.close();
+                            }
+                        }
+                    });
+                })
+                .response
+                .on_hover_text("Add an OnEvent");
+                ui.end_row();
+                ui.menu_button("+ Special", |ui| {
+                    for k in OrderKind::specials(unit_kind) {
+                        if ui.button(k.label()).clicked() {
+                            *add = Some(AddTreeItem::Order { seat: si, kind: k });
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Add Time on Target, Mission Complete, or RTB");
+                ui.menu_button("+ Report", |ui| {
+                    for k in OrderKind::reports(unit_kind) {
+                        if ui.button(k.label()).clicked() {
+                            *add = Some(AddTreeItem::Order { seat: si, kind: k });
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Add an OnReport on the matching command");
+            });
+    } else {
+        ui.menu_button("+ Event", |ui| {
+            ui.set_max_height(280.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for k in EntityEvent::available(unit_kind) {
+                    if ui.button(k.label()).clicked() {
+                        *add = Some(AddTreeItem::Event { seat: si, kind: *k });
+                        ui.close();
+                    }
+                }
+            });
+        })
+        .response
+        .on_hover_text("Add an OnEvent");
+    }
 }
 
 fn default_template_seats() -> Vec<TemplateSeat> {
@@ -467,10 +600,7 @@ fn order_chip_fill(
         selected_fill
     } else if kind.is_report() {
         report_fill
-    } else if matches!(
-        kind,
-        OrderKind::TimeOnTarget | OrderKind::MissionComplete
-    ) {
+    } else if kind.is_special() {
         chain_fill
     } else {
         order_fill
@@ -482,6 +612,55 @@ fn order_chip_label(oi: usize, kind: OrderKind, extra: usize) -> String {
         format!("{} {} +{}", oi + 1, kind.label(), extra)
     } else {
         format!("{} {}", oi + 1, kind.label())
+    }
+}
+
+fn centered_fill_button(ui: &mut egui::Ui, label: &str, fill: Color32, min_size: Vec2) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(min_size, Sense::click());
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect(
+        rect,
+        visuals.corner_radius,
+        fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let font = ui
+        .style()
+        .text_styles
+        .get(&TextStyle::Button)
+        .cloned()
+        .unwrap_or_else(|| FontId::proportional(13.0));
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        font,
+        visuals.text_color(),
+    );
+    response
+}
+
+fn order_chip_size(kind: OrderKind) -> Vec2 {
+    let wide = kind.is_report() || kind.is_special();
+    Vec2::new(if wide { 140.0 } else { 92.0 }, 24.0)
+}
+
+const TREE_ARROW_SLOT: f32 = 18.0;
+const TREE_CHIP_H: f32 = 24.0;
+
+fn tree_arrow_slot(ui: &mut egui::Ui, show: bool, left: bool, enabled: bool) -> bool {
+    if show {
+        let mut clicked = false;
+        ui.add_enabled_ui(enabled, |ui| {
+            if move_col_button(ui, left).clicked() {
+                clicked = true;
+            }
+        });
+        clicked
+    } else {
+        ui.add_space(TREE_ARROW_SLOT);
+        false
     }
 }
 
@@ -500,51 +679,490 @@ fn draw_template_order_chip(
     clicked: &mut Option<TplSelect>,
     remove_order: &mut Option<(usize, usize)>,
     move_order: &mut Option<(usize, usize, i32)>,
-) {
-    let text = order_chip_label(oi, kind, extra);
-    let fill = order_chip_fill(
-        kind,
-        selected,
-        selected_fill,
-        order_fill,
-        report_fill,
-        chain_fill,
-    );
-    let wide = kind.is_report()
-        || matches!(
-            kind,
-            OrderKind::TimeOnTarget | OrderKind::MissionComplete
-        );
-    let hover = if kind.is_wp_parallel() {
-        "Starts with Attack / Time on Target from the waypoint, not after a delay."
-    } else if kind == OrderKind::MissionComplete {
-        "On waypoint arrival (or when Time on Target expires) pulses MISSION END."
-    } else {
-        ""
-    };
-    let chip = egui::Button::new(text)
-        .fill(fill)
-        .min_size(Vec2::new(if wide { 140.0 } else { 92.0 }, 24.0));
-    let resp = ui.add(chip);
-    if !hover.is_empty() {
-        resp.clone().on_hover_text(hover);
-    }
-    if resp.clicked() {
-        *clicked = Some(TplSelect::Order { seat: si, order: oi });
-    }
-    if ui.small_button("×").on_hover_text("Remove order").clicked() {
-        *remove_order = Some((si, oi));
-    }
-    if selected {
-        if ui.small_button("<").clicked() {
+) -> Rect {
+    let mut chip_rect = Rect::NOTHING;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if tree_arrow_slot(ui, selected, true, oi > 0) {
             *move_order = Some((si, oi, -1));
         }
-        ui.add_enabled_ui(oi + 1 < n_orders, |ui| {
-            if ui.small_button(">").clicked() {
-                *move_order = Some((si, oi, 1));
-            }
-        });
+        let text = order_chip_label(oi, kind, extra);
+        let fill = order_chip_fill(
+            kind,
+            selected,
+            selected_fill,
+            order_fill,
+            report_fill,
+            chain_fill,
+        );
+        let hover = if kind.is_wp_parallel() {
+            "Starts with Attack / Time on Target from the waypoint, not after a delay."
+        } else if kind == OrderKind::MissionComplete {
+            "On waypoint arrival (or when Time on Target expires) pulses MISSION END."
+        } else {
+            ""
+        };
+        let chip = egui::Button::new(text)
+            .fill(fill)
+            .min_size(order_chip_size(kind));
+        let resp = ui.add(chip);
+        if !hover.is_empty() {
+            resp.clone().on_hover_text(hover);
+        }
+        if resp.clicked() {
+            *clicked = Some(TplSelect::Order { seat: si, order: oi });
+        }
+        chip_rect = resp.rect;
+        if tree_arrow_slot(ui, selected, false, oi + 1 < n_orders) {
+            *move_order = Some((si, oi, 1));
+        }
+        if ui.small_button("×").on_hover_text("Remove order").clicked() {
+            *remove_order = Some((si, oi));
+        }
+    });
+    chip_rect
+}
+
+fn draw_template_event_chip(
+    ui: &mut egui::Ui,
+    si: usize,
+    ei: usize,
+    kind: EntityEvent,
+    selected: bool,
+    selected_fill: Color32,
+    event_fill: Color32,
+    clicked: &mut Option<TplSelect>,
+    remove_event: &mut Option<(usize, usize)>,
+) -> Rect {
+    let mut chip_rect = Rect::NOTHING;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add_space(TREE_ARROW_SLOT);
+        let chip = egui::Button::new(kind.label())
+            .fill(if selected { selected_fill } else { event_fill })
+            .min_size(Vec2::new(110.0, 24.0));
+        let resp = ui.add(chip);
+        if resp.clicked() {
+            *clicked = Some(TplSelect::Event { seat: si, event: ei });
+        }
+        chip_rect = resp.rect;
+        ui.add_space(TREE_ARROW_SLOT);
+        if ui.small_button("×").on_hover_text("Remove event").clicked() {
+            *remove_event = Some((si, ei));
+        }
+    });
+    chip_rect
+}
+
+fn split_trailing_events(mut laid: Vec<Vec<OrderTreeNode>>) -> (Vec<Vec<OrderTreeNode>>, Vec<OrderTreeNode>) {
+    let trailing = if laid.last().is_some_and(|col| {
+        !col.is_empty() && col.iter().all(|n| matches!(n, OrderTreeNode::Event(_)))
+    }) {
+        laid.pop().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    (laid, trailing)
+}
+
+fn tree_line_stroke() -> Stroke {
+    Stroke::new(
+        1.8_f32,
+        Color32::from_rgba_unmultiplied(90, 130, 145, 200),
+    )
+}
+
+fn push_polyline(shapes: &mut Vec<egui::Shape>, pts: Vec<Pos2>, stroke: Stroke) {
+    if pts.len() < 2 {
+        return;
     }
+    shapes.push(egui::Shape::line(pts, stroke));
+}
+
+/// Leave the right side of `from`, enter the left side of `to`.
+/// Different rows use an S: out the right, vertical in the gap, into the left.
+fn right_into_left(from: Rect, to: Rect) -> Vec<Pos2> {
+    let start = from.right_center();
+    let dest = to.left_center();
+    if (start.y - dest.y).abs() < 2.0 {
+        return vec![start, dest];
+    }
+    let gap = dest.x - start.x;
+    if gap > 4.0 {
+        let t = if dest.y > start.y + 2.0 {
+            0.62
+        } else {
+            0.38
+        };
+        let lane = start.x + gap * t;
+        vec![
+            start,
+            Pos2::new(lane, start.y),
+            Pos2::new(lane, dest.y),
+            dest,
+        ]
+    } else {
+        let stub_x = start.x.max(dest.x) + 16.0;
+        vec![
+            start,
+            Pos2::new(stub_x, start.y),
+            Pos2::new(stub_x, dest.y),
+            dest,
+        ]
+    }
+}
+
+fn node_is_tot(node: OrderTreeNode, orders: &[OrderSpec]) -> bool {
+    matches!(
+        node,
+        OrderTreeNode::Order(i) if orders.get(i).is_some_and(|o| o.kind == OrderKind::TimeOnTarget)
+    )
+}
+
+fn node_is_attack(node: OrderTreeNode, orders: &[OrderSpec]) -> bool {
+    matches!(
+        node,
+        OrderTreeNode::Order(i)
+            if orders.get(i).is_some_and(|o| {
+                matches!(o.kind, OrderKind::Attack | OrderKind::AttackArea)
+            })
+    )
+}
+
+fn node_is_spine_order(node: OrderTreeNode, orders: &[OrderSpec]) -> bool {
+    matches!(
+        node,
+        OrderTreeNode::Order(i)
+            if orders.get(i).is_some_and(|o| {
+                o.kind != OrderKind::TimeOnTarget && !o.kind.is_report()
+            })
+    )
+}
+
+fn column_spine(
+    col: &[(OrderTreeNode, Rect)],
+    orders: &[OrderSpec],
+) -> Option<(OrderTreeNode, Rect)> {
+    col.iter()
+        .copied()
+        .find(|(n, _)| node_is_spine_order(*n, orders))
+}
+
+fn event_prefix_len(col: &[OrderTreeNode]) -> usize {
+    col.iter()
+        .take_while(|n| matches!(n, OrderTreeNode::Event(_)))
+        .count()
+}
+
+fn node_is_report(node: OrderTreeNode, orders: &[OrderSpec]) -> bool {
+    matches!(
+        node,
+        OrderTreeNode::Order(i) if orders.get(i).is_some_and(|o| o.kind.is_report())
+    )
+}
+
+fn top_report_len(col: &[OrderTreeNode], orders: &[OrderSpec]) -> usize {
+    let ev = event_prefix_len(col);
+    col[ev..]
+        .iter()
+        .take_while(|n| node_is_report(**n, orders))
+        .count()
+}
+
+fn report_then_oi(orders: &[OrderSpec], oi: usize) -> Option<usize> {
+    let next = oi + 1;
+    (next < orders.len() && !orders[next].kind.is_report()).then_some(next)
+}
+
+fn column_is_feeder(col: &[(OrderTreeNode, Rect)], orders: &[OrderSpec]) -> bool {
+    !col.is_empty()
+        && col
+            .iter()
+            .all(|(n, _)| matches!(n, OrderTreeNode::Event(_)) || node_is_report(*n, orders))
+}
+
+fn order_rect_in(columns: &[Vec<(OrderTreeNode, Rect)>], oi: usize) -> Option<Rect> {
+    for col in columns {
+        for (node, rect) in col {
+            if matches!(node, OrderTreeNode::Order(i) if *i == oi) {
+                return Some(*rect);
+            }
+        }
+    }
+    None
+}
+
+fn paint_feeder_line(
+    shapes: &mut Vec<egui::Shape>,
+    columns: &[Vec<(OrderTreeNode, Rect)>],
+    col: &[(OrderTreeNode, Rect)],
+    orders: &[OrderSpec],
+    events: &[EventHook],
+    node: OrderTreeNode,
+    rect: Rect,
+    stroke: Stroke,
+) {
+    match node {
+        OrderTreeNode::Event(ei) => {
+            if let Some(EventThen::Order(oi)) = events.get(ei).map(|h| h.then) {
+                if let Some(target) = order_rect_in(columns, oi) {
+                    push_polyline(shapes, right_into_left(rect, target), stroke);
+                }
+            }
+        }
+        OrderTreeNode::Order(oi) if node_is_report(node, orders) => {
+            if let Some(toi) = report_then_oi(orders, oi) {
+                let same_col = col
+                    .iter()
+                    .any(|(n, _)| matches!(n, OrderTreeNode::Order(i) if *i == toi));
+                if !same_col {
+                    if let Some(target) = order_rect_in(columns, toi) {
+                        push_polyline(shapes, right_into_left(rect, target), stroke);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn paint_order_tree_lines(
+    ui: &mut egui::Ui,
+    idx: egui::layers::ShapeIdx,
+    columns: &[Vec<(OrderTreeNode, Rect)>],
+    orders: &[OrderSpec],
+    events: &[EventHook],
+) {
+    let stroke = tree_line_stroke();
+    let mut shapes = Vec::new();
+    let spines: Vec<(usize, Rect)> = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, col)| !column_is_feeder(col, orders))
+        .filter_map(|(ci, col)| column_spine(col, orders).map(|(_, r)| (ci, r)))
+        .collect();
+    for pair in spines.windows(2) {
+        push_polyline(&mut shapes, right_into_left(pair[0].1, pair[1].1), stroke);
+    }
+    for (ci, col) in columns.iter().enumerate() {
+        if column_is_feeder(col, orders) {
+            for (node, rect) in col {
+                paint_feeder_line(&mut shapes, columns, col, orders, events, *node, *rect, stroke);
+            }
+            continue;
+        }
+        let Some(spine_i) = col.iter().position(|(n, _)| node_is_spine_order(*n, orders)) else {
+            continue;
+        };
+        let (spine_node, spine_rect) = col[spine_i];
+        let prev_spine = spines
+            .iter()
+            .rev()
+            .find(|(sci, _)| *sci < ci)
+            .map(|(_, r)| *r);
+        let next_spine = spines
+            .iter()
+            .find(|(sci, _)| *sci > ci)
+            .map(|(_, r)| *r);
+        for (row, (node, rect)) in col.iter().copied().enumerate() {
+            if row == spine_i {
+                continue;
+            }
+            if node_is_tot(node, orders) {
+                let feeder = if node_is_attack(spine_node, orders) {
+                    prev_spine.unwrap_or(spine_rect)
+                } else {
+                    spine_rect
+                };
+                push_polyline(&mut shapes, right_into_left(feeder, rect), stroke);
+                if let Some(next) = next_spine {
+                    push_polyline(&mut shapes, right_into_left(rect, next), stroke);
+                }
+            } else if let OrderTreeNode::Event(ei) = node {
+                if let Some(EventThen::Order(oi)) = events.get(ei).map(|h| h.then) {
+                    let same_col = col
+                        .iter()
+                        .any(|(n, _)| matches!(n, OrderTreeNode::Order(i) if *i == oi));
+                    if !same_col {
+                        if let Some(target) = order_rect_in(columns, oi) {
+                            push_polyline(&mut shapes, right_into_left(rect, target), stroke);
+                        }
+                    }
+                }
+            } else if node_is_report(node, orders) {
+                if let OrderTreeNode::Order(oi) = node {
+                    if let Some(toi) = report_then_oi(orders, oi) {
+                        let same_col = col
+                            .iter()
+                            .any(|(n, _)| matches!(n, OrderTreeNode::Order(i) if *i == toi));
+                        if !same_col {
+                            if let Some(target) = order_rect_in(columns, toi) {
+                                push_polyline(&mut shapes, right_into_left(rect, target), stroke);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(next) = next_spine {
+                push_polyline(&mut shapes, right_into_left(rect, next), stroke);
+            }
+        }
+    }
+    ui.painter().set(idx, egui::Shape::Vec(shapes));
+}
+
+fn draw_tree_node_chip(
+    ui: &mut egui::Ui,
+    si: usize,
+    node: OrderTreeNode,
+    orders: &[OrderSpec],
+    events: &[EventHook],
+    select: Option<TplSelect>,
+    selected_fill: Color32,
+    order_fill: Color32,
+    report_fill: Color32,
+    chain_fill: Color32,
+    event_fill: Color32,
+    clicked: &mut Option<TplSelect>,
+    remove_order: &mut Option<(usize, usize)>,
+    remove_event: &mut Option<(usize, usize)>,
+    move_order: &mut Option<(usize, usize, i32)>,
+) -> Rect {
+    match node {
+        OrderTreeNode::Order(oi) => {
+            let kind = orders[oi].kind;
+            let extra = orders[oi].shared_with.len();
+            let selected = matches!(
+                select,
+                Some(TplSelect::Order { seat, order }) if seat == si && order == oi
+            );
+            draw_template_order_chip(
+                ui,
+                si,
+                oi,
+                orders.len(),
+                kind,
+                extra,
+                selected,
+                selected_fill,
+                order_fill,
+                report_fill,
+                chain_fill,
+                clicked,
+                remove_order,
+                move_order,
+            )
+        }
+        OrderTreeNode::Event(ei) => {
+            let selected = matches!(
+                select,
+                Some(TplSelect::Event { seat, event }) if seat == si && event == ei
+            );
+            draw_template_event_chip(
+                ui,
+                si,
+                ei,
+                events[ei].kind,
+                selected,
+                selected_fill,
+                event_fill,
+                clicked,
+                remove_event,
+            )
+        }
+    }
+}
+
+fn draw_order_tree_columns(
+    ui: &mut egui::Ui,
+    si: usize,
+    columns: &[Vec<OrderTreeNode>],
+    orders: &[OrderSpec],
+    events: &[EventHook],
+    select: Option<TplSelect>,
+    selected_fill: Color32,
+    order_fill: Color32,
+    report_fill: Color32,
+    chain_fill: Color32,
+    event_fill: Color32,
+    clicked: &mut Option<TplSelect>,
+    remove_order: &mut Option<(usize, usize)>,
+    remove_event: &mut Option<(usize, usize)>,
+    move_order: &mut Option<(usize, usize, i32)>,
+) {
+    if columns.is_empty() {
+        return;
+    }
+    let line_idx = ui.painter().add(egui::Shape::Noop);
+    let mut geom: Vec<Vec<(OrderTreeNode, Rect)>> = Vec::new();
+    let max_events = columns.iter().map(|c| event_prefix_len(c)).max().unwrap_or(0);
+    let max_reports = columns
+        .iter()
+        .map(|c| top_report_len(c, orders))
+        .max()
+        .unwrap_or(0);
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
+        for col in columns {
+            let mut col_geom = Vec::new();
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 8.0;
+                let events_n = event_prefix_len(col);
+                let reports_n = top_report_len(col, orders);
+                for _ in 0..max_events.saturating_sub(events_n) {
+                    ui.add_space(TREE_CHIP_H);
+                }
+                for node in &col[..events_n] {
+                    col_geom.push((
+                        *node,
+                        draw_tree_node_chip(
+                            ui,
+                            si,
+                            *node,
+                            orders,
+                            events,
+                            select,
+                            selected_fill,
+                            order_fill,
+                            report_fill,
+                            chain_fill,
+                            event_fill,
+                            clicked,
+                            remove_order,
+                            remove_event,
+                            move_order,
+                        ),
+                    ));
+                }
+                for _ in 0..max_reports.saturating_sub(reports_n) {
+                    ui.add_space(TREE_CHIP_H);
+                }
+                for node in &col[events_n..] {
+                    col_geom.push((
+                        *node,
+                        draw_tree_node_chip(
+                            ui,
+                            si,
+                            *node,
+                            orders,
+                            events,
+                            select,
+                            selected_fill,
+                            order_fill,
+                            report_fill,
+                            chain_fill,
+                            event_fill,
+                            clicked,
+                            remove_order,
+                            remove_event,
+                            move_order,
+                        ),
+                    ));
+                }
+            });
+            geom.push(col_geom);
+        }
+    });
+    paint_order_tree_lines(ui, line_idx, &geom, orders, events);
 }
 
 enum Status {
@@ -670,6 +1288,7 @@ impl Default for GroupGeneratorApp {
             tpl_zone_out: 8_500.0,
             tpl_wp_spacing: 4_000.0,
             tpl_wp_speed: 100.0,
+            tpl_wp_altitude: 0.0,
             tpl_zone_coalition: ZoneCoalition::Western,
             tpl_view_zoom: 1.0,
             tpl_view_pan: Vec2::ZERO,
@@ -1010,6 +1629,13 @@ impl GroupGeneratorApp {
                         .range(10.0..=900.0)
                         .suffix(" m/s"),
                 );
+                ui.label("Altitude");
+                ui.add(
+                    egui::DragValue::new(&mut self.tpl_wp_altitude)
+                        .range(0.0..=8_000.0)
+                        .suffix(" m"),
+                )
+                .on_hover_text("YPos for path waypoints. 0 m uses the first plane’s spawn altitude.");
             });
         });
     }
@@ -1021,8 +1647,7 @@ impl GroupGeneratorApp {
         let report_fill = Color32::from_rgb(94, 181, 133);
         let chain_fill = Color32::from_rgb(181, 148, 94);
         let event_fill = Color32::from_rgb(175, 94, 181);
-        let mut add_order = None;
-        let mut add_event = None;
+        let mut add_item = None;
         let mut remove_seat = None;
         let mut remove_order = None;
         let mut remove_event = None;
@@ -1031,7 +1656,7 @@ impl GroupGeneratorApp {
         let mut clicked = None;
 
         for si in 0..self.tpl_seats.len() {
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
                 let unit_sel = matches!(self.tpl_select, Some(TplSelect::Seat(s)) if s == si);
                 let role = match self.tpl_seats[si].role {
                     FlightRole::Lead => "Lead",
@@ -1043,10 +1668,14 @@ impl GroupGeneratorApp {
                 } else {
                     format!("{} ({role})", self.tpl_seats[si].unit.label())
                 };
-                let unit_btn = egui::Button::new(RichText::new(label).strong())
-                    .fill(if unit_sel { selected_fill } else { unit_fill })
-                    .min_size(Vec2::new(140.0, 24.0));
-                if ui.add(unit_btn).clicked() {
+                if centered_fill_button(
+                    ui,
+                    &label,
+                    if unit_sel { selected_fill } else { unit_fill },
+                    Vec2::new(140.0, 24.0),
+                )
+                .clicked()
+                {
                     clicked = Some(TplSelect::Seat(si));
                 }
                 let this_seat = matches!(
@@ -1067,83 +1696,98 @@ impl GroupGeneratorApp {
                     });
                 }
                 if receives_orders(&self.tpl_seats, si) {
-                    let n_orders = self.tpl_seats[si].orders.len();
-                    for oi in 0..n_orders {
-                        let order_sel = matches!(
-                            self.tpl_select,
-                            Some(TplSelect::Order { seat, order }) if seat == si && order == oi
-                        );
-                        let kind = self.tpl_seats[si].orders[oi].kind;
-                        let extra = self.tpl_seats[si].orders[oi].shared_with.len();
-                        let text = if extra > 0 {
-                            format!("{} {} +{}", oi + 1, kind.label(), extra)
-                        } else {
-                            format!("{} {}", oi + 1, kind.label())
-                        };
-                        let fill = if order_sel {
-                            selected_fill
-                        } else if kind.is_report() {
-                            report_fill
-                        } else if matches!(
-                            kind,
-                            OrderKind::TimeOnTarget | OrderKind::MissionComplete
-                        ) {
-                            chain_fill
-                        } else {
-                            order_fill
-                        };
-                        let wide = kind.is_report()
-                            || matches!(
-                                kind,
-                                OrderKind::TimeOnTarget | OrderKind::MissionComplete
-                            );
-                        let chip = egui::Button::new(text)
-                            .fill(fill)
-                            .min_size(Vec2::new(if wide { 140.0 } else { 92.0 }, 24.0));
-                        if ui.add(chip).clicked() {
-                            clicked = Some(TplSelect::Order { seat: si, order: oi });
-                        }
-                        if ui.small_button("×").on_hover_text("Remove order").clicked() {
-                            remove_order = Some((si, oi));
-                        }
-                        if order_sel {
-                            if ui.small_button("<").clicked() {
-                                move_order = Some((si, oi, -1));
+                    let laid = order_tree_layout(
+                        &self.tpl_seats[si].orders,
+                        &self.tpl_seats[si].events,
+                    );
+                    let (columns, trailing) = split_trailing_events(laid);
+                    draw_order_tree_columns(
+                        ui,
+                        si,
+                        &columns,
+                        &self.tpl_seats[si].orders,
+                        &self.tpl_seats[si].events,
+                        self.tpl_select,
+                        selected_fill,
+                        order_fill,
+                        report_fill,
+                        chain_fill,
+                        event_fill,
+                        &mut clicked,
+                        &mut remove_order,
+                        &mut remove_event,
+                        &mut move_order,
+                    );
+                    if !trailing.is_empty() {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 8.0;
+                            for node in trailing {
+                                if let OrderTreeNode::Event(ei) = node {
+                                    let selected = matches!(
+                                        self.tpl_select,
+                                        Some(TplSelect::Event { seat, event })
+                                            if seat == si && event == ei
+                                    );
+                                    draw_template_event_chip(
+                                        ui,
+                                        si,
+                                        ei,
+                                        self.tpl_seats[si].events[ei].kind,
+                                        selected,
+                                        selected_fill,
+                                        event_fill,
+                                        &mut clicked,
+                                        &mut remove_event,
+                                    );
+                                }
                             }
-                            if ui.small_button(">").clicked() {
-                                move_order = Some((si, oi, 1));
-                            }
-                        }
+                        });
                     }
-                    if ui.small_button("+").on_hover_text("Add order").clicked() {
-                        add_order = Some(si);
-                    }
+                    draw_tree_add_buttons(
+                        ui,
+                        si,
+                        self.tpl_seats[si].unit.kind,
+                        true,
+                        &mut add_item,
+                    );
                 } else {
                     ui.label(
                         RichText::new("follows lead")
                             .italics()
                             .small(),
                     );
+                    if !self.tpl_seats[si].events.is_empty() {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 8.0;
+                            for ei in 0..self.tpl_seats[si].events.len() {
+                                let selected = matches!(
+                                    self.tpl_select,
+                                    Some(TplSelect::Event { seat, event })
+                                        if seat == si && event == ei
+                                );
+                                draw_template_event_chip(
+                                    ui,
+                                    si,
+                                    ei,
+                                    self.tpl_seats[si].events[ei].kind,
+                                    selected,
+                                    selected_fill,
+                                    event_fill,
+                                    &mut clicked,
+                                    &mut remove_event,
+                                );
+                            }
+                        });
+                    }
                 }
-                let n_events = self.tpl_seats[si].events.len();
-                for ei in 0..n_events {
-                    let event_sel = matches!(
-                        self.tpl_select,
-                        Some(TplSelect::Event { seat, event }) if seat == si && event == ei
+                if !receives_orders(&self.tpl_seats, si) {
+                    draw_tree_add_buttons(
+                        ui,
+                        si,
+                        self.tpl_seats[si].unit.kind,
+                        false,
+                        &mut add_item,
                     );
-                    let kind = self.tpl_seats[si].events[ei].kind;
-                    let chip = egui::Button::new(kind.label())
-                        .fill(if event_sel { selected_fill } else { event_fill })
-                        .min_size(Vec2::new(110.0, 24.0));
-                    if ui.add(chip).clicked() {
-                        clicked = Some(TplSelect::Event { seat: si, event: ei });
-                    }
-                    if ui.small_button("×").on_hover_text("Remove event").clicked() {
-                        remove_event = Some((si, ei));
-                    }
-                }
-                if ui.small_button("+evt").on_hover_text("Add event").clicked() {
-                    add_event = Some(si);
                 }
                 if ui.small_button("×").on_hover_text("Remove unit").clicked() {
                     remove_seat = Some(si);
@@ -1155,17 +1799,32 @@ impl GroupGeneratorApp {
             self.tpl_select = Some(sel);
             self.tpl_preview_from_catalog = false;
         }
-        if let Some(si) = add_order {
-            let unit = self.tpl_seats[si].unit.clone();
-            self.tpl_seats[si].orders.push(OrderSpec::for_unit(&unit));
-            let oi = self.tpl_seats[si].orders.len() - 1;
-            self.tpl_select = Some(TplSelect::Order { seat: si, order: oi });
-        }
-        if let Some(si) = add_event {
-            let kind = self.tpl_seats[si].unit.kind;
-            self.tpl_seats[si].events.push(EventHook::default_for(kind));
-            let ei = self.tpl_seats[si].events.len() - 1;
-            self.tpl_select = Some(TplSelect::Event { seat: si, event: ei });
+        if let Some(item) = add_item {
+            match item {
+                AddTreeItem::Order { seat: si, kind } => {
+                    let unit = self.tpl_seats[si].unit.clone();
+                    let next_wp = next_waypoint_number(&self.tpl_seats);
+                    self.tpl_seats[si]
+                        .orders
+                        .push(order_spec_for_added_kind(&unit, kind, next_wp));
+                    let oi = self.tpl_seats[si].orders.len() - 1;
+                    if kind == OrderKind::AttackArea {
+                        apply_suggested_attack_area(&mut self.tpl_seats, si, oi);
+                    }
+                    let oi = {
+                        let seat = &mut self.tpl_seats[si];
+                        normalize_order_chain(&mut seat.orders, &mut seat.events, oi)
+                    };
+                    self.tpl_select = Some(TplSelect::Order { seat: si, order: oi });
+                }
+                AddTreeItem::Event { seat: si, kind } => {
+                    let mut hook = EventHook::default_for(self.tpl_seats[si].unit.kind);
+                    hook.kind = kind;
+                    self.tpl_seats[si].events.push(hook);
+                    let ei = self.tpl_seats[si].events.len() - 1;
+                    self.tpl_select = Some(TplSelect::Event { seat: si, event: ei });
+                }
+            }
         }
         if let Some((si, oi)) = remove_order {
             if si < self.tpl_seats.len() && oi < self.tpl_seats[si].orders.len() {
@@ -1478,9 +2137,8 @@ impl GroupGeneratorApp {
                             .range(0.0..=1.0)
                             .speed(0.05),
                     );
-                    ui.label("Payload");
-                    ui.add(egui::DragValue::new(&mut self.tpl_seats[si].payload_id).range(0..=99));
                 });
+                self.draw_seat_payload_mods(ui, si);
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.tpl_seats[si].vulnerable, "Vulnerable");
                     ui.checkbox(&mut self.tpl_seats[si].engageable, "Engageable");
@@ -1522,6 +2180,8 @@ impl GroupGeneratorApp {
                             } else if was_train {
                                 self.tpl_seats[si].carriages.clear();
                             }
+                            self.tpl_seats[si].payload_id = 0;
+                            self.tpl_seats[si].mod_mask = "1".into();
                             refresh_attack_areas_for_seat(&mut self.tpl_seats, si);
                         }
                     }
@@ -1543,60 +2203,15 @@ impl GroupGeneratorApp {
                         .selected_text(kind.label())
                         .width(180.0)
                         .show_ui(ui, |ui| {
-                            ui.label(RichText::new("Commands").small().italics());
-                            for k in OrderKind::available(unit_kind) {
-                                if k.is_report() {
-                                    continue;
-                                }
+                            for k in kinds_in_same_group(kind, unit_kind) {
                                 if ui
                                     .selectable_label(
-                                        self.tpl_seats[seat].orders[order].kind == *k,
+                                        self.tpl_seats[seat].orders[order].kind == k,
                                         k.label(),
                                     )
                                     .clicked()
                                 {
-                                    let was_goto = self.tpl_seats[seat].orders[order].kind
-                                        == OrderKind::GotoWaypoint;
-                                    let next_wp = next_waypoint_number(&self.tpl_seats);
-                                    self.tpl_seats[seat].orders[order].kind = *k;
-                                    if *k == OrderKind::GotoWaypoint && !was_goto {
-                                        self.tpl_seats[seat].orders[order].waypoint = next_wp;
-                                    }
-                                    if *k == OrderKind::Formation {
-                                        let presets = formations_for(unit_kind);
-                                        let id = self.tpl_seats[seat].orders[order].formation_type;
-                                        if !presets.iter().any(|p| p.id == id) {
-                                            self.tpl_seats[seat].orders[order].formation_type =
-                                                OrderSpec::for_kind(unit_kind).formation_type;
-                                        }
-                                    }
-                                    if *k == OrderKind::TimeOnTarget {
-                                        self.tpl_seats[seat].orders[order].time_s =
-                                            DEFAULT_TIME_ON_TARGET_S;
-                                    }
-                                    if *k == OrderKind::AttackArea {
-                                        apply_suggested_attack_area(
-                                            &mut self.tpl_seats,
-                                            seat,
-                                            order,
-                                        );
-                                    }
-                                }
-                            }
-                            ui.separator();
-                            ui.label(RichText::new("Reports").small().italics());
-                            for k in OrderKind::available(unit_kind) {
-                                if !k.is_report() {
-                                    continue;
-                                }
-                                if ui
-                                    .selectable_label(
-                                        self.tpl_seats[seat].orders[order].kind == *k,
-                                        k.label(),
-                                    )
-                                    .clicked()
-                                {
-                                    self.tpl_seats[seat].orders[order].kind = *k;
+                                    apply_order_kind(&mut self.tpl_seats, seat, order, k);
                                 }
                             }
                         });
@@ -1712,6 +2327,21 @@ impl GroupGeneratorApp {
                                 self.tpl_select = Some(TplSelect::Order { seat, order: idx });
                             }
                         });
+                        if self.tpl_seats[seat].unit.is_air() {
+                            ui.horizontal(|ui| {
+                                ui.label("Altitude");
+                                ui.add(
+                                    egui::DragValue::new(
+                                        &mut self.tpl_seats[seat].orders[order].altitude,
+                                    )
+                                    .range(0.0..=8_000.0)
+                                    .suffix(" m"),
+                                )
+                                .on_hover_text(
+                                    "YPos for this hop. 0 m uses the Waypoints section altitude.",
+                                );
+                            });
+                        }
                         ui.label(
                             RichText::new("Click a WP diamond on the diagram to pick it.")
                                 .italics()
@@ -2206,7 +2836,7 @@ impl GroupGeneratorApp {
                 && ui
                     .button("Copy attributes to all")
                     .on_hover_text(
-                        "Copy country, skill, fuel, payload, and flags from the selected unit onto every other unit.",
+                        "Copy country, skill, fuel, and flags to every unit. Payload and modifications copy only to the same aircraft type.",
                     )
                     .clicked()
             {
@@ -2218,6 +2848,102 @@ impl GroupGeneratorApp {
                 copy_seat_attributes(&mut self.tpl_seats, from);
             }
         });
+    }
+
+    fn draw_seat_payload_mods(&mut self, ui: &mut egui::Ui, si: usize) {
+        let script = self.tpl_seats[si].unit.script.clone();
+        let loadout = payloads::catalog().for_script(&script);
+        let has_payloads = loadout.is_some_and(|a| a.has_payloads());
+        let has_mods = loadout.is_some_and(|a| a.has_mods());
+
+        ui.horizontal(|ui| {
+            if has_payloads {
+                ui.label("Payload");
+                let current = self.tpl_seats[si].payload_id;
+                let selected_text = payloads::payload_preview(&script, current);
+                egui::ComboBox::from_id_salt(format!("tpl_payload_{si}"))
+                    .selected_text(selected_text)
+                    .width(280.0)
+                    .show_ui(ui, |ui| {
+                        let ac = payloads::catalog().for_script(&script).unwrap();
+                        for p in &ac.payloads {
+                            let summary = format!("{}  {}", p.id, p.summary());
+                            let desc = p.description(payloads::catalog());
+                            if ui
+                                .selectable_label(current == p.id, summary)
+                                .on_hover_text(desc)
+                                .clicked()
+                            {
+                                self.tpl_seats[si].payload_id = p.id;
+                            }
+                        }
+                    });
+            } else if self.tpl_seats[si].unit.is_air() && !has_mods {
+                ui.label("Payload");
+                ui.add(egui::DragValue::new(&mut self.tpl_seats[si].payload_id).range(0..=99));
+            }
+
+            if has_mods {
+                let preview = payloads::mods_preview(&script, &self.tpl_seats[si].mod_mask);
+                let label = if preview == "—" {
+                    "Modifications".to_string()
+                } else {
+                    format!("Mods: {preview}")
+                };
+                ui.menu_button(label, |ui| {
+                    ui.set_min_width(220.0);
+                    ui.label(
+                        RichText::new("More than one mod may be selected when the aircraft has several slots.")
+                            .small()
+                            .weak(),
+                    );
+                    let ac = payloads::catalog().for_script(&script).unwrap();
+                    let mut mask = payloads::parse_mod_mask(&self.tpl_seats[si].mod_mask);
+                    let mut changed = false;
+                    for (slot_i, slot) in ac.mod_slots.iter().enumerate() {
+                        if slot_i > 0 {
+                            ui.separator();
+                        }
+                        let exclusive = slot.options.len() > 1;
+                        if exclusive {
+                            ui.label(RichText::new(format!("Slot {}", slot.number)).small().weak());
+                            for opt in &slot.options {
+                                let selected = payloads::exclusive_selection(mask, slot)
+                                    .is_some_and(|s| s.binary_id == opt.binary_id);
+                                if ui.radio(selected, &opt.description).clicked() {
+                                    mask = payloads::select_exclusive(mask, slot, opt);
+                                    changed = true;
+                                }
+                            }
+                        } else if let Some(opt) = slot.options.first() {
+                            let mut on = payloads::option_selected(mask, opt);
+                            if ui.checkbox(&mut on, &opt.description).changed() {
+                                mask = payloads::set_toggle(mask, opt, on);
+                                changed = true;
+                            }
+                        }
+                    }
+                    if changed {
+                        self.tpl_seats[si].mod_mask = payloads::encode_mod_mask(mask);
+                    }
+                });
+            }
+        });
+
+        if has_payloads {
+            if let Some(ac) = payloads::catalog().for_script(&script) {
+                if let Some(p) = ac.payload(self.tpl_seats[si].payload_id) {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(p.description(payloads::catalog()))
+                                .small()
+                                .weak(),
+                        )
+                        .wrap(),
+                    );
+                }
+            }
+        }
     }
 
     fn draw_model_button_grid(
@@ -2242,7 +2968,14 @@ impl GroupGeneratorApp {
         picked
     }
 
-    fn draw_model_preview(&mut self, ui: &mut egui::Ui, unit: Option<&CatalogUnit>, caption: &str) {
+    fn draw_model_preview(
+        &mut self,
+        ui: &mut egui::Ui,
+        unit: Option<&CatalogUnit>,
+        caption: &str,
+        payload_line: Option<&str>,
+        mods_line: Option<&str>,
+    ) {
         ui.label(
             RichText::new(caption)
                 .small()
@@ -2257,45 +2990,49 @@ impl GroupGeneratorApp {
         let tex = self.model_texture(&ctx, &unit.script);
         let size = tex.size_vec2();
         let max_w = ui.available_width().max(1.0);
-        let scale = (max_w / size.x).min(110.0 / size.y).min(1.0);
+        let scale = (max_w / size.x).min(88.0 / size.y).min(1.0);
         ui.add(egui::Image::new((tex.id(), size * scale)));
         let class = model_spec::class_for(&unit.script);
         let cruise = model_spec::spec_for(&unit.script)
             .map(|s| s.cruise_line())
             .unwrap_or_else(|| model_spec::format_cruise(None));
         ui.add_space(4.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(format!("Type: {}", class.label()));
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(format!("Cruise speed: {cruise}"));
-        });
+        ui.add(egui::Label::new(format!("Type: {}", class.label())).wrap());
+        ui.add(egui::Label::new(format!("Cruise speed: {cruise}")).wrap());
         if let Some(spec) = model_spec::spec_for(&unit.script) {
             if spec.ceiling_m > 0.0 {
                 let ft = spec.ceiling_m * 3.280_84;
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("Ceiling: {:.0} m / {:.0} ft", spec.ceiling_m, ft));
-                });
+                ui.add(
+                    egui::Label::new(format!(
+                        "Ceiling: {:.0} m / {:.0} ft",
+                        spec.ceiling_m, ft
+                    ))
+                    .wrap(),
+                );
             }
             if !spec.notes.is_empty() {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(spec.notes).small().weak());
-                });
+                ui.add(egui::Label::new(RichText::new(spec.notes).small().weak()).wrap());
             }
         }
         ui.add_space(4.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new("Skins: —").small());
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new("Loadouts: —").small());
-        });
+        ui.add(egui::Label::new(RichText::new("Skins: —").small()).wrap());
+        let payload = payload_line.unwrap_or("—");
+        ui.add(
+            egui::Label::new(RichText::new(format!("Payload: {payload}")).small()).wrap(),
+        );
+        let mods = mods_line.unwrap_or("—");
+        ui.add(
+            egui::Label::new(RichText::new(format!("Modifications: {mods}")).small()).wrap(),
+        );
     }
 
-    fn schematic_preview_unit(&self) -> Option<(CatalogUnit, String)> {
+    fn schematic_preview_unit(&self) -> Option<(CatalogUnit, String, Option<(i32, String)>)> {
         if self.tpl_preview_from_catalog {
             let models = self.displayed_catalog();
-            return models.get(self.tpl_add_pick).cloned().map(|u| (u, "Catalog".into()));
+            return models
+                .get(self.tpl_add_pick)
+                .cloned()
+                .map(|u| (u, "Catalog".into(), None));
         }
         let seat = match self.tpl_select {
             Some(
@@ -2307,9 +3044,11 @@ impl GroupGeneratorApp {
         };
         if let Some(s) = seat {
             if s < self.tpl_seats.len() {
+                let seat = &self.tpl_seats[s];
                 return Some((
-                    self.tpl_seats[s].unit.clone(),
+                    seat.unit.clone(),
                     format!("Seat {}", s + 1),
+                    Some((seat.payload_id, seat.mod_mask.clone())),
                 ));
             }
         }
@@ -2317,7 +3056,7 @@ impl GroupGeneratorApp {
         models
             .get(self.tpl_add_pick)
             .cloned()
-            .map(|u| (u, "Catalog".into()))
+            .map(|u| (u, "Catalog".into(), None))
     }
 
     fn model_texture(&mut self, ctx: &egui::Context, script: &str) -> TextureHandle {
@@ -2459,6 +3198,7 @@ impl GroupGeneratorApp {
             waypoint_count: used_waypoint_count(&self.tpl_seats),
             waypoint_spacing: self.tpl_wp_spacing,
             waypoint_speed: self.tpl_wp_speed,
+            waypoint_altitude: self.tpl_wp_altitude,
             zone_coalition: self.tpl_zone_coalition,
         };
         let pack = match generate_template(&opts) {
@@ -2496,35 +3236,51 @@ impl GroupGeneratorApp {
         let preview = self.schematic_preview_unit();
         let caption = preview
             .as_ref()
-            .map(|(_, c)| c.clone())
+            .map(|(_, c, _)| c.clone())
             .unwrap_or_else(|| "Catalog".into());
-        let unit = preview.map(|(u, _)| u);
-        ui.allocate_ui(Vec2::new(preview_w, height), |ui| {
-            let pr = ui.max_rect();
-            let panel_fill = ui.visuals().panel_fill;
-            ui.painter().rect_filled(pr, 4.0, panel_fill);
-            ui.painter().rect_stroke(
-                pr,
-                4.0,
-                Stroke::new(
-                    1.0_f32,
-                    Color32::from_rgb(
-                        panel_fill.r().saturating_add(18),
-                        panel_fill.g().saturating_add(18),
-                        panel_fill.b().saturating_add(18),
-                    ),
+        let payload_line = preview.as_ref().and_then(|(u, _, load)| {
+            load.as_ref()
+                .map(|(id, _)| payloads::payload_preview(&u.script, *id))
+        });
+        let mods_line = preview.as_ref().and_then(|(u, _, load)| {
+            load.as_ref()
+                .map(|(_, mask)| payloads::mods_preview(&u.script, mask))
+        });
+        let unit = preview.map(|(u, _, _)| u);
+        let (pr, _) = ui.allocate_exact_size(Vec2::new(preview_w, height), Sense::hover());
+        let panel_fill = ui.visuals().panel_fill;
+        ui.painter().rect_filled(pr, 4.0, panel_fill);
+        ui.painter().rect_stroke(
+            pr,
+            4.0,
+            Stroke::new(
+                1.0_f32,
+                Color32::from_rgb(
+                    panel_fill.r().saturating_add(18),
+                    panel_fill.g().saturating_add(18),
+                    panel_fill.b().saturating_add(18),
                 ),
-                egui::StrokeKind::Inside,
-            );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
+            ),
+            egui::StrokeKind::Inside,
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(pr.shrink2(Vec2::new(8.0, 8.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                ui.set_clip_rect(pr);
                 ui.vertical(|ui| {
                     ui.set_max_width(preview_w - 16.0);
-                    self.draw_model_preview(ui, unit.as_ref(), &caption);
+                    self.draw_model_preview(
+                        ui,
+                        unit.as_ref(),
+                        &caption,
+                        payload_line.as_deref(),
+                        mods_line.as_deref(),
+                    );
                 });
-            });
-        });
+            },
+        );
         let map_w = (ui.available_width() - preview_w - ui.spacing().item_spacing.x).max(180.0);
         let size = Vec2::new(map_w, height);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
@@ -2903,8 +3659,9 @@ impl GroupGeneratorApp {
                 rect.min + Vec2::new(10.0, 28.0),
                 Align2::LEFT_TOP,
                 format!(
-                    "WP {num} · {:.0} m north of origin · Area 200 m",
-                    (num as f32) * self.tpl_wp_spacing
+                    "WP {num} · {:.0} m north of origin · {:.0} m alt · Area 200 m",
+                    (num as f32) * self.tpl_wp_spacing,
+                    waypoint_display_altitude(&self.tpl_seats, num, self.tpl_wp_altitude)
                 ),
                 FontId::proportional(13.0),
                 Color32::from_rgb(180, 230, 240),
@@ -7609,6 +8366,38 @@ fn move_row_button(ui: &mut egui::Ui, up: bool) -> egui::Response {
             Pos2::new(c.x, c.y + h),
             Pos2::new(c.x - w, c.y - h * 0.55),
             Pos2::new(c.x + w, c.y - h * 0.55),
+        ]
+    };
+    ui.painter()
+        .add(egui::Shape::convex_polygon(pts, visuals.text_color(), Stroke::NONE));
+    response
+}
+
+fn move_col_button(ui: &mut egui::Ui, left: bool) -> egui::Response {
+    let size = Vec2::splat(18.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect(
+        rect.shrink(0.5),
+        2.0,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let c = rect.center();
+    let h = 4.5_f32;
+    let w = 4.5_f32;
+    let pts = if left {
+        vec![
+            Pos2::new(c.x - h, c.y),
+            Pos2::new(c.x + h * 0.55, c.y - w),
+            Pos2::new(c.x + h * 0.55, c.y + w),
+        ]
+    } else {
+        vec![
+            Pos2::new(c.x + h, c.y),
+            Pos2::new(c.x - h * 0.55, c.y - w),
+            Pos2::new(c.x - h * 0.55, c.y + w),
         ]
     };
     ui.painter()
