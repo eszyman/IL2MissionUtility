@@ -11,7 +11,6 @@
 //! * `enum ModelClass` / `struct ModelSpec`
 //! * `fn spec_for` / `fn class_for` / `fn classes_in`
 //! * `fn ceiling_m` / `fn format_cruise` / `fn suggested_waypoint_speed_kmh`
-//! * `fn auto_altitude_m` / `AUTO_ALTITUDE_FRACTION` — Template auto altitude
 //! * `fn script_id` — filename stem from a Script path
 //! * `fn png_for_script` / `PLACEHOLDER_PNG` (from generated `model_images.rs`)
 //!
@@ -340,15 +339,6 @@ pub fn ceiling_m(script: &str) -> f32 {
         .unwrap_or(8_000.0)
 }
 
-/// Share of the service ceiling used by Template Builder auto altitude.
-pub const AUTO_ALTITUDE_FRACTION: f32 = 0.5;
-
-/// Auto airstart height: half the service ceiling, rounded to the metre
-/// (MiG-15bis 7500 m, F-86A-5 7620 m, unknown 4000 m).
-pub fn auto_altitude_m(script: &str) -> f32 {
-    (ceiling_m(script) * AUTO_ALTITUDE_FRACTION).round()
-}
-
 /// 90% of the slowest moving unit’s cruise, rounded to 10 km/h (minimum 10).
 /// Stationary and unknown cruise values are ignored. `100` if none apply.
 pub fn suggested_waypoint_speed_kmh<'a>(scripts: impl IntoIterator<Item = &'a str>) -> f32 {
@@ -422,14 +412,6 @@ mod tests {
         assert_eq!(spec_for("boforsl60").unwrap().ceiling_m, 0.0);
         assert_eq!(ceiling_m("mig15bis"), 15000.0);
         assert_eq!(ceiling_m("t34-85"), 8_000.0);
-    }
-
-    #[test]
-    fn auto_altitude_is_half_the_ceiling() {
-        assert_eq!(auto_altitude_m("mig15bis"), 7500.0);
-        assert_eq!(auto_altitude_m("f86a5"), 7620.0);
-        assert_eq!(auto_altitude_m("b29"), 5334.0);
-        assert_eq!(auto_altitude_m("no_such_plane"), 4000.0);
     }
 
     #[test]

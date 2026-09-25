@@ -124,8 +124,8 @@ use crate::recon::{
 };
 use crate::serialize::serialize_group;
 use crate::template::{
-    append_seat, apply_auto_altitude, apply_auto_altitude_all, apply_formation_numbers,
-    apply_suggested_attack_area, bundled_catalog, match_lead_altitude,
+    append_seat, apply_formation_numbers, apply_plane_start,
+    apply_suggested_attack_area, bundled_catalog, AIR_START_ALTITUDE_M,
     copy_seat_attributes, flight_lead_of, formation_label, formations_for, generate_template,
     has_linked_wingmen, is_follower, lead_indexes, load_catalog, load_catalog_as_user_added,
     load_template, insert_goto_waypoint_after, merge_catalog, move_seat, next_waypoint_number,
@@ -642,9 +642,6 @@ struct GroupGeneratorApp {
     tpl_wp_speed: f32,
     tpl_wp_altitude: f32,
     tpl_wp_priority: i32,
-    /// Auto altitude: new planes and model swaps start at 50% of service ceiling.
-    /// Session preference; the builder reset leaves it alone.
-    tpl_auto_altitude: bool,
     tpl_zone_coalition: ZoneCoalition,
     tpl_view_zoom: f32,
     tpl_view_pan: Vec2,
@@ -1867,7 +1864,6 @@ impl Default for GroupGeneratorApp {
             tpl_wp_speed: 100.0,
             tpl_wp_altitude: 0.0,
             tpl_wp_priority: 1,
-            tpl_auto_altitude: true,
             tpl_zone_coalition: ZoneCoalition::Western,
             tpl_view_zoom: 1.0,
             tpl_view_pan: Vec2::ZERO,
@@ -2384,10 +2380,6 @@ impl GroupGeneratorApp {
     /// Adds one seat of `unit` and selects it, as "Add unit" always has.
     fn template_add_model(&mut self, unit: CatalogUnit) {
         append_seat(&mut self.tpl_seats, unit, self.tpl_per_group);
-        if self.tpl_auto_altitude {
-            let last = self.tpl_seats.len() - 1;
-            apply_auto_altitude(&mut self.tpl_seats, last);
-        }
         self.tpl_select = Some(TplSelect::Seat(self.tpl_seats.len() - 1));
         self.tpl_preview_from_catalog = false;
         self.sync_template_waypoint_speed();
@@ -3088,11 +3080,13 @@ impl GroupGeneratorApp {
         if let Some((si, unit)) = change_unit {
             if si < self.tpl_seats.len() {
                 replace_seat_unit(&mut self.tpl_seats[si], unit);
-                if self.tpl_auto_altitude {
-                    apply_auto_altitude(&mut self.tpl_seats, si);
-                } else if self.tpl_seats[si].unit.is_air() {
+                if self.tpl_seats[si].unit.is_air() {
                     let ceil = model_spec::ceiling_m(&self.tpl_seats[si].unit.script);
                     self.tpl_seats[si].altitude = self.tpl_seats[si].altitude.min(ceil);
+                    self.tpl_seats[si].start_type = PlaneStart::stored_for_altitude(
+                        self.tpl_seats[si].start_type,
+                        self.tpl_seats[si].altitude,
+                    );
                 }
                 refresh_attack_areas_for_seat(&mut self.tpl_seats, si);
                 self.sync_template_waypoint_speed();
@@ -3299,9 +3293,6 @@ impl GroupGeneratorApp {
                             .clicked()
                         {
                             self.tpl_seats[si].role = FlightRole::Follows(*i);
-                            if self.tpl_auto_altitude {
-                                apply_auto_altitude(&mut self.tpl_seats, si);
-                            }
                             let n = self
                                 .tpl_seats
                                 .iter()
@@ -3360,63 +3351,46 @@ impl GroupGeneratorApp {
             ui.end_row();
 
             if self.tpl_seats[si].unit.is_air() {
-                field_label(ui, "Altitude");
-                let ceiling = model_spec::ceiling_m(&self.tpl_seats[si].unit.script);
-                let slid = ui
-                    .add(
+                field_label(ui, "Start");
+                let airborne = self.tpl_seats[si].altitude > 0.0;
+                let shown = if airborne {
+                    PlaneStart::Air
+                } else {
+                    PlaneStart::from_i32(self.tpl_seats[si].start_type)
+                };
+                let mut choice = shown;
+                egui::ComboBox::from_id_salt(format!("tpl_seat_start_{si}"))
+                    .selected_text(shown.label())
+                    .width(ctrl_w)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for start in std::iter::once(PlaneStart::Air).chain(PlaneStart::GROUND) {
+                            ui.selectable_value(&mut choice, start, start.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text(format!(
+                        "Airstart puts this plane at {AIR_START_ALTITUDE_M:.0} m, the same height for every aircraft. The slider changes this plane. Running, Warm, and Cold stay on the ground."
+                    ));
+                if choice != shown {
+                    apply_plane_start(&mut self.tpl_seats[si], choice);
+                }
+                ui.end_row();
+                if self.tpl_seats[si].altitude > 0.0 {
+                    field_label(ui, "Altitude");
+                    let ceiling = model_spec::ceiling_m(&self.tpl_seats[si].unit.script);
+                    ui.add(
                         egui::Slider::new(&mut self.tpl_seats[si].altitude, 0.0..=ceiling)
                             .suffix(" m")
                             .integer(),
-                    )
-                    .changed();
-                ui.end_row();
-                let (label, hover) = if is_follower(&self.tpl_seats, si) {
-                    let lead = flight_lead_of(&self.tpl_seats, si);
-                    let lead_alt = self.tpl_seats[lead].altitude.min(ceiling);
-                    ("Match lead", format!("Set to the flight lead’s altitude ({lead_alt:.0} m)."))
-                } else {
-                    let half = model_spec::auto_altitude_m(&self.tpl_seats[si].unit.script);
-                    (
-                        "50% ceiling",
-                        format!("Set to {half:.0} m (half of {ceiling:.0} m service ceiling). Wingmen follow."),
-                    )
-                };
-                field_label(ui, "Set altitude");
-                if ui.button(label).on_hover_text(hover).clicked() {
-                    apply_auto_altitude(&mut self.tpl_seats, si);
-                }
-                ui.end_row();
-                if self.tpl_seats[si].altitude <= 0.0 {
-                    self.tpl_seats[si].altitude = 0.0;
-                }
-                self.tpl_seats[si].start_type =
-                    PlaneStart::stored_for_altitude(self.tpl_seats[si].start_type, self.tpl_seats[si].altitude);
-                if slid && self.tpl_auto_altitude {
-                    match_lead_altitude(&mut self.tpl_seats, si);
-                }
-                if self.tpl_seats[si].altitude <= 0.0 {
-                    field_label(ui, "Engine");
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let current = PlaneStart::from_i32(self.tpl_seats[si].start_type);
-                        for start in PlaneStart::GROUND {
-                            if ui
-                                .selectable_label(current == start, start.label())
-                                .on_hover_text(match start {
-                                    PlaneStart::Running => "On the runway, engines running (StartType 1).",
-                                    PlaneStart::Warm => "Parked with a warm engine (StartType 3).",
-                                    PlaneStart::Cold => "Parked cold and dark (StartType 2).",
-                                    PlaneStart::Air => "",
-                                })
-                                .clicked()
-                            {
-                                self.tpl_seats[si].start_type = start.as_i32();
-                                if self.tpl_auto_altitude {
-                                    match_lead_altitude(&mut self.tpl_seats, si);
-                                }
-                            }
-                        }
-                    });
+                    );
+                    if self.tpl_seats[si].altitude <= 0.0 {
+                        self.tpl_seats[si].altitude = 0.0;
+                    }
+                    self.tpl_seats[si].start_type = PlaneStart::stored_for_altitude(
+                        self.tpl_seats[si].start_type,
+                        self.tpl_seats[si].altitude,
+                    );
                     ui.end_row();
                 }
             }
@@ -4074,17 +4048,6 @@ impl GroupGeneratorApp {
             self.template_add_model(models[i].clone());
         }
 
-        ui.add_space(6.0);
-        if ui
-            .checkbox(&mut self.tpl_auto_altitude, "Auto altitude (50% ceiling)")
-            .on_hover_text(
-                "New planes and model swaps start in the air at half the aircraft’s service ceiling; wingmen match their flight lead and follow it when the lead’s altitude changes. Turning this on re-heights every plane. Turn it off to add ground-start (runway or parked) planes.",
-            )
-            .changed()
-            && self.tpl_auto_altitude
-        {
-            apply_auto_altitude_all(&mut self.tpl_seats);
-        }
     }
 
     /// Payload and Modifications rows of the seat `field_grid`. Returns the
@@ -6757,21 +6720,23 @@ impl GroupGeneratorApp {
             self.open_help(HelpTopic::Fighter);
         }
         let summary = format!(
-            "Cooldown {:.0} s · Reinf. {:.0} s · Delete {:.0} s",
-            self.cooldown, self.reinforcement, self.delete_orders
+            "Cooldown {:.0} s · Delete {:.0} s",
+            self.cooldown, self.delete_orders
         );
         shell::settings_section(ui, "fighter_timers", "Timers", &summary, false, |ui| {
             egui::Grid::new("fighter_timer_grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label("Cooldown");
                 ui.add(egui::DragValue::new(&mut self.cooldown).range(0.0..=1800.0).speed(1.0).suffix(" s"));
                 ui.end_row();
-                ui.label("Reinforcement");
-                ui.add(egui::DragValue::new(&mut self.reinforcement).range(0.0..=1800.0).speed(1.0).suffix(" s"));
-                ui.end_row();
                 ui.label("Delete orders");
                 ui.add(egui::DragValue::new(&mut self.delete_orders).range(0.0..=600.0).speed(1.0).suffix(" s"));
                 ui.end_row();
             });
+            shell::hint(
+                ui,
+                "Reinforcement timer is off, so a spawn cannot start another flight during cleanup.",
+                false,
+            );
         });
         let custom = self
             .custom_path

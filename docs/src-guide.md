@@ -151,15 +151,15 @@ Mission Complete → Force Complete / RTB / deactivate for that bird
 only, AI RTB off, Spawn + repeat) then injects the pack randomizer
 (`Random i:pct%` → `Out i` → `Spawn i`, 500 ms equal-odds waterfall),
 per-flight DeathCount, pack hooks (`Enable Spawner` / `Disable Spawner`
-/ `Delete Orders` / `REENFORCEMENTS (33%)`), finger-four placement,
+/ `Delete Orders`; the reinforcement timer is omitted), finger-four placement,
 GUI altitudes (low-cover 500–1500 m scaled by max, each complete
 4-ship 2 down / 2 up +2000 m, leftovers low, 25–50 m wing stacks),
 timers, and identity (Script/Model/Country/Callsign/TCode). Zones stay
 at the original pack sizes (16 km IN / 35 km OUT); AttackArea is 30 km
 air / 600 s. NodeGates and `RTB - 1` are kept from the loaded linked
 pack. `FlightConfig` (defaults: 4 flights, max 4, mig15bis + la11
-skills 3/2, country 501, 180 s cooldown, 300 s reinforcement, 60 s
-delete orders, 1000–5500 m altitude), `configure_aircraft`,
+skills 3/2, country 501, 180 s cooldown, 60 s
+delete orders, 1000–5500 m altitude; reinforcement is stored but not written), `configure_aircraft`,
 `flight_sizes` (cycles max…1, so 4/4 → 4,3,2,1).
 **Fighter Pack, Map.**
 
@@ -287,8 +287,6 @@ Unit-tested against `TemplateExamples/` fixtures. **Map mode, Army Generator.**
 ### `model_spec.rs` — aircraft / unit model data
 Per-script UI overlay (the AST stays schema-agnostic): `ModelClass` /
 `ModelSpec`, `spec_for`, `class_for` / `classes_in`, `ceiling_m`,
-`auto_altitude_m` / `AUTO_ALTITUDE_FRACTION` (Template auto altitude,
-50% of ceiling),
 `format_cruise`, `suggested_waypoint_speed_kmh` (90 % of the slowest
 moving unit, rounded to 10 km/h), `script_id`, and preview lookup
 (`png_for_script`, `PLACEHOLDER_PNG` from `build.rs`). Infantry squads
@@ -436,9 +434,9 @@ AttackArea and Time on Target in parallel (list order doesn't matter),
 and TOT expiry continues the chain. Seat model + bookkeeping:
 `TemplateSeat` / `CatalogUnit` / `FlightRole` / `PlaneStart`,
 `append_seat` / `replace_seat_unit` / `copy_seat_attributes` /
-`move_seat`, `apply_auto_altitude(_all)` (plane at 50% of ceiling,
-airstart; wingmen match their lead, capped at own ceiling; ground units
-untouched), `match_lead_altitude`, `normalize_order_chain` + index remapping,
+`move_seat`, `apply_plane_start` / `AIR_START_ALTITUDE_M` (airstart
+defaults to 1500 m for every aircraft; an existing height is kept;
+ground starts clear altitude), `normalize_order_chain` + index remapping,
 `insert_goto_waypoint_after`, `set_report_following`,
 `order_tree_columns` / `order_tree_layout` / `event_triggers_order`
 (GUI: OnSpawned is its own column; an event that Then's an order

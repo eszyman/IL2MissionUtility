@@ -25,8 +25,8 @@
 //! * Seats: `TemplateSeat`, `CatalogUnit`, `FlightRole`, `PlaneStart`,
 //!   `append_seat`, `replace_seat_unit`, `copy_seat_attributes`,
 //!   `move_seat`, `apply_formation_numbers`, `last_lead_index`,
-//!   `apply_auto_altitude` / `apply_auto_altitude_all` (50% ceiling;
-//!   wingmen match their lead) / `match_lead_altitude`,
+//!   `apply_plane_start` / `AIR_START_ALTITUDE_M` (airstart defaults to
+//!   1500 m for every aircraft),
 //!   `remap_seat_index` / `remap_index_vec` / `remap_event_then`.
 //! * Orders / events: `OrderSpec` (`for_kind` / `for_unit`), `OrderKind`,
 //!   `EntityEvent`, `EventHook` / `EventThen`, `normalize_order_chain`,
@@ -1211,6 +1211,9 @@ impl PlaneStart {
     }
 }
 
+/// Airstart height for every aircraft. Ground starts stay at 0 m.
+pub const AIR_START_ALTITUDE_M: f32 = 1500.0;
+
 #[derive(Clone, Debug)]
 pub struct TemplateSeat {
     pub unit: CatalogUnit,
@@ -1413,73 +1416,27 @@ pub fn replace_seat_unit(seat: &mut TemplateSeat, unit: CatalogUnit) {
     }
 }
 
-/// Auto altitude for seat `index`. A wingman matches its flight lead
-/// (capped at its own ceiling; a lead on the ground keeps the wingman on
-/// the ground with the same engine state). Any other plane goes to half
-/// its service ceiling as an airstart, and a lead then brings its
-/// wingmen along. Ground units, trains, and ships are left alone.
-pub fn apply_auto_altitude(seats: &mut [TemplateSeat], index: usize) {
-    if !seats.get(index).is_some_and(|s| s.unit.is_air()) {
+/// Apply a start choice on one plane. Airstart from the ground uses
+/// [`AIR_START_ALTITUDE_M`], the same height for every aircraft, capped at
+/// that plane's ceiling. An airstart that already has a height keeps it.
+/// A ground start clears altitude. Ground units are left alone.
+pub fn apply_plane_start(seat: &mut TemplateSeat, start: PlaneStart) {
+    if !seat.unit.is_air() {
         return;
     }
-    if is_follower(seats, index) {
-        let lead = flight_lead_of(seats, index);
-        if seats[lead].unit.is_air() {
-            let (alt, start) = (seats[lead].altitude, seats[lead].start_type);
-            set_wingman_altitude(&mut seats[index], alt, start);
-            return;
+    match start {
+        PlaneStart::Air => {
+            if seat.altitude <= 0.0 {
+                let ceiling = crate::model_spec::ceiling_m(&seat.unit.script);
+                seat.altitude = AIR_START_ALTITUDE_M.min(ceiling).max(0.0);
+            }
+            seat.start_type = PlaneStart::Air.as_i32();
+        }
+        ground => {
+            seat.altitude = 0.0;
+            seat.start_type = ground.as_i32();
         }
     }
-    let seat = &mut seats[index];
-    seat.altitude = crate::model_spec::auto_altitude_m(&seat.unit.script);
-    seat.start_type = PlaneStart::stored_for_altitude(seat.start_type, seat.altitude);
-    match_lead_altitude(seats, index);
-}
-
-/// [`apply_auto_altitude`] on every seat: leads and independents first,
-/// then wingmen, so list order does not matter.
-pub fn apply_auto_altitude_all(seats: &mut [TemplateSeat]) {
-    for i in 0..seats.len() {
-        if !is_follower(seats, i) {
-            apply_auto_altitude(seats, i);
-        }
-    }
-    for i in 0..seats.len() {
-        if is_follower(seats, i) {
-            apply_auto_altitude(seats, i);
-        }
-    }
-}
-
-/// Copy the altitude of plane `lead` onto every plane that follows it.
-/// No-op when `lead` has no wingmen or is not a plane.
-pub fn match_lead_altitude(seats: &mut [TemplateSeat], lead: usize) {
-    let Some((alt, start)) = seats
-        .get(lead)
-        .filter(|s| s.unit.is_air())
-        .map(|s| (s.altitude, s.start_type))
-    else {
-        return;
-    };
-    for i in 0..seats.len() {
-        if i != lead
-            && seats[i].unit.is_air()
-            && is_follower(seats, i)
-            && flight_lead_of(seats, i) == lead
-        {
-            set_wingman_altitude(&mut seats[i], alt, start);
-        }
-    }
-}
-
-fn set_wingman_altitude(seat: &mut TemplateSeat, lead_alt: f32, lead_start: i32) {
-    let ceiling = crate::model_spec::ceiling_m(&seat.unit.script);
-    seat.altitude = lead_alt.min(ceiling).max(0.0);
-    seat.start_type = if seat.altitude > 0.0 {
-        PlaneStart::Air.as_i32()
-    } else {
-        PlaneStart::stored_for_altitude(lead_start, 0.0)
-    };
 }
 
 /// Path waypoint `Area` in metres: 300 for any aircraft, 100 for ground-only.
@@ -6395,134 +6352,44 @@ mod tests {
             .expect("unit in bundled catalog")
     }
 
-    fn wingman_of(unit: CatalogUnit, lead: usize) -> TemplateSeat {
-        let mut seat = TemplateSeat::new(unit);
-        seat.role = FlightRole::Follows(lead);
-        seat
-    }
-
-    fn lead_seat(unit: CatalogUnit) -> TemplateSeat {
-        let mut seat = TemplateSeat::new(unit);
-        seat.role = FlightRole::Lead;
-        seat
-    }
-
     #[test]
-    fn auto_altitude_puts_plane_at_half_ceiling_airstart() {
-        let mut seats = vec![TemplateSeat::new(catalog_plane("mig15bis"))];
-        seats[0].altitude = 1234.0;
-        apply_auto_altitude(&mut seats, 0);
-        assert_eq!(seats[0].altitude, 7500.0);
-        assert_eq!(seats[0].start_type, PlaneStart::Air.as_i32());
-    }
-
-    #[test]
-    fn auto_altitude_lifts_ground_start_plane() {
-        let mut seats = vec![TemplateSeat::new(catalog_plane("f86a5"))];
-        seats[0].altitude = 0.0;
-        seats[0].start_type = PlaneStart::Running.as_i32();
-        apply_auto_altitude(&mut seats, 0);
-        assert_eq!(seats[0].altitude, 7620.0);
-        assert_eq!(seats[0].start_type, PlaneStart::Air.as_i32());
-    }
-
-    #[test]
-    fn auto_altitude_leaves_ground_units_alone() {
-        let mut seats = vec![TemplateSeat::new(catalog_vehicle())];
-        let start = seats[0].start_type;
-        apply_auto_altitude(&mut seats, 0);
-        assert_eq!(seats[0].altitude, 0.0);
-        assert_eq!(seats[0].start_type, start);
-        apply_auto_altitude(&mut seats, 5); // out of range is a no-op
-    }
-
-    #[test]
-    fn auto_altitude_all_uses_each_models_ceiling() {
-        let mut seats = vec![
-            TemplateSeat::new(catalog_plane("mig15bis")),
-            TemplateSeat::new(catalog_vehicle()),
-            TemplateSeat::new(catalog_plane("f86a5")),
-        ];
-        apply_auto_altitude_all(&mut seats);
-        assert_eq!(seats[0].altitude, 7500.0);
-        assert_eq!(seats[1].altitude, 0.0);
-        assert_eq!(seats[2].altitude, 7620.0);
-        assert_eq!(seats[0].start_type, PlaneStart::Air.as_i32());
-        assert_eq!(seats[2].start_type, PlaneStart::Air.as_i32());
-    }
-
-    #[test]
-    fn auto_altitude_wingman_matches_lead_not_own_ceiling() {
-        let mut seats = vec![
-            lead_seat(catalog_plane("mig15bis")),
-            wingman_of(catalog_plane("la11"), 0),
-        ];
-        apply_auto_altitude(&mut seats, 1);
-        assert_eq!(seats[1].altitude, seats[0].altitude);
-        apply_auto_altitude(&mut seats, 0);
-        // Lead goes to 7500 m and brings its La-11 wingman (own 50% would be 5075 m).
-        assert_eq!(seats[0].altitude, 7500.0);
-        assert_eq!(seats[1].altitude, 7500.0);
-        assert_eq!(seats[1].start_type, PlaneStart::Air.as_i32());
-    }
-
-    #[test]
-    fn auto_altitude_wingman_capped_at_own_ceiling() {
-        let mut seats = vec![
-            lead_seat(catalog_plane("mig15bis")),
-            wingman_of(catalog_script("il10"), 0),
-        ];
-        apply_auto_altitude_all(&mut seats);
-        assert_eq!(seats[0].altitude, 7500.0);
-        assert_eq!(seats[1].altitude, 6950.0);
-    }
-
-    #[test]
-    fn auto_altitude_all_is_order_independent_for_wingmen() {
-        // Wingman listed before its lead still ends at the lead's new height.
-        let mut seats = vec![
-            wingman_of(catalog_plane("la11"), 1),
-            lead_seat(catalog_plane("f86a5")),
-        ];
-        seats[0].altitude = 100.0;
-        apply_auto_altitude_all(&mut seats);
-        assert_eq!(seats[1].altitude, 7620.0);
-        assert_eq!(seats[0].altitude, 7620.0);
-    }
-
-    #[test]
-    fn wingman_of_ground_start_lead_stays_on_ground() {
-        let mut seats = vec![
-            lead_seat(catalog_plane("mig15bis")),
-            wingman_of(catalog_plane("mig15bis"), 0),
-        ];
-        seats[0].altitude = 0.0;
-        seats[0].start_type = PlaneStart::Cold.as_i32();
-        seats[1].altitude = 3000.0;
-        apply_auto_altitude(&mut seats, 1);
-        assert_eq!(seats[1].altitude, 0.0);
-        assert_eq!(seats[1].start_type, PlaneStart::Cold.as_i32());
-    }
-
-    #[test]
-    fn match_lead_altitude_moves_only_that_leads_wingmen() {
-        let mut seats = vec![
-            lead_seat(catalog_plane("mig15bis")),
-            wingman_of(catalog_plane("mig15bis"), 0),
-            lead_seat(catalog_plane("f86a5")),
-            wingman_of(catalog_plane("f86a5"), 2),
-            TemplateSeat::new(catalog_plane("la11")),
-        ];
-        for s in &mut seats {
-            s.altitude = 1000.0;
+    fn airstart_defaults_to_1500_for_every_aircraft() {
+        for script in ["mig15bis", "f86a5", "f51d", "b29", "il10"] {
+            let mut seat = TemplateSeat::new(catalog_script(script));
+            seat.altitude = 0.0;
+            seat.start_type = PlaneStart::Running.as_i32();
+            apply_plane_start(&mut seat, PlaneStart::Air);
+            assert_eq!(seat.altitude, AIR_START_ALTITUDE_M, "{script}");
+            assert_eq!(seat.start_type, PlaneStart::Air.as_i32(), "{script}");
         }
-        seats[0].altitude = 4200.0;
-        match_lead_altitude(&mut seats, 0);
-        assert_eq!(seats[1].altitude, 4200.0);
-        assert_eq!(seats[3].altitude, 1000.0);
-        assert_eq!(seats[4].altitude, 1000.0);
-        match_lead_altitude(&mut seats, 4); // no wingmen: no-op
-        assert_eq!(seats[4].altitude, 1000.0);
+    }
+
+    #[test]
+    fn airstart_keeps_an_existing_height() {
+        let mut seat = TemplateSeat::new(catalog_plane("mig15bis"));
+        seat.altitude = 2200.0;
+        seat.start_type = PlaneStart::Air.as_i32();
+        apply_plane_start(&mut seat, PlaneStart::Air);
+        assert_eq!(seat.altitude, 2200.0);
+        assert_eq!(seat.start_type, PlaneStart::Air.as_i32());
+    }
+
+    #[test]
+    fn ground_start_clears_altitude() {
+        let mut seat = TemplateSeat::new(catalog_plane("f86a5"));
+        seat.altitude = AIR_START_ALTITUDE_M;
+        apply_plane_start(&mut seat, PlaneStart::Cold);
+        assert_eq!(seat.altitude, 0.0);
+        assert_eq!(seat.start_type, PlaneStart::Cold.as_i32());
+    }
+
+    #[test]
+    fn plane_start_leaves_ground_units_alone() {
+        let mut seat = TemplateSeat::new(catalog_vehicle());
+        let start = seat.start_type;
+        apply_plane_start(&mut seat, PlaneStart::Air);
+        assert_eq!(seat.altitude, 0.0);
+        assert_eq!(seat.start_type, start);
     }
 
     #[test]
@@ -6703,22 +6570,6 @@ mod tests {
         assert_eq!(seats[1].altitude, 6950.0, "IL-10 capped at its ceiling");
         assert_eq!(seats[2].altitude, 12_000.0, "MiG ceiling is above 12000 m");
         assert_eq!(seats[1].start_type, PlaneStart::Air.as_i32());
-    }
-
-    #[test]
-    fn match_lead_altitude_copies_ground_engine_state() {
-        let mut seats = vec![
-            lead_seat(catalog_plane("mig15bis")),
-            wingman_of(catalog_plane("mig15bis"), 0),
-        ];
-        for s in &mut seats {
-            s.altitude = 0.0;
-            s.start_type = PlaneStart::Running.as_i32();
-        }
-        seats[0].start_type = PlaneStart::Warm.as_i32();
-        match_lead_altitude(&mut seats, 0);
-        assert_eq!(seats[1].altitude, 0.0);
-        assert_eq!(seats[1].start_type, PlaneStart::Warm.as_i32());
     }
 
     #[test]

@@ -15,9 +15,11 @@
 //! ## Public API
 //! * `struct FlightConfig` — GUI inputs: flight count (clamped 1–10),
 //!   max per flight (clamped 1–8), aircraft `type_ids` + recommended
-//!   `type_skills` (0–4), country, cooldown / reinforcement /
-//!   delete-order seconds, altitude range. `Default`: 4 flights, max 4,
-//!   mig15bis + la11 (skills 3/2), country 501, 180/300/60 s,
+//!   `type_skills` (0–4), country, cooldown / delete-order seconds,
+//!   altitude range. `reinforcement` is kept on the config but not written:
+//!   the respawn timer is omitted so it cannot pulse SPAWN UNITS during
+//!   cleanup. `Default`: 4 flights, max 4,
+//!   mig15bis + la11 (skills 3/2), country 501, 180 s cooldown, 60 s delete,
 //!   1000–5500 m.
 //! * `fn configure_aircraft` — replace Group 1 on a linked-pack root.
 //! * `fn flight_sizes` — size per flight (`max - (i % max)`; 4/4 → 4,3,2,1).
@@ -52,6 +54,8 @@ pub struct FlightConfig {
     pub type_skills: Vec<i32>,
     pub country: i32,
     pub cooldown: f32,
+    /// Kept for saved settings. Not written: the reinforcement MCU is omitted.
+    #[allow(dead_code)]
     pub reinforcement: f32,
     pub delete_orders: f32,
     pub altitude_min: f32,
@@ -379,10 +383,6 @@ fn install_pack_logic(
         .find_by_name("Zone IN")
         .and_then(|e| e.index)
         .ok_or("missing Zone IN")?;
-    let spawn_units_id = group
-        .find_by_name("SPAWN UNITS")
-        .and_then(|e| e.index)
-        .ok_or("missing SPAWN UNITS")?;
 
     let entity_ids = unit_entity_ids(group);
     let flights = split_flights(&entity_ids, sizes)?;
@@ -439,14 +439,10 @@ fn install_pack_logic(
     delete_orders.set_property("Random", "100");
     delete_orders.set_targets(vec![mission_end_id]);
 
-    let mut reenf = clone_mcu(&proto_timer, &mut next_id, "REENFORCEMENTS (33%)");
-    reenf.set_property("Time", format_time(cfg.reinforcement));
-    reenf.set_property("Random", "33");
-    reenf.set_targets(vec![spawn_units_id]);
-    let reenf_id = reenf.index.ok_or("reinforcement missing Index")?;
-
+    // Reinforcement timer is omitted. It pulsed SPAWN UNITS again on a 33%
+    // roll, which could start another flight while cleanup was running.
     if let Some(spawn_units) = group.find_by_name_mut("SPAWN UNITS") {
-        spawn_units.set_targets(vec![input_id, reenf_id]);
+        spawn_units.set_targets(vec![input_id]);
     }
     if let Some(cool) = group.find_by_name_mut("COOLDOWN") {
         cool.set_targets(vec![input_id]);
@@ -472,7 +468,6 @@ fn install_pack_logic(
         logic.children.push(enable);
         logic.children.push(disable);
         logic.children.push(delete_orders);
-        logic.children.push(reenf);
     }
 
     let mut randomizer = Il2Entity::new("Group");
@@ -530,9 +525,6 @@ fn layout_pack_mcus(group: &mut Il2Entity, plane_count: usize) {
     }
     if let Some(e) = group.find_by_name_mut("Disable Spawner") {
         set_xz(e, (origin.0 + MCU_GAP, origin.1 + MCU_GAP));
-    }
-    if let Some(e) = group.find_by_name_mut("REENFORCEMENTS (33%)") {
-        set_xz(e, left_xz(origin, 0, -2));
     }
     if let Some(e) = group.find_by_name_mut("Delete Orders") {
         set_xz(e, right_xz(origin, 0, -1));
@@ -1281,9 +1273,14 @@ mod tests {
         let root = configured(cfg);
         let g1 = root.find_by_name("Group 1").unwrap();
         assert_eq!(g1.find_by_name("COOLDOWN").unwrap().property("Time"), Some("90"));
+        assert!(g1.find_by_name("REENFORCEMENTS (33%)").is_none());
         assert_eq!(
-            g1.find_by_name("REENFORCEMENTS (33%)").unwrap().property("Time"),
-            Some("120")
+            g1.find_by_name("SPAWN UNITS").unwrap().targets,
+            vec![g1
+                .find_by_name("Randomizer:INPUT")
+                .unwrap()
+                .index
+                .unwrap()]
         );
         assert_eq!(g1.find_by_name("Delay Delete").unwrap().property("Time"), Some("45"));
         let y11: f64 = g1.find_by_name("Red 11").unwrap().property("YPos").unwrap().parse().unwrap();
