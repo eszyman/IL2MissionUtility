@@ -1,8 +1,9 @@
 //! IL-2 Group Generator — binary crate for IL-2 Sturmovik: Great Battles
 //! (Korea map).
 //!
-//! Declares every `src/` module and boots the egui app via [`ui::run`]
-//! (`--probe-*` arguments run the terrain probe tools instead; see `heightprobe`).
+//! Declares every `src/` module and boots the egui app via [`ui::run`].
+//! `--height-run` / `--height-merge` run HeightHelper, and `--probe-*`
+//! arguments run the terrain probe tools; see `heighthelper` and `heightprobe`.
 //! There is no `lib.rs`. See `docs/src-guide.md` for the per-file map.
 //! Parsing lives in [`parser`] → [`ast`]; writing in [`serialize`].
 
@@ -15,6 +16,7 @@ mod flights;
 mod frontlines;
 mod geo;
 mod harvest;
+mod heighthelper;
 mod heightprobe;
 mod help;
 mod locale;
@@ -42,6 +44,9 @@ mod weapon_range;
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = heighthelper::run_cli(&args) {
+        std::process::exit(code);
+    }
     if let Some(code) = heightprobe::run_cli(&args) {
         std::process::exit(code);
     }

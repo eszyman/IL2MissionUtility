@@ -479,10 +479,12 @@ Fallbacks: `UNKNOWN_ARTILLERY_M` = 15 km, `UNKNOWN_ARMOR_M` = 2 km,
 
 ### `terrain.rs` — measured ground heights
 Sparse store of ground heights on a 100 m lattice (224 × 224-node tiles,
-HGT1 file under `%APPDATA%\IL2MissionUtility\terrain`). `lookup` falls back
-from 100 m to 200 / 400 / 800 m cells and reports the spacing that
-answered; `ground_margin_m` / `parked_plane_margin_m` give the lift for
-that spacing. Stores and answers only: no parsing, no placement.
+HGT1). The harvested Korea store is compiled in from `assets/korea_100m.hgt`
+(`builtin` / `open_store`) so heights load with no AppData file. A newer
+file at `%APPDATA%\IL2MissionUtility\terrain\korea_100m.hgt` is merged on
+top. `lookup` falls back from 100 m to 200 / 400 / 800 m cells and reports
+the spacing that answered; `ground_margin_m` / `parked_plane_margin_m` give
+the lift for that spacing. Stores and answers only: no parsing, no placement.
 **Map mode (Terrain tab), terrain_apply.rs.**
 
 ### `terrain_apply.rs` — units onto the measured ground at export
@@ -494,15 +496,30 @@ unmeasured spots (or survey-only 800 m data) keep the old Y and are listed
 in `ApplyReport`. Airborne planes, MCUs and static objects are never
 touched; X/Z never change; applying twice is a no-op. ui.rs calls it for
 Template, Exclusive, Army (generate + rework), Map and Fighter Pack exports
-when *Apply terrain heights on export* is on (off by default) — not for Airfield.
+when *Apply terrain heights on export* is on (on by default; a session can turn it off) — not for Airfield.
 **All generate paths except Airfield.**
 
 ### `heightprobe.rs` — terrain probe files
-Builds T-34 probe groups (one per 100 m land node, one file per tile; the
-800 m survey pass over the whole map) and ingests files the user snapped
-with the editor's *set to ground*, refusing ones that look unsnapped.
-`run_cli` serves `--probe-survey`, `--probe-ingest`, `--probe-status`.
+Builds Helper Input probe groups (`MCU_H_Input`, one per 100 m land node).
+Each file holds at most 256 probes, because set-to-ground on a full
+224 × 224 tile takes minutes. The 800 m survey pass is split the same way.
+Ingest reads files the user snapped with the editor's *set to ground*, and
+refuses ones that look unsnapped. `run_cli` serves `--probe-survey`,
+`--probe-ingest`, `--probe-status`.
 **Map mode (Terrain tab) and the command line.**
+
+### `heighthelper.rs` — HeightHelper
+Drives the Mission Editor key sequence (import, set to ground, save) over
+those probe batches. Default is a 5-minute dry run with a timestamped log
+and no keystrokes. `--shard K/N` splits the batches across machines;
+`--live` writes `korea_mK.hgt`; `--height-merge` joins those into one
+`HeightStore`. A failed batch stops the run so the next keystrokes are not
+sent into a dialog. The utility and HeightHelper both cut probe lists into
+files of 256. A survey file is one east-west line (one X, 204 km of Z, 800 m
+apart). A land-tile file is 100 m spacing inside one 224-node tile (about
+22.3 km west-east and 100 m north-south). `--chunk 61000` is about 14.5 MB,
+roughly 78 km by 499 km, and is not either of those files.
+**Command line (`--height-run`, `--height-merge`).**
 
 ### `watermap.rs` — water/terrain queries
 Packed Korea terrain mask from `assets/combined_terrain.bin`
@@ -515,7 +532,8 @@ open `& 4`. `TerrainMap` (`WaterMap` is a historical alias):
 
 ### `main.rs`
 Binary entry: declares every `src/*.rs` module (plus
-`frontlines/timeline.rs` via `frontlines`) and calls `ui::run()`.
+`frontlines/timeline.rs` via `frontlines`). `--height-*` and `--probe-*`
+run those tools and exit; otherwise it calls `ui::run()`.
 There is no `lib.rs`.
 
 ## Header template (for per-file doc comments)

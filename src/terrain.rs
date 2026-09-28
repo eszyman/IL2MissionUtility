@@ -19,11 +19,12 @@
 //!   `parked_plane_margin_m`
 //! * `struct HeightStore` — `new`, `node` / `set_node`, `add_point`,
 //!   `height_at`, `lookup` (→ `TerrainHeight`), `measured_nodes`, `tile_measured`, `to_bytes` /
-//!   `from_bytes`, `load` / `save`
+//!   `from_bytes`, `load` / `save`, `merge_from`, `builtin`, `open_store`
 //! * `tile_of_node`, `node_of_tile`, `tile_node_range`, `default_store_path`
 //!
 //! ## Used by
 //! * heightprobe.rs — probe tiles and ingest of snapped files
+//! * heighthelper.rs — per-machine stores merged after a split harvest
 //! * ui.rs — Map › Terrain: store status, coverage and relief layers, height readout
 
 #![allow(dead_code)] // wired into export and the Map tab in later phases
@@ -114,14 +115,66 @@ pub fn tile_node_range(ti: usize, tj: usize) -> (usize, usize, usize, usize) {
     (i_lo, i_hi, j_lo, j_hi)
 }
 
+/// Korea heights compiled into the utility (`assets/korea_100m.hgt`).
+pub fn builtin_bytes() -> &'static [u8] {
+    include_bytes!("../assets/korea_100m.hgt")
+}
+
+fn store_for_korea(bytes: &[u8], from: &str) -> Result<HeightStore, String> {
+    let store = HeightStore::from_bytes(bytes).map_err(|e| format!("{from}: {e}"))?;
+    if store.map_id != KOREA_MAP_ID {
+        return Err(format!("{from} holds heights for {}, not {KOREA_MAP_ID}", store.map_id));
+    }
+    Ok(store)
+}
+
+/// The height store shipped with this build.
+pub fn builtin() -> Result<HeightStore, String> {
+    store_for_korea(builtin_bytes(), "built-in height store")
+}
+
+/// Baked heights, with `path` merged on top when that file exists and is newer.
+///
+/// A missing file is the baked store alone. Bytes identical to the baked
+/// store are parsed once. HeightHelper still writes its own shard files;
+/// this is only how the utility reads a store.
+pub fn open_store(path: &Path) -> Result<HeightStore, String> {
+    let baked = builtin_bytes();
+    match std::fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            store_for_korea(baked, "built-in height store")
+        }
+        Err(e) => Err(format!("{}: {e}", path.display())),
+        Ok(disk) if disk.as_slice() == baked => store_for_korea(&disk, "built-in height store"),
+        Ok(disk) => {
+            let mut store = store_for_korea(baked, "built-in height store")?;
+            let extra = store_for_korea(&disk, &path.display().to_string())?;
+            store
+                .merge_from(&extra)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            Ok(store)
+        }
+    }
+}
+
 /// `%APPDATA%\IL2MissionUtility\terrain\korea_100m.hgt` (next to the exe if
-/// `APPDATA` is unset).
+/// `APPDATA` is unset). Extra measurements live here and are merged over
+/// [`builtin`] by [`open_store`].
 pub fn default_store_path() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::current_exe().ok()?.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("IL2MissionUtility").join("terrain").join("korea_100m.hgt")
+}
+
+/// What [`HeightStore::merge_from`] kept from the incoming store.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MergeReport {
+    pub added: usize,
+    pub same: usize,
+    pub points_added: usize,
+    pub points_same: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -303,6 +356,65 @@ impl HeightStore {
         }
     }
 
+    /// Fold `other` into this store. Cells measured in only one store are kept.
+    /// The same decimetre in both is kept. Two different heights is an error,
+    /// and nothing is written when that happens, so a split harvest can be
+    /// joined only when the shards do not disagree.
+    pub fn merge_from(&mut self, other: &Self) -> Result<MergeReport, String> {
+        if self.map_id != other.map_id {
+            return Err(format!("cannot merge heights for {} into {}", other.map_id, self.map_id));
+        }
+        let mut rep = MergeReport::default();
+        let mut fills: Vec<((u16, u16), usize, i16)> = Vec::new();
+        for (&key, cells) in &other.tiles {
+            if cells.len() != TILE * TILE {
+                return Err(format!("tile {}/{} has a bad length", key.0, key.1));
+            }
+            let dest = self.tiles.get(&key);
+            for (k, &src) in cells.iter().enumerate() {
+                if src == UNKNOWN {
+                    continue;
+                }
+                match dest.and_then(|d| d.get(k)).copied().unwrap_or(UNKNOWN) {
+                    UNKNOWN => {
+                        fills.push((key, k, src));
+                        rep.added += 1;
+                    }
+                    have if have == src => rep.same += 1,
+                    have => {
+                        let (i, j) = node_of_tile(key.0 as usize, key.1 as usize, k / TILE, k % TILE);
+                        return Err(format!(
+                            "node ({i},{j}) is {:.1} m in one store and {:.1} m in another",
+                            f64::from(have) / 10.0,
+                            f64::from(src) / 10.0
+                        ));
+                    }
+                }
+            }
+        }
+        let mut extra_points = Vec::new();
+        for p in &other.points {
+            if let Some(have) = self.points.iter().find(|q| (q.x - p.x).hypot(q.z - p.z) < 1.0) {
+                if (have.y - p.y).abs() > 0.05 {
+                    return Err(format!(
+                        "point ({:.1}, {:.1}) is {:.1} m in one store and {:.1} m in another",
+                        have.x, have.z, have.y, p.y
+                    ));
+                }
+                rep.points_same += 1;
+            } else {
+                extra_points.push(*p);
+                rep.points_added += 1;
+            }
+        }
+        for (key, k, src) in fills {
+            let dest = self.tiles.entry(key).or_insert_with(|| vec![UNKNOWN; TILE * TILE]);
+            dest[k] = src;
+        }
+        self.points.extend(extra_points);
+        Ok(rep)
+    }
+
     /// Write via a temp file + rename so a crash never leaves half a store.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(dir) = path.parent() {
@@ -444,6 +556,58 @@ mod tests {
         assert!(HeightStore::load(&path, "graphics\\LANDSCAPE_Other").is_err());
         let missing = HeightStore::load(&dir.join("none.hgt"), KOREA_MAP_ID).unwrap();
         assert_eq!(missing.measured_nodes(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_joins_shards_and_rejects_disagreement() {
+        let mut a = HeightStore::new(KOREA_MAP_ID);
+        let mut b = HeightStore::new(KOREA_MAP_ID);
+        a.set_node(10, 20, 100.0);
+        b.set_node(11, 20, 250.0);
+        b.add_point(15.0, 25.0, 8.0);
+        let rep = a.merge_from(&b).unwrap();
+        assert_eq!(rep, MergeReport { added: 1, same: 0, points_added: 1, points_same: 0 });
+        assert_eq!(a.node(10, 20), Some(100.0));
+        assert_eq!(a.node(11, 20), Some(250.0));
+        assert_eq!(a.points().len(), 1);
+
+        let mut again = HeightStore::new(KOREA_MAP_ID);
+        again.set_node(10, 20, 100.0);
+        let rep = a.merge_from(&again).unwrap();
+        assert_eq!(rep.same, 1);
+        assert_eq!(a.measured_nodes(), 2);
+
+        let mut clash = HeightStore::new(KOREA_MAP_ID);
+        clash.set_node(10, 20, 180.0);
+        let err = a.merge_from(&clash).unwrap_err();
+        assert!(err.contains("node (10,20)"), "{err}");
+        assert_eq!(a.node(10, 20), Some(100.0), "a failed merge leaves the store as it was");
+
+        let mut other = HeightStore::new(r"graphics\LANDSCAPE_Other");
+        assert!(a.merge_from(&other).is_err());
+        other.map_id = KOREA_MAP_ID.to_string();
+        other.add_point(15.0, 25.0, 40.0);
+        assert!(a.merge_from(&other).unwrap_err().contains("point"));
+    }
+
+    #[test]
+    fn builtin_store_is_measured_and_disk_merges_over_it() {
+        let baked = builtin().expect("assets/korea_100m.hgt");
+        assert!(
+            baked.measured_nodes() > 100_000,
+            "baked store should carry the harvested land heights"
+        );
+        let dir = std::env::temp_dir().join(format!("il2_builtin_merge_{}", std::process::id()));
+        let path = dir.join("extra.hgt");
+        let mut extra = HeightStore::new(KOREA_MAP_ID);
+        extra.add_point(12.5, 34.5, 56.5);
+        extra.save(&path).unwrap();
+        let opened = open_store(&path).unwrap();
+        assert!(opened.measured_nodes() >= baked.measured_nodes());
+        assert!(opened.points().iter().any(|p| (p.y - 56.5).abs() < 0.05));
+        let missing = open_store(&dir.join("none.hgt")).unwrap();
+        assert_eq!(missing.measured_nodes(), baked.measured_nodes());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

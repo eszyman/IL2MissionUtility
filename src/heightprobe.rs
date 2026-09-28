@@ -1,13 +1,15 @@
 //! heightprobe.rs — terrain height probes: tile files out, snapped files in
 //!
-//! Builds the T-34 probe groups that measure the editor's terrain (one probe
-//! per land node of the 100 m lattice, one `.Group` per 224 × 224-node tile)
-//! and reads snapped files back into a `terrain::HeightStore`. Probes are
+//! Builds Helper Input probe groups that measure the editor's terrain (one
+//! `MCU_H_Input` per land node of the 100 m lattice). A full 224 × 224-node
+//! tile is about 50 000 probes, and the editor spends minutes on set-to-ground
+//! for a group that large, so each file holds at most `PROBE_CHUNK` probes.
+//! Snapped files are read back into a `terrain::HeightStore`. Probes are
 //! named `H<iiii>_<jjjj>` after their lattice node, so a snapped file needs
 //! nothing else. The land test matches `tools/heightgrid/gen_land_grid.py`:
 //! dry cells of `combined_terrain.bin` inside the map frame, grown 2 cells
 //! into the sea. Sea snaps to exactly 0 m; only the 800 m survey pass
-//! (`survey_group`) probes it on purpose, to learn where the game's water is.
+//! probes it on purpose, to learn where the game's water is.
 //!
 //! A land probe still at Y = 0 was not snapped: it is reported and ignored,
 //! never stored as sea level. A file with no probe above 0 m is not merged.
@@ -16,7 +18,8 @@
 //! * `CONTENT_X` / `CONTENT_Z` — map area inside the image frame
 //! * `tile_probe_nodes`, `tile_probe_count`, `probe_tiles`
 //! * `tile_name`, `probe_name`, `parse_probe_name`
-//! * `probe_group`, `tile_probe_group`, `survey_nodes`, `survey_group`
+//! * `PROBE_CHUNK`, `probe_part_count`, `probe_part_name`, `probe_part`
+//! * `probe_group`, `tile_probe_group`, `survey_nodes`
 //! * `ingest` / `IngestReport` — merge a snapped tree into a store
 //! * `run_cli` — `--probe-*` command-line mode (see `CLI_HELP`)
 //!
@@ -31,7 +34,9 @@ use std::sync::OnceLock;
 use crate::ast::Il2Entity;
 use crate::geo::MAP_MAX;
 use crate::parser::parse_il2_document;
-use crate::terrain::{tile_node_range, tile_of_node, HeightStore, LATTICE_N, STEP_M, TILES_PER_SIDE};
+use crate::terrain::{
+    HeightStore, LATTICE_N, STEP_M, TILES_PER_SIDE, tile_node_range, tile_of_node,
+};
 use crate::watermap::TerrainMap;
 
 /// Map content inside the image frame (the mask marks the frame as land).
@@ -39,8 +44,10 @@ pub const CONTENT_X: (f64, f64) = (30_100.0, 468_400.0);
 pub const CONTENT_Z: (f64, f64) = (29_600.0, 469_500.0);
 /// Probes reach this many mask cells (~110 m each) past the coastline.
 const COAST_BUFFER_CELLS: usize = 2;
-/// Catalog vehicle used as the probe (the editor only snaps units).
-const PROBE_SCRIPT: &str = "t34-85.txt";
+/// Helper Inputs per exported file. A full inland tile is 50 176 probes;
+/// the editor's select-all / set-to-ground on that one group takes minutes,
+/// while the same two commands on a few hundred objects stay quick.
+pub const PROBE_CHUNK: usize = 256;
 /// Ground objects whose snapped Y is kept by `ingest(.., learn = true)`.
 const LEARN_TYPES: [&str; 4] = ["Vehicle", "Train", "Block", "Ground"];
 
@@ -60,7 +67,8 @@ fn probe_cells() -> Option<&'static (Vec<bool>, usize, usize)> {
                 let x_world = MAP_MAX - (y as f64 + 0.5) / h as f64 * MAP_MAX;
                 for x in 0..w {
                     let z_world = (x as f64 + 0.5) / w as f64 * MAP_MAX;
-                    land[y * w + x] = in_content(x_world, z_world) && !map.is_water_cell(x as u32, y as u32);
+                    land[y * w + x] =
+                        in_content(x_world, z_world) && !map.is_water_cell(x as u32, y as u32);
                 }
             }
             for _ in 0..COAST_BUFFER_CELLS {
@@ -85,7 +93,9 @@ fn probe_cells() -> Option<&'static (Vec<bool>, usize, usize)> {
 }
 
 fn keep_node(i: usize, j: usize) -> bool {
-    let Some((cells, w, h)) = probe_cells() else { return false };
+    let Some((cells, w, h)) = probe_cells() else {
+        return false;
+    };
     let (xi, zj) = (i as f64 * STEP_M, j as f64 * STEP_M);
     if !in_content(xi, zj) {
         return false;
@@ -107,7 +117,9 @@ pub fn tile_probe_nodes(ti: usize, tj: usize) -> Vec<(usize, usize)> {
 
 pub fn tile_probe_count(ti: usize, tj: usize) -> usize {
     let (i_lo, i_hi, j_lo, j_hi) = tile_node_range(ti, tj);
-    (i_lo..=i_hi).map(|i| (j_lo..=j_hi).filter(|&j| keep_node(i, j)).count()).sum()
+    (i_lo..=i_hi)
+        .map(|i| (j_lo..=j_hi).filter(|&j| keep_node(i, j)).count())
+        .sum()
 }
 
 /// Every tile with at least one probe: (row, column, probe count).
@@ -133,7 +145,12 @@ pub fn parse_probe_name(name: &str) -> Option<(usize, usize)> {
     if b.len() != 10 || b[0] != b'H' || b[5] != b'_' {
         return None;
     }
-    let digits = |s: &str| s.bytes().all(|c| c.is_ascii_digit()).then(|| s.parse().ok()).flatten();
+    let digits = |s: &str| {
+        s.bytes()
+            .all(|c| c.is_ascii_digit())
+            .then(|| s.parse().ok())
+            .flatten()
+    };
     let (i, j): (usize, usize) = (digits(&name[1..5])?, digits(&name[6..10])?);
     (i < LATTICE_N && j < LATTICE_N).then_some((i, j))
 }
@@ -143,61 +160,83 @@ fn is_legacy_probe(name: &str) -> bool {
     ["HG_", "HGA_", "HGB_"].iter().any(|p| name.starts_with(p))
 }
 
-/// The catalog T-34-85 vehicle block, parsed once from `assets/Models.Group`.
-fn probe_prototype() -> Result<&'static Il2Entity, String> {
-    static PROTO: OnceLock<Result<Il2Entity, String>> = OnceLock::new();
-    PROTO
-        .get_or_init(|| {
-            let root = parse_il2_document(include_str!("../assets/Models.Group"))?;
-            let mut found = None;
-            root.for_each(&mut |e| {
-                if found.is_none()
-                    && e.block_type == "Vehicle"
-                    && e.property("Script").is_some_and(|s| s.contains(PROBE_SCRIPT))
-                {
-                    found = Some(e.clone());
-                }
-            });
-            found.ok_or_else(|| format!("Models.Group has no {PROBE_SCRIPT} vehicle"))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+/// How many files `nodes` split into.
+pub fn probe_part_count(n: usize) -> usize {
+    n.div_ceil(PROBE_CHUNK)
 }
 
-/// A `Group` of probe tanks at Y = 0 on the given lattice nodes.
-pub fn probe_group(name: &str, nodes: &[(usize, usize)]) -> Result<Il2Entity, String> {
-    let proto = probe_prototype()?;
+/// File stem for one part. A set that fits in one file keeps `base`;
+/// larger sets are `base_p0000`, `base_p0001`, …
+pub fn probe_part_name(base: &str, part: usize, parts: usize) -> String {
+    if parts <= 1 {
+        base.to_string()
+    } else {
+        format!("{base}_p{part:04}")
+    }
+}
+
+/// One slice of `nodes`, at most `PROBE_CHUNK` Helper Inputs.
+pub fn probe_part(base: &str, nodes: &[(usize, usize)], part: usize) -> Result<Il2Entity, String> {
+    let parts = probe_part_count(nodes.len());
+    if part >= parts {
+        return Err(format!("probe part {part} of {parts}"));
+    }
+    let start = part * PROBE_CHUNK;
+    let end = (start + PROBE_CHUNK).min(nodes.len());
+    Ok(probe_group(
+        &probe_part_name(base, part, parts),
+        &nodes[start..end],
+    ))
+}
+
+/// `MCU_H_Input` at Y = 0. The editor's set-to-ground writes the snapped height
+/// back into `YPos`; export of these small MCUs stays quick.
+fn helper_input(name: &str, index: i32, x: f64, z: f64) -> Il2Entity {
+    let mut m = Il2Entity::new("MCU_H_Input");
+    m.index = Some(index);
+    m.set_property("Index", index.to_string());
+    m.set_name(name);
+    m.set_property("Desc", "\"\"");
+    m.set_targets(Vec::new());
+    m.set_objects(Vec::new());
+    m.set_property("XPos", format!("{x:.3}"));
+    m.set_property("YPos", "0.000");
+    m.set_property("ZPos", format!("{z:.3}"));
+    for key in ["XOri", "YOri", "ZOri"] {
+        m.set_property(key, "0");
+    }
+    m
+}
+
+/// A `Group` of Helper Input probes at Y = 0 on the given lattice nodes.
+pub fn probe_group(name: &str, nodes: &[(usize, usize)]) -> Il2Entity {
     let mut group = Il2Entity::new("Group");
     group.set_name(name);
     group.index = Some(1);
     group.set_property("Index", "1");
-    group.set_property("Desc", "\"Terrain height probe - select all, set to ground, save\"");
+    group.set_property(
+        "Desc",
+        "\"Terrain height probe - select all, set to ground, save\"",
+    );
     for (k, &(i, j)) in nodes.iter().enumerate() {
-        let mut v = proto.clone();
-        v.set_name(&probe_name(i, j));
-        let index = k as i32 + 2;
-        v.index = Some(index);
-        v.set_property("Index", index.to_string());
-        v.set_property("LinkTrId", "0");
-        v.set_property("XPos", format!("{:.3}", i as f64 * STEP_M));
-        v.set_property("YPos", "0.000");
-        v.set_property("ZPos", format!("{:.3}", j as f64 * STEP_M));
-        for key in ["XOri", "YOri", "ZOri"] {
-            v.set_property(key, "0");
-        }
-        v.set_existing_property("PinToTerrain", "1");
-        group.children.push(v);
+        group.children.push(helper_input(
+            &probe_name(i, j),
+            k as i32 + 2,
+            i as f64 * STEP_M,
+            j as f64 * STEP_M,
+        ));
     }
-    Ok(group)
+    group
 }
 
-/// Probe group for one tile, or `None` if the tile is all sea / frame.
-pub fn tile_probe_group(ti: usize, tj: usize) -> Result<Option<Il2Entity>, String> {
+/// Every probe of one tile in a single group, or `None` if the tile is all
+/// sea / frame. Exports use `probe_part` instead, so each file stays small.
+pub fn tile_probe_group(ti: usize, tj: usize) -> Option<Il2Entity> {
     let nodes = tile_probe_nodes(ti, tj);
     if nodes.is_empty() {
-        return Ok(None);
+        return None;
     }
-    probe_group(&tile_name(ti, tj), &nodes).map(Some)
+    Some(probe_group(&tile_name(ti, tj), &nodes))
 }
 
 /// Survey pass: every `SURVEY_STRIDE`-th lattice node (800 m), whole square.
@@ -216,10 +255,6 @@ pub fn survey_nodes() -> Vec<(usize, usize)> {
 
 fn is_survey_node(i: usize, j: usize) -> bool {
     i.is_multiple_of(SURVEY_STRIDE) && j.is_multiple_of(SURVEY_STRIDE)
-}
-
-pub fn survey_group() -> Result<Il2Entity, String> {
-    probe_group(SURVEY_NAME, &survey_nodes())
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -272,7 +307,9 @@ pub fn ingest(root: &Il2Entity, store: &mut HeightStore, learn: bool) -> IngestR
     let mut rep = IngestReport::default();
     let mut writes = Vec::new();
     root.for_each(&mut |e| {
-        let (Some(x), Some(y), Some(z)) = (num(e, "XPos"), num(e, "YPos"), num(e, "ZPos")) else { return };
+        let (Some(x), Some(y), Some(z)) = (num(e, "XPos"), num(e, "YPos"), num(e, "ZPos")) else {
+            return;
+        };
         let name = e.name().unwrap_or("");
         if parse_probe_name(name).is_none() && !is_legacy_probe(name) {
             let pinned = e.property("PinToTerrain").map(str::trim) == Some("1");
@@ -283,7 +320,10 @@ pub fn ingest(root: &Il2Entity, store: &mut HeightStore, learn: bool) -> IngestR
             return;
         }
         let (fi, fj) = (x / STEP_M, z / STEP_M);
-        let node = ((fi - fi.round()).abs() < 0.005 && (fj - fj.round()).abs() < 0.005 && fi >= 0.0 && fj >= 0.0)
+        let node = ((fi - fi.round()).abs() < 0.005
+            && (fj - fj.round()).abs() < 0.005
+            && fi >= 0.0
+            && fj >= 0.0)
             .then(|| (fi.round() as usize, fj.round() as usize))
             .filter(|&(i, j)| i < LATTICE_N && j < LATTICE_N);
         if y == 0.0 {
@@ -323,11 +363,12 @@ pub fn ingest(root: &Il2Entity, store: &mut HeightStore, learn: bool) -> IngestR
 }
 
 pub const CLI_HELP: &str = r"Terrain height probes (the window does not open):
-  --probe-survey <out.Group>              write the 800 m survey pass (whole map, one file)
+  --probe-survey <folder>                 write the 800 m survey pass, one file per 256 probes
   --probe-ingest [--learn] <snapped>...   merge snapped .Group/.Mission files into the store
   --probe-status                          show what the store holds
   --store <path>                          use this store instead of the default
-Default store: %APPDATA%\IL2MissionUtility\terrain\korea_100m.hgt";
+Default store: heights baked into this build, with
+%APPDATA%\IL2MissionUtility\terrain\korea_100m.hgt merged on top when that file exists.";
 
 /// `--probe-*` command-line mode. Returns the exit code, or `None` when the
 /// arguments are not a probe command (the GUI starts).
@@ -368,24 +409,43 @@ fn fail(msg: &str) -> i32 {
 }
 
 fn cli_survey(files: &[String]) -> Result<(), String> {
-    let [out] = files else { return Err(format!("--probe-survey needs one output path
+    let [out] = files else {
+        return Err(format!(
+            "--probe-survey needs one output folder
 
-{CLI_HELP}")) };
-    let group = survey_group()?;
-    let n = group.children.len();
-    std::fs::write(out, crate::serialize::serialize_group(&group)).map_err(|e| format!("{out}: {e}"))?;
-    println!("{out}: {n} T-34 probes, 800 m apart over the whole map (sea and frame included)");
-    println!("Import it, select all, set to ground, save, then run --probe-ingest on the saved file.");
+{CLI_HELP}"
+        ));
+    };
+    let dir = std::path::Path::new(out);
+    std::fs::create_dir_all(dir).map_err(|e| format!("{out}: {e}"))?;
+    let nodes = survey_nodes();
+    let parts = probe_part_count(nodes.len());
+    for part in 0..parts {
+        let group = probe_part(SURVEY_NAME, &nodes, part)?;
+        let name = group.name().unwrap_or(SURVEY_NAME);
+        let path = dir.join(format!("{name}.Group"));
+        std::fs::write(&path, crate::serialize::serialize_group(&group))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    println!(
+        "{out}: {parts} files, {} Helper Inputs, 800 m apart over the whole map (sea and frame included)",
+        nodes.len()
+    );
+    println!(
+        "Import one file, select all, set to ground, save, then run --probe-ingest on the saved files."
+    );
     Ok(())
 }
 
 fn cli_ingest(files: &[String], store_path: &std::path::Path, learn: bool) -> Result<(), String> {
     if files.is_empty() {
-        return Err(format!("--probe-ingest needs at least one snapped file
+        return Err(format!(
+            "--probe-ingest needs at least one snapped file
 
-{CLI_HELP}"));
+{CLI_HELP}"
+        ));
     }
-    let mut store = HeightStore::load(store_path, crate::terrain::KOREA_MAP_ID)?;
+    let mut store = crate::terrain::open_store(store_path)?;
     let mut refused = 0;
     for path in files {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -397,16 +457,22 @@ fn cli_ingest(files: &[String], store_path: &std::path::Path, learn: bool) -> Re
         );
         if !rep.merged {
             refused += 1;
-            println!("  NOT merged: it looks unsnapped (select all, set to ground, save, then retry)");
+            println!(
+                "  NOT merged: it looks unsnapped (select all, set to ground, save, then retry)"
+            );
         }
     }
     store.save(store_path)?;
     cli_status(store_path)?;
-    if refused > 0 { Err(format!("{refused} file(s) not merged")) } else { Ok(()) }
+    if refused > 0 {
+        Err(format!("{refused} file(s) not merged"))
+    } else {
+        Ok(())
+    }
 }
 
 fn cli_status(store_path: &std::path::Path) -> Result<(), String> {
-    let store = HeightStore::load(store_path, crate::terrain::KOREA_MAP_ID)?;
+    let store = crate::terrain::open_store(store_path)?;
     let tiles = (0..TILES_PER_SIDE)
         .flat_map(|ti| (0..TILES_PER_SIDE).map(move |tj| (ti, tj)))
         .filter(|&(ti, tj)| store.tile_measured(ti, tj) > 0)
@@ -454,33 +520,59 @@ mod tests {
     fn probe_names_round_trip() {
         assert_eq!(probe_name(3905, 3628), "H3905_3628");
         assert_eq!(parse_probe_name("H3905_3628"), Some((3905, 3628)));
-        for bad in ["H3905-3628", "H390_36280", "X3905_3628", "H9999_0001", "H12a4_0001", "HG_000_001"] {
+        for bad in [
+            "H3905-3628",
+            "H390_36280",
+            "X3905_3628",
+            "H9999_0001",
+            "H12a4_0001",
+            "HG_000_001",
+        ] {
             assert_eq!(parse_probe_name(bad), None, "{bad}");
         }
         assert_eq!(tile_name(5, 16), "HG100_T05_16");
     }
 
     #[test]
-    fn probe_group_is_catalog_t34_on_the_lattice() {
-        let g = tile_probe_group(11, 4).unwrap().unwrap();
+    fn probe_group_is_a_helper_input_on_the_lattice() {
+        let g = tile_probe_group(11, 4).unwrap();
         assert_eq!(g.name(), Some("HG100_T11_04"));
         assert_eq!(g.children.len(), 3);
         let v = &g.children[0];
-        assert_eq!(v.block_type, "Vehicle");
+        assert_eq!(v.block_type, "MCU_H_Input");
         assert_eq!(v.name(), Some("H2305_1098"));
         assert_eq!(v.property("XPos"), Some("230500.000"));
         assert_eq!(v.property("ZPos"), Some("109800.000"));
         assert_eq!(v.property("YPos"), Some("0.000"));
-        assert_eq!(v.property("LinkTrId"), Some("0"));
-        assert_eq!(v.property("PinToTerrain"), Some("1"));
-        assert!(v.property("Script").unwrap().contains("t34-85.txt"));
+        assert_eq!(v.property("Desc"), Some("\"\""));
+        assert_eq!(v.property("Targets"), Some("[]"));
+        assert_eq!(v.property("Objects"), Some("[]"));
+        assert_eq!(v.property("XOri"), Some("0"));
+        assert_eq!(v.targets, Vec::<i32>::new());
+        assert_eq!(v.objects, Vec::<i32>::new());
         assert_eq!(v.index, Some(2));
-        assert!(tile_probe_group(0, 0).unwrap().is_none());
+        assert!(tile_probe_group(0, 0).is_none());
+    }
+
+    #[test]
+    fn large_sets_split_into_chunk_sized_files() {
+        let nodes: Vec<(usize, usize)> = (0..PROBE_CHUNK + 3).map(|j| (1000, j)).collect();
+        assert_eq!(probe_part_count(nodes.len()), 2);
+        let a = probe_part("HG100_T01_01", &nodes, 0).unwrap();
+        let b = probe_part("HG100_T01_01", &nodes, 1).unwrap();
+        assert_eq!(a.children.len(), PROBE_CHUNK);
+        assert_eq!(b.children.len(), 3);
+        assert_eq!(a.name(), Some("HG100_T01_01_p0000"));
+        assert_eq!(b.name(), Some("HG100_T01_01_p0001"));
+        assert_eq!(a.children.last().unwrap().name(), Some("H1000_0255"));
+        assert_eq!(b.children[0].name(), Some("H1000_0256"));
+        assert!(probe_part("HG100_T01_01", &nodes, 2).is_err());
+        assert_eq!(probe_part_name("HG100_T11_04", 0, 1), "HG100_T11_04");
     }
 
     #[test]
     fn probe_file_round_trips_through_parser() {
-        let g = tile_probe_group(11, 4).unwrap().unwrap();
+        let g = tile_probe_group(11, 4).unwrap();
         let text = serialize_group(&g);
         let back = parse_group_file(&text).unwrap();
         assert_eq!(back, g);
@@ -489,7 +581,7 @@ mod tests {
 
     fn snapped(y_by_name: &[(&str, &str)], extra: &str) -> Il2Entity {
         let nodes = [(3905, 3628), (3905, 3629), (3906, 3628)];
-        let mut text = serialize_group(&probe_group("T", &nodes).unwrap());
+        let mut text = serialize_group(&probe_group("T", &nodes));
         for (name, y) in y_by_name {
             let at = text.find(&format!("\"{name}\"")).unwrap();
             let yline = at + text[at..].find("YPos = 0.000").unwrap();
@@ -538,12 +630,13 @@ mod tests {
     fn survey_zeros_are_water_but_an_all_zero_survey_is_refused() {
         // two survey nodes: one on land at 0 m (water per the survey), one snapped
         let nodes = [(3904, 3624), (3904, 3632)];
-        let text = serialize_group(&probe_group(SURVEY_NAME, &nodes).unwrap());
+        let text = serialize_group(&probe_group(SURVEY_NAME, &nodes));
         let unsnapped = parse_group_file(&text).unwrap();
         let mut store = HeightStore::new(KOREA_MAP_ID);
         let rep = ingest(&unsnapped, &mut store, false);
         assert!(rep.looks_unsnapped() && !rep.merged, "no probe above 0 m");
-        let snapped = parse_group_file(&text.replacen("YPos = 0.000", "YPos = 351.200", 1)).unwrap();
+        let snapped =
+            parse_group_file(&text.replacen("YPos = 0.000", "YPos = 351.200", 1)).unwrap();
         let rep = ingest(&snapped, &mut store, false);
         assert!(rep.merged);
         assert_eq!((rep.above_zero, rep.water, rep.unsnapped), (1, 1, 0));
@@ -585,10 +678,21 @@ mod real_files {
             let rep = ingest(&root, &mut store, false);
             println!(
                 "{path}: lattice {} points {} sea {} unsnapped {} tiles {}",
-                rep.lattice, rep.probe_points, rep.water, rep.unsnapped, rep.tiles.len()
+                rep.lattice,
+                rep.probe_points,
+                rep.water,
+                rep.unsnapped,
+                rep.tiles.len()
             );
         }
-        println!("measured nodes {}, points {}", store.measured_nodes(), store.points().len());
-        println!("height at 392,000 / 376,000: {:?}", store.height_at(392_000.0, 376_000.0));
+        println!(
+            "measured nodes {}, points {}",
+            store.measured_nodes(),
+            store.points().len()
+        );
+        println!(
+            "height at 392,000 / 376,000: {:?}",
+            store.height_at(392_000.0, 376_000.0)
+        );
     }
 }
