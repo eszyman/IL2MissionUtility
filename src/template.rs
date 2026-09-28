@@ -629,7 +629,7 @@ pub struct FormationPreset {
     pub density: i32,
 }
 
-const fn air_form(id: i32, label: &'static str) -> FormationPreset {
+const fn form(id: i32, label: &'static str) -> FormationPreset {
     FormationPreset {
         id,
         label,
@@ -637,34 +637,59 @@ const fn air_form(id: i32, label: &'static str) -> FormationPreset {
     }
 }
 
-const fn ground_form(id: i32, label: &'static str, density: i32) -> FormationPreset {
-    FormationPreset {
-        id,
-        label,
-        density,
-    }
-}
-
-/// Aircraft formations from `TemplateExamples/FormationTypes.Group`.
+/// Korea editor Formation Advanced list (IL-2 Series). `FormationType` is the
+/// combo index: planes 0–18, then vehicles 19–33. Density 0 is Dense.
 pub const AIR_FORMATIONS: &[FormationPreset] = &[
-    air_form(19, "Pairs"),
-    air_form(20, "Wedge"),
-    air_form(21, "Right"),
-    air_form(22, "Left"),
-    air_form(23, "Heavy Wedge"),
-    air_form(24, "Heavy Echelon Right"),
-    air_form(26, "Heavy Combat Box"),
-    air_form(27, "User"),
+    form(0, "V-Form"),
+    form(1, "Left Edge Form"),
+    form(2, "Right Edge Form"),
+    form(3, "Column - Pairs"),
+    form(4, "Column - Flights wedge"),
+    form(5, "Column - Flights right"),
+    form(6, "Column - Flights left"),
+    form(7, "Heavy - Wedge"),
+    form(8, "Heavy - Echelon right"),
+    form(9, "Heavy - Echelon left"),
+    form(10, "Heavy - Combat box"),
+    form(11, "Heavy - User formation"),
+    form(12, "Reserved - 9"),
+    form(13, "Reserved - 10"),
+    form(14, "Reserved - 11"),
+    form(15, "Reserved - 12"),
+    form(16, "Reserved - 13"),
+    form(17, "Reserved - 14"),
+    form(18, "Reserved - 15"),
 ];
 
-/// Vehicle / convoy formations from `TemplateExamples/VehicleFormationTypes.Group`
-/// and `TemplateExamples/Simple Vehicle Formation 2 way column.Group`.
+/// Vehicle entries from the same Korea Formation Type combo.
 pub const GROUND_FORMATIONS: &[FormationPreset] = &[
-    ground_form(4, "Road Column 1 way", 0),
-    ground_form(18, "Road Column 2 way", 1),
-    ground_form(10, "Panic Stop", 0),
-    ground_form(11, "Continue Moving", 0),
+    form(19, "On Road Column one-way"),
+    form(20, "On Road Column two-way"),
+    form(21, "Off Road Column"),
+    form(22, "Off Road User Formation"),
+    form(23, "Forward"),
+    form(24, "Backward"),
+    form(25, "Stop"),
+    form(26, "Panic Stop"),
+    form(27, "Continue Moving"),
+    form(28, "Set Direction and Stop"),
+    form(29, "Reset Off Road User Formation"),
+    form(30, "User Formation Line Left"),
+    form(31, "User Formation Line Right"),
+    form(32, "User Formation Line Center"),
+    form(33, "User Formation Line Back"),
 ];
+
+/// Korea flare dialog: Red, Green, White, in that order.
+pub const FLARE_COLORS: &[(i32, &str)] = &[(0, "Red"), (1, "Green"), (2, "White")];
+
+pub fn flare_label(color: i32) -> String {
+    FLARE_COLORS
+        .iter()
+        .find(|(id, _)| *id == color)
+        .map(|(_, label)| (*label).to_string())
+        .unwrap_or_else(|| format!("Color {color}"))
+}
 
 pub fn formations_for(kind: UnitKind) -> &'static [FormationPreset] {
     match kind {
@@ -877,7 +902,7 @@ impl Default for OrderSpec {
             attack_g_targets: false,
             time_s: 600.0,
             priority: 1,
-            formation_type: 23,
+            formation_type: 7,
             behaviour_filter: 8,
             flare_color: 0,
             effect_start: true,
@@ -897,11 +922,11 @@ impl OrderSpec {
         match kind {
             UnitKind::Plane => {
                 order.kind = OrderKind::Formation;
-                order.formation_type = 23;
+                order.formation_type = 7;
             }
             _ => {
                 order.kind = OrderKind::AttackArea;
-                order.formation_type = 4;
+                order.formation_type = 19;
                 order.attack_air = false;
                 order.attack_ground = true;
             }
@@ -1724,6 +1749,10 @@ fn take_order_hop(orders: &[OrderSpec], i: &mut usize) -> Vec<usize> {
     col
 }
 
+fn is_column_spine(kind: OrderKind) -> bool {
+    kind == OrderKind::OnSpawned || (kind != OrderKind::TimeOnTarget && !kind.is_report())
+}
+
 /// Columns of the order tree. Sequential hops stay in line; Attack / AttackArea
 /// / Time on Target that sit together are stacked as a parallel branch. A TOT
 /// that follows a waypoint (or other hop) with no attack sits in that hop's
@@ -1762,6 +1791,97 @@ pub fn order_tree_columns(orders: &[OrderSpec]) -> Vec<Vec<usize>> {
         cols.push(take_order_hop(orders, &mut i));
     }
     cols
+}
+
+fn flatten_columns(cols: &[Vec<usize>]) -> Vec<usize> {
+    cols.iter().flat_map(|c| c.iter().copied()).collect()
+}
+
+fn reorder_orders(
+    orders: &mut Vec<OrderSpec>,
+    events: &mut [EventHook],
+    seq: &[usize],
+    keep: usize,
+) -> usize {
+    let mut mapping = vec![0usize; orders.len()];
+    for (new_i, &old_i) in seq.iter().enumerate() {
+        mapping[old_i] = new_i;
+    }
+    for hook in events {
+        if let EventThen::Order(i) = hook.then {
+            hook.then = EventThen::Order(mapping.get(i).copied().unwrap_or(i));
+        }
+    }
+    let new_keep = mapping.get(keep).copied().unwrap_or(0);
+    let old = std::mem::take(orders);
+    *orders = seq.iter().map(|&i| old[i].clone()).collect();
+    new_keep
+}
+
+/// True when `oi` can move one visual column left (`dir < 0`) or right.
+pub fn tree_order_can_shift(orders: &[OrderSpec], oi: usize, dir: i32) -> bool {
+    let mut trial = orders.to_vec();
+    shift_tree_order(&mut trial, &mut [], oi, dir).is_some()
+}
+
+/// Move one order one visual column. A command that is the only spine in its
+/// column takes the report and Time on Target stacked on it. A stacked report
+/// or Time on Target moves onto the neighboring column by itself. Event
+/// targets follow the order they point at. Returns the order's new index.
+pub fn shift_tree_order(
+    orders: &mut Vec<OrderSpec>,
+    events: &mut [EventHook],
+    oi: usize,
+    dir: i32,
+) -> Option<usize> {
+    let dir = dir.signum();
+    if dir == 0 || oi >= orders.len() {
+        return None;
+    }
+    let mut cols = order_tree_columns(orders);
+    let ci = cols.iter().position(|c| c.contains(&oi))?;
+    let spines = cols[ci]
+        .iter()
+        .filter(|i| is_column_spine(orders[**i].kind))
+        .count();
+    let only_spine = spines == 1 && is_column_spine(orders[oi].kind);
+    if only_spine {
+        let ti = ci as i32 + dir;
+        if ti < 0 || ti as usize >= cols.len() {
+            return None;
+        }
+        cols.swap(ci, ti as usize);
+    } else {
+        let ti = ci as i32 + dir;
+        if ti < 0 || ti as usize >= cols.len() {
+            return None;
+        }
+        let mut ti = ti as usize;
+        cols[ci].retain(|i| *i != oi);
+        if cols[ci].is_empty() {
+            cols.remove(ci);
+            if dir < 0 {
+                ti -= 1;
+            } else {
+                ti = ci;
+            }
+        }
+        if dir > 0 {
+            cols[ti].push(oi);
+        } else {
+            cols[ti].insert(0, oi);
+        }
+    }
+    let seq = flatten_columns(&cols);
+    let trial: Vec<OrderSpec> = seq.iter().map(|&i| orders[i].clone()).collect();
+    let new_oi = seq.iter().position(|&i| i == oi)?;
+    let after = order_tree_columns(&trial)
+        .iter()
+        .position(|c| c.contains(&new_oi))?;
+    if after == ci {
+        return None;
+    }
+    Some(reorder_orders(orders, events, &seq, oi))
 }
 
 /// One cell in the order tree: an order, or an event hooked to that column.
@@ -5280,7 +5400,7 @@ mod tests {
                     seat.orders = vec![
                         OrderSpec {
                             kind: OrderKind::Formation,
-                            formation_type: 23,
+                            formation_type: 7,
                             ..OrderSpec::default()
                         },
                         OrderSpec {
@@ -5706,7 +5826,7 @@ mod tests {
         assert!(!text.contains('\u{2013}'));
         assert!(!text.contains("NodeGates"));
         let formation = pack.find_by_name("Formation").unwrap();
-        assert_eq!(formation.property("FormationType"), Some("23"));
+        assert_eq!(formation.property("FormationType"), Some("7"));
         assert_eq!(formation.property("FormationDensity"), Some("0"));
         assert_eq!(formation.property("FlightSize"), Some("1"));
     }
@@ -6053,10 +6173,12 @@ mod tests {
 
     #[test]
     fn air_formation_presets_match_export() {
-        assert_eq!(AIR_FORMATIONS[0].id, 19);
-        assert_eq!(AIR_FORMATIONS[0].label, "Pairs");
-        assert_eq!(formation_label(23, UnitKind::Plane), "Heavy Wedge");
-        assert_eq!(formation_label(4, UnitKind::Vehicle), "Road Column 1 way");
+        assert_eq!(AIR_FORMATIONS[0].id, 0);
+        assert_eq!(AIR_FORMATIONS[0].label, "V-Form");
+        assert_eq!(formation_label(7, UnitKind::Plane), "Heavy - Wedge");
+        assert_eq!(formation_label(3, UnitKind::Plane), "Column - Pairs");
+        assert_eq!(formation_label(19, UnitKind::Vehicle), "On Road Column one-way");
+        assert_eq!(formation_label(26, UnitKind::Vehicle), "Panic Stop");
     }
 
     #[test]
@@ -6464,7 +6586,7 @@ mod tests {
                 if i == 0 {
                     seat.orders = vec![OrderSpec {
                         kind: OrderKind::Formation,
-                        formation_type: 18,
+                        formation_type: 20,
                         ..OrderSpec::default()
                     }];
                 }
@@ -6494,8 +6616,8 @@ mod tests {
         assert!(!text.contains("AiRTBDecision"));
         assert!(!text.contains("StartType"));
         let formation = pack.find_by_name("Formation").unwrap();
-        assert_eq!(formation.property("FormationType"), Some("18"));
-        assert_eq!(formation.property("FormationDensity"), Some("1"));
+        assert_eq!(formation.property("FormationType"), Some("20"));
+        assert_eq!(formation.property("FormationDensity"), Some("0"));
         let activate = pack.find_by_name("Activate Units").unwrap();
         assert_eq!(activate.objects.len(), 3);
     }
@@ -6815,7 +6937,7 @@ mod tests {
             },
             OrderSpec {
                 kind: OrderKind::Formation,
-                formation_type: 23,
+                formation_type: 7,
                 ..OrderSpec::default()
             },
         ];
@@ -6911,7 +7033,7 @@ mod tests {
             },
             OrderSpec {
                 kind: OrderKind::Formation,
-                formation_type: 23,
+                formation_type: 7,
                 ..OrderSpec::default()
             },
         ];
@@ -7697,6 +7819,87 @@ mod tests {
         );
     }
 
+    fn kind_order(kind: OrderKind) -> OrderSpec {
+        OrderSpec {
+            kind,
+            ..OrderSpec::default()
+        }
+    }
+
+    #[test]
+    fn shift_report_moves_onto_the_neighbor_column() {
+        let mut orders = vec![
+            kind_order(OrderKind::TakeOff),
+            kind_order(OrderKind::OnTookOff),
+            kind_order(OrderKind::Formation),
+        ];
+        let mut events = vec![EventHook {
+            kind: EntityEvent::OnPilotKilled,
+            then: EventThen::Order(0),
+        }];
+        assert!(tree_order_can_shift(&orders, 1, 1));
+        let moved = shift_tree_order(&mut orders, &mut events, 1, 1).unwrap();
+        assert_eq!(
+            orders.iter().map(|o| o.kind).collect::<Vec<_>>(),
+            vec![
+                OrderKind::TakeOff,
+                OrderKind::Formation,
+                OrderKind::OnTookOff,
+            ]
+        );
+        assert_eq!(moved, 2);
+        assert_eq!(
+            order_tree_columns(&orders),
+            vec![vec![0], vec![1, 2]]
+        );
+        assert_eq!(events[0].then, EventThen::Order(0));
+        let back = shift_tree_order(&mut orders, &mut events, moved, -1).unwrap();
+        assert_eq!(back, 0);
+        assert_eq!(orders[back].kind, OrderKind::OnTookOff);
+        assert_eq!(order_tree_columns(&orders), vec![vec![0, 1], vec![2]]);
+        assert_eq!(events[0].then, EventThen::Order(1));
+    }
+
+    #[test]
+    fn shift_command_carries_the_report_stacked_on_it() {
+        let mut orders = vec![
+            kind_order(OrderKind::TakeOff),
+            kind_order(OrderKind::OnTookOff),
+            kind_order(OrderKind::Formation),
+        ];
+        let mut events = vec![EventHook {
+            kind: EntityEvent::OnPilotKilled,
+            then: EventThen::Order(0),
+        }];
+        let moved = shift_tree_order(&mut orders, &mut events, 0, 1).unwrap();
+        assert_eq!(
+            orders.iter().map(|o| o.kind).collect::<Vec<_>>(),
+            vec![
+                OrderKind::Formation,
+                OrderKind::TakeOff,
+                OrderKind::OnTookOff,
+            ]
+        );
+        assert_eq!(moved, 1);
+        assert_eq!(order_tree_columns(&orders), vec![vec![0], vec![1, 2]]);
+        assert_eq!(events[0].then, EventThen::Order(1));
+        assert!(!tree_order_can_shift(&orders, 2, 1));
+        assert!(shift_tree_order(&mut orders, &mut events, 2, 1).is_none());
+    }
+
+    #[test]
+    fn shift_lone_order_swaps_with_the_next_column() {
+        let mut orders = vec![
+            kind_order(OrderKind::GotoWaypoint),
+            kind_order(OrderKind::AttackArea),
+        ];
+        let moved = shift_tree_order(&mut orders, &mut [], 0, 1).unwrap();
+        assert_eq!(moved, 1);
+        assert_eq!(orders[0].kind, OrderKind::AttackArea);
+        assert_eq!(orders[1].kind, OrderKind::GotoWaypoint);
+        assert!(shift_tree_order(&mut orders, &mut [], 0, -1).is_none());
+    }
+
     #[test]
     fn order_tree_puts_onspawned_left_and_events_on_mission_complete() {
         let orders = vec![
@@ -7887,7 +8090,7 @@ mod tests {
         assert_eq!(opts.per_group, 4);
         let kinds: Vec<_> = opts.seats[0].orders.iter().map(|o| o.kind).collect();
         assert_eq!(kinds, vec![OrderKind::Formation, OrderKind::AttackArea]);
-        assert_eq!(opts.seats[0].orders[0].formation_type, 23);
+        assert_eq!(opts.seats[0].orders[0].formation_type, 7);
         assert!(opts.seats[1].orders.is_empty());
         assert!(opts.seats[0].unit.script.contains("mig15bis"));
         assert_eq!(opts.seats[0].country, 501);
