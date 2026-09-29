@@ -74,7 +74,7 @@ A native Windows desktop tool (Rust 2024, `eframe`/`egui` 0.32, `nom`
 parser) that removes the tedious wiring from building **IL-2 Sturmovik:
 Great Battles** missions on the **Korea** map. It reads and writes the mission
 editor's `.Group` text files; it does not replace the editor. Version
-`0.6.0`; ~40k lines in `src/`. `ui.rs` is the GUI anchor; Template Builder is `src/ui/builder.rs`; Map is `src/ui/map.rs`. `template.rs` is the group builder (~7.9k).
+`0.7.0`; ~40k lines in `src/`. `ui.rs` is the GUI anchor; Template Builder is `src/ui/builder.rs`; Map is `src/ui/map.rs`. `template.rs` is the group builder (~7.9k).
 
 Pipeline: `.Group` text → `parser.rs` (nom) → `ast::Il2Entity` tree (unknown
 keys preserved) → generation modules transform/clone the tree →
@@ -233,3 +233,4 @@ continue at delegation-loop step 3 (§2).
 | 2026-09-28 | Cursor | **Selected unit edits sit on the formation view.** The card uses the view's 14 px left margin. It shows the picture, the plain description, and that unit's options (or the highlighted model before one is added). The planes draw in the open area to the right. Place, Activate or Spawn, and Waypoints stay in the right-hand drawers. |
 | 2026-09-28 | Cursor | **Unit picture and description sit above Models.** The order of battle keeps each unit's picture and drops the descriptive line. The formation card keeps that unit's options only. |
 | 2026-09-28 | Cursor | **Map mode restored and moved to `src/ui/map.rs`.** Baked heights stay on `terrain::open_store` (`assets/korea_100m.hgt`, 31,110,412 bytes); a missing AppData file is not an error, and a different file merges over the bake. Forces **Clear** is **Clear DPRK** and **Clear NATO**. **Lock AO** sits with the zoom controls. **Apply terrain heights on export** defaults on (the 2026-09-24 off default stays superseded). Placed fighters use `EasternFighter.svg` and `NatoFighter.svg` as authored, paint angle 0. |
+| 2026-09-28 | Cursor | **Version 0.7.0, tagged `v0.7-Alpha`.** Same release path as `v0.6-Alpha`: the tag push builds the Windows exe and attaches it to the GitHub release. |
