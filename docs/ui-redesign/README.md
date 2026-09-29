@@ -112,19 +112,10 @@ State field names are the existing ones in `GroupGeneratorApp`. Copy comes from 
 
 ### 5.1 Template (mockup 2a)
 - **Header:** "Template Builder" · "Editing {stem}" · Load… (`Ctrl O`) → `load_template_group`; Reset → confirm dialog (§6.3) → `reset_template_builder`; **Generate File** → `generate_unit_template`.
-- **Left, 270 px:**
-  - Section "ADD UNITS". The note on the right is the catalog name and opens a menu with Load catalog… / Add group… / Use built-in catalog (from `template_catalog_section`).
-  - Kind segmented control (`tpl_kind`, `CatalogKind::ALL`), then the class and country combos and the model list from `draw_template_model_browser`. Rows are 28 px; the selected row gets ACCENT_100 and a bold "+ Add".
-  - Section "UNITS · n", note "drag to reorder". One card per seat: side marker + "{n} · {model}", a role tag ("Lead ×4" in accent, "Follows 1" in neutral), and a meta line "{country} · {skill} · {k} orders". The selected seat uses `card(selected = true)`.
-- **Center, top (fills):** "FORMATION VIEW" over a 32 px grid. This is `draw_template_schematic`, with Zone In as a solid ACCENT_700 circle and Zone Out as a dashed ACCENT circle, labelled "Zone In 8 km" / "Zone Out 12 km". Bottom-right: a zoom group − / % / + / Fit (`tpl_view_zoom`, reset `tpl_view_pan`). Bottom-left hint: "Scroll to zoom · right-drag to pan".
-- **Center, bottom (236 px):** "ORDER TREE", note "+ Order ▾ · + Event ▾" (from `draw_tree_add_buttons`). Each seat is one row: a unit chip (98 px, with side marker) → chips joined by 1 px NEUTRAL_500 lines. Chips are ≥ 28 px tall (`TREE_CHIP_H`); events are dashed; the selected chip has a 1.5 px ACCENT border and ACCENT_200 fill. Hint below: "UNIT → OnSpawned → orders. ‹ › move the selected chip. Help ›".
-- **Right, 304 px:**
-  - Selection block (`draw_template_details`): the kicker "Selected · Unit 1 · Order 2", the order name in Condensed 22 px, then the kind-specific fields in a 96 px label / control grid, and a "Remove order" button.
-  - Then the settings sections:
-    - **Activate or Spawn**, collapsed, summary e.g. "Activate · required by wingmen". Show the lock reason inline, not only on hover.
-    - **Placement & Checkzones**, open. Layout combo + per-group drag value; Trigger coalition combo (shows "DPRK [1]"/"NATO [2]"); Zone In and Zone Out sliders with values; hint "Inverted Vee is finger-four. Spacing 150 m. Help ›". Keep the "visual range" marker.
-    - **Waypoints**, summary "{n} · {speed} km/h · {alt} m".
-    - **Catalog**, summary "Built-in" or the file stem.
+- **Left, 270 px:** the selected unit's picture and plain description first (the highlighted catalog model before a unit is added), then the model palette. Section "MODELS". The catalog name opens Load catalog… / Add group… / Use built-in catalog. Kind segmented control, then class and country combos and the model list. Rows are 28 px; the selected row gets ACCENT_100 and a bold "+ Add". **Add to Template** adds the highlighted model. A row can also be dragged into the formation. There is no added-units roster on this side.
+- **Center (fills):** "FORMATION VIEW" over a 32 px grid. This is `draw_template_schematic`, with Zone In as a solid ACCENT_700 circle and Zone Out as a dashed ACCENT circle, labelled "Zone In 8 km" / "Zone Out 12 km". Bottom-right: a zoom group − / % / + / Fit (`tpl_view_zoom`, reset `tpl_view_pan`). Bottom-left hint: "Scroll to zoom · right-drag to pan". When a unit, order, or event is selected, a card on the view's 14 px left margin holds its options (Change Model and the seat, order, or event fields). The picture is above Models, not on this card. The formation draws in the open area to the right of the card.
+- **Bottom (360 px):** "ORDER OF BATTLE". Each unit is a root: a small picture, the unit chip (side marker, "{n} · {model}"), role ("Lead ×n" / "Follows n"), and "{country} · {skill} · {k} orders". Clicking the chip selects it. Drag the chip up or down to reorder. Right-click: Duplicate, Delete, Move up, Move down, Add Order. Order and event chips stay to the right of the unit and still move by column (‹ › or drag). Hint: "UNIT → OnSpawned → orders. ‹ › or drag a chip left and right. Help ›".
+- **Right, 304 px:** drawers for the whole template, available whether or not a unit is selected. A one-line guide, then Placement & Checkzones (open), Activate or Spawn, Waypoints, Catalog. Selecting a unit does not hide Place or Activate or Spawn. The unit's own fields are on the formation view.
 - **Status:** the load/generate message; Undo appears after Remove or Reset.
 
 ### 5.2 Army Generator (mockup 2b)

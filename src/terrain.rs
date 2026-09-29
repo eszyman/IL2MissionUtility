@@ -25,7 +25,7 @@
 //! ## Used by
 //! * heightprobe.rs — probe tiles and ingest of snapped files
 //! * heighthelper.rs — per-machine stores merged after a split harvest
-//! * ui.rs — Map › Terrain: store status, coverage and relief layers, height readout
+//! * ui/map.rs — Map › Terrain: store status, coverage and relief layers, height readout
 
 #![allow(dead_code)] // wired into export and the Map tab in later phases
 

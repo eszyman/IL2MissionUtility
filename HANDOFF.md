@@ -1,7 +1,7 @@
 # HANDOFF — IL-2 Mission Utility (Claude working copy)
 
 > Read this first in every new session. Update the **Session log** and
-> **State** sections before you stop. Last updated: 2026-09-27.
+> **State** sections before you stop. Last updated: 2026-09-28.
 
 ## 1. Where things live
 
@@ -74,7 +74,7 @@ A native Windows desktop tool (Rust 2024, `eframe`/`egui` 0.32, `nom`
 parser) that removes the tedious wiring from building **IL-2 Sturmovik:
 Great Battles** missions on the **Korea** map. It reads and writes the mission
 editor's `.Group` text files; it does not replace the editor. Version
-`0.5.0-alpha`; ~40k lines in `src/` (`ui.rs` 10.2k, `template.rs` 7.9k).
+`0.6.0`; ~40k lines in `src/`. `ui.rs` is the GUI anchor; Template Builder is `src/ui/builder.rs`; Map is `src/ui/map.rs`. `template.rs` is the group builder (~7.9k).
 
 Pipeline: `.Group` text → `parser.rs` (nom) → `ast::Il2Entity` tree (unknown
 keys preserved) → generation modules transform/clone the tree →
@@ -225,3 +225,11 @@ continue at delegation-loop step 3 (§2).
 | 2026-09-26 | Cursor | **Map fighters.** Placed DPRK and NATO fighters use `EasternFighter.svg` and `NatoFighter.svg` in the rotation drawn in those files (DPRK north-west, NATO north-east). They are not turned to point south or north, and they are not recolored. |
 | 2026-09-27 | Cursor | **Template Builder formations are the Korea editor list.** `FormationType` is the Formation Advanced combo index (planes 0–18, vehicles 19–33). Plane default is Heavy - Wedge (7); vehicle default is On Road Column one-way (19). Flare color is Red / Green / White. Attack area labels already matched the editor. |
 | 2026-09-28 | Cursor | **Order tree moves by column.** Left/right arrows move a chip one visual column. A stacked report or Time on Target moves by itself; a lone command takes its stack with it. Chips can be dragged onto another column. The order panel no longer re-snaps a moved report every frame. |
+| 2026-09-28 | Cursor | **Template Builder moved to `src/ui/builder.rs`.** `ui.rs` stays the anchor (`mod builder`; no `src/ui/mod.rs`). The other five modes are still in `ui.rs`. Same behavior. |
+| 2026-09-28 | Cursor | **Order-tree drag restored in `src/ui/builder.rs`.** The split had put the arrows back to a list swap, which snapped a report onto its command. Arrows and chip drag again move one visual column (`shift_tree_order`). The order panel snaps a report only when its kind changes. |
+| 2026-09-28 | Cursor | **Template layout is a palette, an order of battle, and an inspector.** The left panel is the model catalog only (Add to Template, or drag a row into the formation). Units live in the bottom order of battle; clicking one selects it. Right-click duplicates, deletes, or adds an order. Change Model is in the inspector. With nothing selected, the inspector shows placement, zones, and waypoint settings, and the formation view gets the space above a 360 px order of battle. |
+| 2026-09-28 | Cursor | **Unit preview sits under the formation view.** Same left inset as the formation. It shows the highlighted catalog model before any unit is added, and the selected unit after that. The formation keeps the full center width above the strip. |
+| 2026-09-28 | Cursor | **Place and Activate or Spawn stay available while a unit is selected.** They are collapsible drawers under a short guide, not a card that replaces them. Each unit in the order of battle has a picture and a plain line (an Il-10 reads as a ground-attack aircraft, with its cruise speed). The inspector repeats that picture with type, cruise, and ceiling. The formation view is the full center again; the order of battle stays 360 px. |
+| 2026-09-28 | Cursor | **Selected unit edits sit on the formation view.** The card uses the view's 14 px left margin. It shows the picture, the plain description, and that unit's options (or the highlighted model before one is added). The planes draw in the open area to the right. Place, Activate or Spawn, and Waypoints stay in the right-hand drawers. |
+| 2026-09-28 | Cursor | **Unit picture and description sit above Models.** The order of battle keeps each unit's picture and drops the descriptive line. The formation card keeps that unit's options only. |
+| 2026-09-28 | Cursor | **Map mode restored and moved to `src/ui/map.rs`.** Baked heights stay on `terrain::open_store` (`assets/korea_100m.hgt`, 31,110,412 bytes); a missing AppData file is not an error, and a different file merges over the bake. Forces **Clear** is **Clear DPRK** and **Clear NATO**. **Lock AO** sits with the zoom controls. **Apply terrain heights on export** defaults on (the 2026-09-24 off default stays superseded). Placed fighters use `EasternFighter.svg` and `NatoFighter.svg` as authored, paint angle 0. |

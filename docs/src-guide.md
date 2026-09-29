@@ -9,7 +9,8 @@
 - Binary crate (`src/main.rs` only — there is no `lib.rs`). It generates
   IL-2 Sturmovik: Great Battles `.Group` / `.Mission` text files for the
   Korea map.
-- `ui.rs` is the GUI entry point. The other egui files are `shell.rs`
+- `ui.rs` is the GUI anchor. Mode panels move into `src/ui/<mode>.rs`
+  (Template is `ui/builder.rs`). The other egui files are `shell.rs`
   (shared page chrome and widgets), `theme.rs` (design tokens, fonts,
   visuals) and `help.rs` (detached Help window). Every other file is
   logic/data with no egui imports.
@@ -23,7 +24,7 @@
 - Coordinates: world = game meters, **X north** (up on the Korea map),
   **Z east**. Full map square is `geo::MAP_MIN`/`MAP_MAX` = 0…499_200.
   Parking grid is `placement::MAP_MIN`/`MAP_MAX` = 40_000…470_000 with a
-  10 km step. Map image UV/`Pos2` conversions live in `ui.rs`.
+  10 km step. Map image UV/`Pos2` conversions live in `ui/map.rs`.
 - `build.rs` embeds `assets/models/*.png` into `model_spec` (deduped
   identical bytes). Do not parse model images at runtime.
 - Assets in `assets/`: unit SVG icons, Korea map JPEGs, `Models.Group`
@@ -33,12 +34,35 @@
 ## Files
 
 ### `ui.rs` — egui front-end
-The single GUI entry point. Owns `GroupGeneratorApp` (all state), the
-six mode tabs, every panel, drag/drop map editing, order-tree widgets,
-map UV/world/`Pos2` conversions, SVG/JPEG loading, and
-`save_with_sidecars`. Calls into logic modules only through their public
-APIs; contains no AST work and no generation logic. Help content is
-rendered by `help.rs`. **All modes.**
+The GUI anchor. Owns `GroupGeneratorApp` (all state), the mode rail, and
+every mode that has not moved out yet. `save_with_sidecars` stays here.
+Calls into logic modules only through their public APIs; contains no AST
+work and no generation logic. Help content is rendered by `help.rs`.
+**All modes.**
+
+Mode panels live in `src/ui/<mode>.rs`, declared from `ui.rs`
+(`mod builder`, `mod map`). There is no `src/ui/mod.rs`: `ui.rs` is the
+module, and the folder holds its children. Each child is an
+`impl GroupGeneratorApp` plus that mode's widgets. State fields stay on
+the app in `ui.rs`.
+
+### `ui/builder.rs` — Template Builder tab
+The Template page: unit list, order tree, formation view, and Load /
+Generate / Reset. `ui.rs` calls `template_page`, `generate_unit_template`,
+`load_template_now`, `reset_template_confirmed`, `tpl_fingerprint`,
+`tpl_restore`, and `sync_template_waypoint_speed`. Group text is still
+built by `template.rs`. **Template.**
+
+### `ui/map.rs` — Map tab
+The Map page: Korea map drawing, the Period / Forces / References /
+Terrain dock, AO lock, fighter textures, and the height-store controls.
+`ui.rs` calls `map_page`, `generate_front_file`, `load_base_map`,
+`apply_terrain`, `add_terrain_note`, and the undo / tool hooks. Heights
+load through `terrain::open_store` (baked `assets/korea_100m.hgt`, with
+a newer AppData file merged on top). Placed fighters use
+`EasternFighter.svg` and `NatoFighter.svg` as authored (paint angle 0).
+Group text is still built by `frontlines.rs` and the other map modules.
+**Map.**
 
 Since the 2026 redesign (`docs/ui-redesign/README.md`) every tab is a
 `*_page(ctx)` that adds fixed side panels and a center, each scrolling

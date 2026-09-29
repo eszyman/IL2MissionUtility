@@ -14,7 +14,11 @@ use std::path::{Path, PathBuf};
 use eframe::egui::accesskit::{self as ak, Role};
 use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
+use super::builder::{skill_name, FIELD_LABEL_W};
+use super::map::{fighter_svg_north, rasterize_svg};
 use super::*;
+use crate::heightprobe;
+use crate::template::{append_seat, OrderKind, TemplateOptions};
 
 /// Test stand-in for `rfd::FileDialog`: every pick pops the next prepared
 /// answer. A dialog with no prepared answer is a test bug and panics.
@@ -65,7 +69,7 @@ pub mod dialog {
     }
 }
 
-const SCREEN: Vec2 = Vec2::new(1400.0, 1000.0);
+const SCREEN: Vec2 = Vec2::new(1400.0, 1280.0);
 const CTRL: Modifiers = Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: true };
 
 #[derive(Clone, Debug)]
@@ -102,6 +106,7 @@ impl Harness {
         theme::apply(&ctx);
         let mut app = GroupGeneratorApp::default();
         app.terrain_store_path = dir.join("store").join("korea_100m.hgt");
+        app.terrain_use_builtin = false;
         app.harvest_db_dir = dir.join("airfields").display().to_string();
         app.harvest_missions_dir = dir.join("missions").display().to_string();
         app.mark_saved(AppMode::Template);
@@ -329,11 +334,10 @@ fn template_add_select_remove_undo_reset_and_generate() {
     h.click("Goto WP");
     assert_eq!(h.app.tpl_seats[0].orders.len(), orders + 1);
 
-    // Remove card 2 with its ×, then Ctrl Z brings it back identical.
+    // Remove unit 2 from the inspector, then Ctrl Z brings it back identical.
     let before = h.app.tpl_fingerprint();
-    let card = h.find("Unit card 2").rect;
-    let x = h.all("×").into_iter().find(|n| card.contains(n.rect.center())).expect("× on card 2");
-    h.click_at(x.rect.center());
+    h.click("Unit card 2");
+    h.click("Remove unit");
     assert_eq!(h.app.tpl_seats.len(), 2);
     assert!(h.status().is_empty() || !h.status().contains("Undone"));
     assert!(h.has("Undo"), "status bar offers Undo");
@@ -392,6 +396,41 @@ fn template_load_over_edits_asks_first() {
     assert!(!h.app.is_dirty(AppMode::Template));
     h.key_with(Key::Z, CTRL);
     assert_eq!(h.app.tpl_seats.len(), 1, "Ctrl Z undoes the load");
+}
+
+#[test]
+fn template_preview_shows_the_highlighted_model_before_add() {
+    let mut h = Harness::new("tplpreview");
+    h.tab("Template");
+    assert!(h.app.tpl_seats.is_empty());
+    let pick = h.app.displayed_catalog()[h.app.tpl_add_pick].label().to_string();
+    assert!(h.has(&pick), "the highlighted model is named in the preview");
+    let specs = h.find_prefix("Type: ");
+    let formation = h.find("Formation view");
+    let models = h.find("MODELS");
+    assert!(specs.rect.top() < models.rect.top(), "preview sits above Models");
+    assert!(specs.rect.right() < formation.rect.left(), "preview stays in the model panel");
+    assert!(formation.rect.width() > 400.0, "the formation view keeps the center");
+    assert!(h.has("Placement & Checkzones"), "place and spawn stay reachable before a unit is added");
+    assert!(h.has("Activate or Spawn"));
+    let script = h.app.displayed_catalog()[h.app.tpl_add_pick].script.clone();
+    let plain = super::builder::plain_class_line(crate::model_spec::class_for(&script));
+    assert!(h.has(plain), "a plain description of the highlighted model");
+
+    add_model(&mut h, "Il-10");
+    let formation = h.find("Formation view");
+    let kicker = h.find("SELECTED · UNIT 1");
+    assert!(
+        (kicker.rect.left() - (formation.rect.left() + 14.0)).abs() < 2.0,
+        "unit options use the formation's 14 px left margin"
+    );
+    let about = h.find("A ground-attack aircraft. It strikes targets on the ground.");
+    let models = h.find("MODELS");
+    assert!(about.rect.top() < models.rect.top(), "the description stays above Models");
+    assert!(about.rect.bottom() < h.find("Unit card 1").rect.top(), "the order of battle does not repeat it");
+    assert!(h.has("Change Model"));
+    assert!(h.has("Placement & Checkzones"), "selecting a unit does not hide place and spawn");
+    assert!(h.has("Activate or Spawn"));
 }
 
 #[test]
@@ -464,10 +503,22 @@ fn template_card_meta_tree_hint_and_selection_grid() {
     let k = seat.orders.len();
     let meta = format!("{country} · {} · {k} {}", skill_name(seat.skill), if k == 1 { "order" } else { "orders" });
     assert!(h.has(&meta), "{meta:?} in {:?}", h.labels());
-    assert!(h.has("UNIT → OnSpawned → orders. ‹ › move the selected chip."));
+    assert!(h.has("UNIT → OnSpawned → orders. ‹ › or drag a chip left and right."));
+    assert!(h.has("Add to Template"));
+
+    // Nothing selected: the inspector is the template settings, including Zone In.
+    h.app.tpl_select = None;
+    h.settle();
+    assert!(h.has("Placement & Checkzones"), "{:?}", h.labels());
+    assert!(h.has(&format!("{:.1} km", h.app.tpl_zone_in / 1000.0)), "{:?}", h.labels());
+    assert!(h.app.tpl_zone_in > 1000.0);
+    assert!(!h.has("Change Model"));
 
     // Seat fields: labels in a 96 px column, controls to the right of it.
     h.click("Unit card 1");
+    assert!(h.has("Change Model"));
+    assert!(h.has("Placement & Checkzones"), "place and spawn stay open while a unit is selected");
+    assert!(h.has("Activate or Spawn"));
     let role = h.find("Role").rect;
     let country_label = h.find("Country").rect;
     assert!((role.left() - country_label.left()).abs() < 0.5);
@@ -478,9 +529,6 @@ fn template_card_meta_tree_hint_and_selection_grid() {
         .expect("Role combo on the Role row")
         .clone();
     assert!((role_combo.rect.left() - role.left() - FIELD_LABEL_W - 8.0).abs() < 1.0, "control column starts after 96 px");
-    // Zone sliders read in km; the stored value stays metres.
-    assert!(h.has(&format!("{:.1} km", h.app.tpl_zone_in / 1000.0)), "{:?}", h.labels());
-    assert!(h.app.tpl_zone_in > 1000.0);
 }
 
 #[test]
@@ -512,8 +560,8 @@ fn template_copy_attributes_needs_a_unit_and_undoes() {
     add_model(&mut h, "Il-10");
     h.app.tpl_select = None;
     h.settle();
-    assert!(h.find("Copy attributes to all").disabled, "nothing to copy from");
-    assert!(h.has("Select a unit to copy its attributes from."), "the reason shows inline");
+    assert!(!h.has("Copy attributes to all"), "copy belongs to the selected unit");
+    assert!(h.has("Placement & Checkzones"));
 
     h.app.tpl_seats[0].skill = 4;
     h.app.tpl_seats[1].skill = 1;
@@ -523,6 +571,22 @@ fn template_copy_attributes_needs_a_unit_and_undoes() {
     assert_eq!(h.app.undo_label(), Some("Copied attributes from F-51D"));
     h.key_with(Key::Z, CTRL);
     assert_eq!(h.app.tpl_seats[1].skill, 1);
+}
+
+#[test]
+fn template_unit_menu_duplicates_and_deletes() {
+    let mut h = Harness::new("tplmenu");
+    h.tab("Template");
+    add_model(&mut h, "F-51D");
+    h.click_at_with(h.find("Unit card 1").rect.center(), PointerButton::Secondary);
+    h.click("Duplicate");
+    assert_eq!(h.app.tpl_seats.len(), 2);
+    assert_eq!(h.app.tpl_seats[1].unit.label(), "F-51D");
+    h.click_at_with(h.find("Unit card 2").rect.center(), PointerButton::Secondary);
+    h.click("Delete");
+    assert_eq!(h.app.tpl_seats.len(), 1);
+    h.key_with(Key::Z, CTRL);
+    assert_eq!(h.app.tpl_seats.len(), 2);
 }
 
 // ── Army Generator ────────────────────────────────────────────────────────
@@ -1019,6 +1083,9 @@ fn each_tab_keeps_its_own_status() {
 #[test]
 fn a_second_identical_generate_marks_the_tab_saved() {
     let mut h = Harness::new("saved");
+    // The empty test store would warn about unmeasured ground, and a warning
+    // stays on the tab. This check is about the plain "Wrote …" line.
+    h.app.terrain_apply = false;
     h.tab("Template");
     add_model(&mut h, "F-51D");
     let out = h.out("tpl.Group");
@@ -1143,7 +1210,7 @@ fn map_arrow_undo_redo_and_clear_undo() {
     h.key(Key::Num5);
     h.click_at(map.center());
     h.click("Forces");
-    let clear = h.all("Clear").into_iter().find(|n| !n.disabled && n.rect.top() > h.find("OBJECTIVES").rect.top()).expect("objectives Clear");
+    let clear = h.all("Clear DPRK").into_iter().find(|n| !n.disabled && n.rect.top() > h.find("OBJECTIVES").rect.top()).expect("objectives Clear DPRK");
     h.click_at(clear.rect.center());
     assert!(h.app.east_objectives.is_empty());
     h.key_with(Key::Z, CTRL);
@@ -1177,7 +1244,7 @@ fn map_terrain_import_layers_and_export() {
 
     // A snapped probe file: nine land nodes of one tile at 100–108 m.
     let nodes: Vec<(usize, usize)> = heightprobe::tile_probe_nodes(10, 10).into_iter().take(9).collect();
-    let mut group = heightprobe::probe_group("snapped", &nodes).unwrap();
+    let mut group = heightprobe::probe_group("snapped", &nodes);
     for (k, child) in group.children.iter_mut().enumerate() {
         child.set_property("YPos", format!("{:.3}", 100.0 + k as f64));
     }
@@ -1193,7 +1260,7 @@ fn map_terrain_import_layers_and_export() {
 
     // An unsnapped file (all probes at 0 m) is refused.
     let raw = h.out("unsnapped.Group");
-    std::fs::write(&raw, serialize_group(&heightprobe::tile_probe_group(11, 4).unwrap().unwrap())).unwrap();
+    std::fs::write(&raw, serialize_group(&heightprobe::tile_probe_group(11, 4).expect("tile 11,4 has probes"))).unwrap();
     dialog::answer(vec![raw]);
     h.click("Import snapped…");
     assert!(h.status().contains("not merged"), "{}", h.status());
@@ -1283,6 +1350,37 @@ fn template_tree_chip_selects_and_moves() {
 }
 
 #[test]
+fn template_report_arrow_leaves_its_command() {
+    let mut h = Harness::new("reportmove");
+    h.tab("Template");
+    add_model(&mut h, "F-51D");
+    h.click("+ Order ▾");
+    h.click("Take Off");
+    h.click("+ Order ▾");
+    h.click("Formation");
+    h.click("+ Order ▾");
+    h.click("OnTookOff");
+    let kinds = |h: &Harness| h.app.tpl_seats[0].orders.iter().map(|o| o.kind).collect::<Vec<_>>();
+    let before = kinds(&h);
+    let ri = before.iter().position(|k| *k == OrderKind::OnTookOff).expect("OnTookOff");
+    let chip = h.find(&format!("{} OnTookOff", ri + 1));
+    h.click_at(chip.rect.center());
+    h.click("Move right");
+    let after = kinds(&h);
+    assert_ne!(after, before, "the report should leave the Take Off column");
+    assert_eq!(after.last().copied(), Some(OrderKind::OnTookOff));
+    let ri = after.iter().position(|k| *k == OrderKind::OnTookOff).unwrap();
+    let chip = h.find(&format!("{} OnTookOff", ri + 1));
+    let takeoff = after.iter().position(|k| *k == OrderKind::TakeOff).unwrap();
+    let takeoff_chip = h.find(&format!("{} Take Off", takeoff + 1));
+    h.press_and_move(chip.rect.center(), takeoff_chip.rect.center());
+    h.release_at(takeoff_chip.rect.center());
+    let dragged = kinds(&h);
+    assert_eq!(dragged[0], OrderKind::OnTookOff);
+    assert_eq!(dragged[1], OrderKind::TakeOff);
+}
+
+#[test]
 fn map_places_fighters_from_the_forces_dock() {
     let mut h = Harness::new("placefighters");
     h.tab("Map");
@@ -1298,14 +1396,14 @@ fn map_places_fighters_from_the_forces_dock() {
     let n = h.app.map_fighters.as_ref().map_or(0, |l| l.spots.len());
     assert!(n > 0, "no fighters placed: {}", h.status());
     assert!(h.has_prefix("DPRK: "), "count line shows: {:?}", h.labels());
-    // Clear (the one in the Fighters section), then undo.
+    // Clear DPRK (the one in the Fighters section), then undo.
     let fighters_top = h.find("FIGHTERS").rect.top();
     let clear = h
-        .all("Clear")
+        .all("Clear DPRK")
         .into_iter()
         .filter(|n| !n.disabled && n.rect.top() > fighters_top)
         .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
-        .expect("fighters Clear");
+        .expect("fighters Clear DPRK");
     h.click_at(clear.rect.center());
     assert!(h.app.map_fighters.is_none());
     h.key_with(Key::Z, CTRL);
@@ -1589,16 +1687,16 @@ fn map_undo_label_matches_what_ctrl_z_undoes() {
     // Clear the objective, then draw: the drawing is undone first, then the Clear.
     h.click("Forces");
     let top = h.find("OBJECTIVES").rect.top();
-    let clear = h.all("Clear").into_iter().find(|n| !n.disabled && n.rect.top() > top).expect("objectives Clear");
+    let clear = h.all("Clear DPRK").into_iter().find(|n| !n.disabled && n.rect.top() > top).expect("objectives Clear DPRK");
     h.click_at(clear.rect.center());
-    assert_eq!(h.app.undo_label().as_deref(), Some("Cleared 1 objectives"));
+    assert_eq!(h.app.undo_label().as_deref(), Some("Cleared 1 DPRK objectives"));
     h.key(Key::Num4);
     h.drag(map.center() + Vec2::new(0.0, 40.0), map.center() + Vec2::new(120.0, -20.0));
     assert_eq!(h.app.attack_arrows.len(), 2);
     assert_eq!(h.app.undo_label().as_deref(), Some("Drew an attack arrow"));
     h.key_with(Key::Z, CTRL);
     assert_eq!(h.app.attack_arrows.len(), 1);
-    assert_eq!(h.app.undo_label().as_deref(), Some("Cleared 1 objectives"));
+    assert_eq!(h.app.undo_label().as_deref(), Some("Cleared 1 DPRK objectives"));
     h.key_with(Key::Z, CTRL);
     assert_eq!(h.app.east_objectives.len(), 1, "then the Clear");
     assert_eq!(h.app.attack_arrows.len(), 1, "without touching the older arrow");
@@ -1760,15 +1858,35 @@ impl Harness {
     }
 }
 
-/// Terrain heights are opt-in: exports are unchanged until the Map ›
-/// Terrain switch is turned on (user decision, 2026-09-24).
+/// Terrain heights apply on export unless this session turns the switch off.
 #[test]
-fn terrain_heights_on_export_start_off() {
-    let mut h = Harness::new("terrainoff");
-    assert!(!h.app.terrain_apply, "Apply terrain heights starts off");
+fn terrain_heights_on_export_start_on() {
+    let mut h = Harness::new("terrainon");
+    assert!(h.app.terrain_apply, "Apply terrain heights starts on");
     h.tab("Map");
     h.wait_for_map();
     h.click_prefix_if_present("Terrain");
     let n = h.find("Apply terrain heights on export");
-    assert_eq!(n.toggled, Some(false));
+    assert_eq!(n.toggled, Some(true));
+}
+
+#[test]
+fn map_lock_ao_blocks_empty_drag_and_reset() {
+    let mut h = Harness::new("lockao");
+    h.tab("Map");
+    h.wait_for_map();
+    let map = h.find("Korea map").rect;
+    let full = h.app.front_aabb;
+    h.drag(map.center() + Vec2::new(-80.0, -40.0), map.center() + Vec2::new(80.0, 40.0));
+    assert_ne!(h.app.front_aabb, full, "unlocked drag sets the AO");
+    let locked_box = h.app.front_aabb;
+    h.click("Lock AO");
+    assert!(h.app.ao_locked);
+    assert!(h.find("Reset AO").disabled, "Reset AO is off while locked");
+    h.drag(map.center() + Vec2::new(-40.0, -20.0), map.center() + Vec2::new(40.0, 20.0));
+    assert_eq!(h.app.front_aabb, locked_box, "locked drag leaves the AO");
+    h.click("Unlock AO");
+    assert!(!h.app.ao_locked);
+    h.click("Reset AO");
+    assert_eq!(h.app.front_aabb, full);
 }
