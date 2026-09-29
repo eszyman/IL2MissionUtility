@@ -1777,32 +1777,33 @@ impl super::GroupGeneratorApp {
         labeled_slider(ui, "Groups at once", &mut self.fighter_waves, 1..=6);
         ui.checkbox(&mut self.fighter_fill, format!("Fill AO (up to {MAX_PACKS} at once)"))
             .on_hover_text("Fill the AO at Zone In spacing");
+        if let Some(layout) = &self.map_fighters {
+            ui.horizontal(|ui| {
+                let n = layout.spots.len();
+                let packs = layout
+                    .spots
+                    .iter()
+                    .map(|s| s.pack)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
+                let side = shell::Side::from_eastern(layout.eastern);
+                shell::side_marker(ui, side, 12.0);
+                ui.label(format!("{}: {n} groups in {packs} packs", side.label()));
+            });
+        }
+        let clear_dprk_f = self.side_has_fighters(true);
+        let clear_nato_f = self.side_has_fighters(false);
         ui.horizontal(|ui| {
-			if let Some(layout) = &self.map_fighters {
-				ui.horizontal(|ui| {
-					let n = layout.spots.len();
-					let packs = layout
-						.spots
-						.iter()
-						.map(|s| s.pack)
-						.collect::<std::collections::BTreeSet<_>>()
-						.len();
-					let side = shell::Side::from_eastern(layout.eastern);
-					shell::side_marker(ui, side, 12.0);
-					ui.label(format!("{}: {n} groups in {packs} packs", side.label()));
-				});
-			}
-			
-			let clear_f = self.side_has_fighters(false) || self.side_has_fighters(true);
-			ui.add_enabled_ui(clear_f, |ui| {
-				if ui.button("Clear").on_hover_text("Clear fighters. Ctrl Z brings them back.").clicked() {
-					let n = self.map_fighters.as_ref().map_or(0, |l| l.spots.len());
-					self.record_map_undo(format!("Cleared {n} fighter groups"));
-					self.map_fighters = None;
-					self.map_imported_fighters.clear();
-					self.fighter_drag = None;
-				}
-			});
+            ui.add_enabled_ui(clear_dprk_f, |ui| {
+                if ui.button("Clear DPRK").on_hover_text("Clear DPRK fighters. Ctrl Z brings them back.").clicked() {
+                    self.clear_side_fighters(true);
+                }
+            });
+            ui.add_enabled_ui(clear_nato_f, |ui| {
+                if ui.button("Clear NATO").on_hover_text("Clear NATO fighters. Ctrl Z brings them back.").clicked() {
+                    self.clear_side_fighters(false);
+                }
+            });
         });
         ui.add_space(6.0);
         ui.separator();
