@@ -298,6 +298,22 @@ pub fn script_id(script: &str) -> String {
         .to_ascii_lowercase()
 }
 
+pub fn is_aircraft(class: ModelClass) -> bool {
+    matches!(
+        class,
+        ModelClass::Fighter
+            | ModelClass::FighterBomber
+            | ModelClass::Attack
+            | ModelClass::Bomber
+            | ModelClass::Transport
+    )
+}
+
+/// Korea aircraft in display order (fighters, then attack, bombers, transports).
+pub fn aircraft_specs() -> impl Iterator<Item = &'static ModelSpec> {
+    SPECS.iter().filter(|s| is_aircraft(s.class))
+}
+
 pub fn spec_for(script: &str) -> Option<&'static ModelSpec> {
     let id = script_id(script);
     SPECS.iter().find(|s| s.id == id)

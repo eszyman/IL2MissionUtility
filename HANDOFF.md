@@ -1,7 +1,7 @@
 # HANDOFF — IL-2 Mission Utility (Claude working copy)
 
 > Read this first in every new session. Update the **Session log** and
-> **State** sections before you stop. Last updated: 2026-09-28.
+> **State** sections before you stop. Last updated: 2026-10-02.
 
 ## 1. Where things live
 
@@ -234,3 +234,12 @@ continue at delegation-loop step 3 (§2).
 | 2026-09-28 | Cursor | **Unit picture and description sit above Models.** The order of battle keeps each unit's picture and drops the descriptive line. The formation card keeps that unit's options only. |
 | 2026-09-28 | Cursor | **Map mode restored and moved to `src/ui/map.rs`.** Baked heights stay on `terrain::open_store` (`assets/korea_100m.hgt`, 31,110,412 bytes); a missing AppData file is not an error, and a different file merges over the bake. Forces **Clear** is **Clear DPRK** and **Clear NATO**. **Lock AO** sits with the zoom controls. **Apply terrain heights on export** defaults on (the 2026-09-24 off default stays superseded). Placed fighters use `EasternFighter.svg` and `NatoFighter.svg` as authored, paint angle 0. |
 | 2026-09-28 | Cursor | **Version 0.7.0, tagged `v0.7-Alpha`.** Forces fighters use **Clear DPRK** and **Clear NATO** (the single Clear wiped both sides and failed the release test). The tag push builds the Windows exe and attaches it to the GitHub release. |
+| 2026-10-02 | Cursor | **Harvest accepts a game-escaped quote.** `References/_gen.Mission` failed because the player F-51D tail code is `TCode = "   ""&";` and the parser treated the second `"` as the end of the string. Quoted values now keep `""` as a literal quote. The file harvests K-27 Yonpo (130 taxi nodes, 561 blocks). |
+| 2026-10-02 | Cursor | **Air start fake fields.** The Airfield tab keeps a bank of fakefield air starts (coalition, facing, aircraft options) and can export them as one group or one file each. Map Forces places copies; drag moves them and right-drag turns the arrow icon. |
+| 2026-10-02 | Cursor | **Air start plane count.** Each aircraft has `Number`. It starts unlimited (`-1`), as in `Airstart.Group`. Turning Unlimited off sets how many of that type the field can launch. |
+| 2026-10-02 | Cursor | **Taxi-graph flags.** `Runway = 0` marks a runway node (Type 1 centerline). `RunwayEnd = 0` marks a threshold. Type 3 nodes are the ramp pads. A harvested fakefield can be moved onto a ramp and turned down the runway on K-13. K-14 and K-16 keep their Type 3 row beside the middle of the runway, so one automatic placement rule does not cover every field. |
+| 2026-10-02 | Cursor | **Taxi-graph runway flags.** `Runway = 0` marks a runway node and `RunwayEnd = 0` marks a threshold. The old note that a zero meant "not a runway" is removed from `harvest.rs`. `AxisHeading` is still the principal axis of every taxi node. |
+| 2026-10-02 | Cursor | **Field spawn.** `place_field_spawn` puts a harvested fakefield just short of the threshold, nose toward the runway, with `StartType` 1 and altitude 0. The Airfield tab calls it **Field spawn** / **Export field spawn…** and reuses the aircraft list. It is not an air start. Harvest defaults are the Korea Missions folder and `Template\MP Airfields`. |
+| 2026-10-02 | Cursor | **Airfield UI moved to `src/ui/airfield.rs`.** `ui.rs` stays the anchor (`mod airfield`; no `src/ui/mod.rs`). Page, panels, harvest, field spawn, and the air-start bank moved. Same behavior. |
+| 2026-10-02 | Cursor | **Field spawn has its own aircraft list.** Engine running writes `fakefield_rnwspawn.mgm` and `fakefield_rnwspawn.txt`, `StartType` 1, altitude 0, on the existing hold-short. Engine off, parking writes `StartType` 2 and `SnapTo` 2 and leaves the field there. Air starts stay on `fakefield.mgm` and `StartType` 0. |
+| 2026-10-02 | Cursor | **Field-spawn plane names.** Each field-spawn `Plane` `Name` states the start and the load (`At ramp - Clean`, `Parked - Long range`, `On runway - Strike 2`). Air starts keep an empty name. StartType, SnapTo, the hold-short, and the fakefield model are unchanged. |

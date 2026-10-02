@@ -9,6 +9,7 @@
 
 mod aircraft;
 mod airfield;
+mod airstart;
 mod ast;
 mod bombers;
 mod duplicate;

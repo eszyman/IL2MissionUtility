@@ -10,7 +10,8 @@
   IL-2 Sturmovik: Great Battles `.Group` / `.Mission` text files for the
   Korea map.
 - `ui.rs` is the GUI anchor. Mode panels move into `src/ui/<mode>.rs`
-  (Template is `ui/builder.rs`). The other egui files are `shell.rs`
+  (Template is `ui/builder.rs`, Map is `ui/map.rs`, Airfield is
+  `ui/airfield.rs`). The other egui files are `shell.rs`
   (shared page chrome and widgets), `theme.rs` (design tokens, fonts,
   visuals) and `help.rs` (detached Help window). Every other file is
   logic/data with no egui imports.
@@ -41,7 +42,7 @@ work and no generation logic. Help content is rendered by `help.rs`.
 **All modes.**
 
 Mode panels live in `src/ui/<mode>.rs`, declared from `ui.rs`
-(`mod builder`, `mod map`). There is no `src/ui/mod.rs`: `ui.rs` is the
+(`mod builder`, `mod map`, `mod airfield`). There is no `src/ui/mod.rs`: `ui.rs` is the
 module, and the folder holds its children. Each child is an
 `impl GroupGeneratorApp` plus that mode's widgets. State fields stay on
 the app in `ui.rs`.
@@ -63,6 +64,13 @@ a newer AppData file merged on top). Placed fighters use
 `EasternFighter.svg` and `NatoFighter.svg` as authored (paint angle 0).
 Group text is still built by `frontlines.rs` and the other map modules.
 **Map.**
+
+### `ui/airfield.rs` — Airfield tab
+The Airfield page: load and export panels, the harvest section, field
+spawn, and the air-start bank. `ui.rs` calls `airfield_page`,
+`export_airfield`, `load_airfield`, and `poll_harvest`. State stays on
+the app. Group text is still built by `crate::airfield`, `harvest.rs`, and
+`airstart.rs`. **Airfield.**
 
 Since the 2026 redesign (`docs/ui-redesign/README.md`) every tab is a
 `*_page(ctx)` that adds fixed side panels and a center, each scrolling
@@ -140,10 +148,30 @@ the `Airfield` block, nearest-field split, link closure for logic up to
 20 km out), cleans it with `airfield.rs`, and files it into a database
 folder: `raw/` archive, `<name>_<country>.Group` + sidecars, `catalog.Group`
 (`AirfieldRecord` rows, upserted), `models.tsv`. `harvest_root` is pure;
-`harvest_file` does the I/O. `GenWatcher` polls the Missions folder and
-reports a rewrite once it has been stable for 1.5 s. Drops `#` comments and
-the `Options` header before parsing (`WindLayers` rows are not `.Group`
-syntax). **Airfield mode.**
+`harvest_file` does the I/O. `place_field_spawn` is a field spawn: it moves
+that field's fakefield to the hold-short, nose toward the runway, and writes
+its own aircraft list (not the air-start bank). Engine running uses
+`graphics\airfields\fakefield_rnwspawn.mgm` and
+`LuaScripts\WorldObjects\Airfields\fakefield_rnwspawn.txt`, `StartType` 1,
+`SnapTo` 0, altitude 0. Engine off, parking keeps that same hold-short and
+writes `StartType` 2 and `SnapTo` 2. It does not move the field onto a Type 3
+pad. `None` for the takeoff heading uses the base end; a heading picks the
+into-wind threshold. Defaults are the Korea Missions folder and
+`Template\MP Airfields`. `GenWatcher` polls the Missions folder and reports a
+rewrite once it has been stable for 1.5 s. Drops `#` comments and the
+`Options` header before parsing (`WindLayers` rows are not `.Group` syntax).
+**Airfield mode.**
+
+### `airstart.rs` — fake-field air starts
+A bank of `fakefield` airfields with a `Planes` list, shaped like
+`TemplateExamples/Airstart.Group`. Each entry has a coalition (NATO 601 /
+DPRK 502) and aircraft options (how many, skill, altitude, fuel, payload, mods, renew).
+`Number` `-1` is unlimited, matching the template.
+Facing is set on the map: the field icon stays upright and `direction.svg`
+points along `YOri` (0 = north). `field_group` writes one field;
+`combined_group` writes several. `plane_entry` writes one aircraft at a
+chosen `StartType` and `SnapTo`. An air start always passes `StartType` 0,
+`SnapTo` 0, and `fakefield.mgm`. **Airfield mode, Map mode, harvest.rs.**
 
 ### `bombers.rs` — Exclusive Activation
 Detects plans in template groups (`inspect_plan`, `BomberPlanInfo`:

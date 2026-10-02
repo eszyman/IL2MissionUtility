@@ -37,6 +37,8 @@ use crate::frontlines::{
     MapRefGroup, MapShipPack, PreviewKind, Season, TimelineMark, ARROW_TAIL_WIDTH, BATTLES,
     PLACE_MARGIN, TIMELINE, YEARS,
 };
+use crate::airstart::{self, PlacedAirStart};
+use crate::duplicate::duplicate_template;
 use crate::geo::{self, MAP_MAX, MAP_MIN};
 use crate::heightprobe;
 use crate::help::HelpTopic;
@@ -86,6 +88,8 @@ pub(super) enum MapDrawingMode {
     AttackArrow,
     PlaceEastObjective,
     PlaceNatoObjective,
+    /// Custom-place a bank air start. The bank index is `air_start_place`.
+    PlaceAirStart,
 }
 
 /// Map tool palette, top to bottom; keys 1–6 pick them (README §5.6).
@@ -110,6 +114,7 @@ pub(super) struct MapForces {
     east_objectives: Vec<(f64, f64)>,
     nato_objectives: Vec<(f64, f64)>,
     refs: Vec<MapRefGroup>,
+    air_starts: Vec<PlacedAirStart>,
     /// Drawn lines, only for Clear lines / salients / arrows; restored only when set.
     /// `ui.rs` reads this while settling undo, so the field is visible there.
     pub(super) lines: Option<MapLines>,
@@ -835,6 +840,7 @@ impl super::GroupGeneratorApp {
             east_objectives: self.east_objectives.clone(),
             nato_objectives: self.nato_objectives.clone(),
             refs: self.map_refs.clone(),
+            air_starts: self.placed_air_starts.clone(),
             lines: None,
         }
     }
@@ -859,6 +865,9 @@ impl super::GroupGeneratorApp {
         self.east_objectives = f.east_objectives;
         self.nato_objectives = f.nato_objectives;
         self.map_refs = f.refs;
+        self.placed_air_starts = f.air_starts;
+        self.air_start_drag = None;
+        self.air_start_heading_drag = None;
         self.ship_drag = None;
         self.ship_heading_drag = None;
         self.ground_drag = None;
@@ -958,6 +967,7 @@ impl super::GroupGeneratorApp {
             (
                 (&self.map_ships, &self.map_ground_east, &self.map_ground_nato, &self.map_fighters),
                 (&self.east_objectives, &self.nato_objectives, self.map_armies.len(), self.map_refs.len()),
+                &self.placed_air_starts,
                 (&self.custom_front_xz, &self.salients, &self.attack_arrows),
                 (a.x_min, a.x_max, a.z_min, a.z_max, self.front_t),
             )
@@ -1397,6 +1407,7 @@ impl super::GroupGeneratorApp {
         // The rest of a cancelled drag must not move the AO from a stale origin.
         self.map_drag_uv = None;
         self.map_drawing_mode = MapDrawingMode::None;
+        self.air_start_place = None;
     }
 
     /// Drop whatever is half drawn. Returns true if there was something.
@@ -1423,6 +1434,9 @@ impl super::GroupGeneratorApp {
             self.cancel_map_stroke();
         }
         self.map_drawing_mode = mode;
+        if mode != MapDrawingMode::PlaceAirStart {
+            self.air_start_place = None;
+        }
     }
 
     /// Anything Ctrl Z can take back as a drawing: finished marks (front
@@ -1459,6 +1473,16 @@ impl super::GroupGeneratorApp {
                 "Placing unit {} WP{} · click the map · right-click or Esc to cancel",
                 hit.spot_i() + 1,
                 wi + 1
+            ));
+        }
+        if self.map_drawing_mode == MapDrawingMode::PlaceAirStart {
+            let name = self
+                .air_start_place
+                .and_then(|i| self.air_starts.get(i))
+                .map(|f| f.name.as_str())
+                .unwrap_or("air start");
+            return Some(format!(
+                "Tool: Place {name} · Click to place · Shift for more · Esc to cancel"
             ));
         }
         MAP_TOOLS
@@ -1974,6 +1998,68 @@ impl super::GroupGeneratorApp {
                 self.wp_selected = None;
             }
         }
+        ui.add_space(8.0);
+        self.air_starts_forces(ui);
+    }
+
+    fn air_starts_forces(&mut self, ui: &mut egui::Ui) {
+        shell::section_title(ui, "Air starts", Some("from the Airfield tab"));
+        shell::hint(ui, "Drag to move. Right-drag turns the arrow.", false);
+        if self.air_starts.is_empty() {
+            shell::hint(ui, "Add air starts on the Airfield tab.", false);
+        }
+        let mut place_at: Option<usize> = None;
+        for (i, field) in self.air_starts.iter().enumerate() {
+            let active = self.map_drawing_mode == MapDrawingMode::PlaceAirStart
+                && self.air_start_place == Some(i);
+            ui.horizontal(|ui| {
+                ui.label(format!("{} · {}", field.name, field.side_label()));
+                if ui
+                    .add_sized([72.0, 28.0], egui::Button::selectable(active, "Place"))
+                    .on_hover_text("Click the map to place a copy. Shift places more.")
+                    .clicked()
+                {
+                    place_at = Some(i);
+                }
+            });
+        }
+        if let Some(i) = place_at {
+            self.pick_map_tool(MapDrawingMode::PlaceAirStart);
+            self.air_start_place = Some(i);
+        }
+        if !self.placed_air_starts.is_empty() {
+            ui.add_space(4.0);
+            let mut remove_at: Option<usize> = None;
+            for (i, placed) in self.placed_air_starts.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "{} · {:.0}°",
+                        placed.field.name,
+                        placed.field.heading_deg.rem_euclid(360.0)
+                    ));
+                    if ui.add_sized([72.0, 28.0], egui::Button::new("Remove")).clicked() {
+                        remove_at = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove_at {
+                let name = self.placed_air_starts[i].field.name.clone();
+                self.record_map_undo(format!("Removed {name}"));
+                self.placed_air_starts.remove(i);
+                self.air_start_drag = None;
+                self.air_start_heading_drag = None;
+            }
+            if ui
+                .add_sized([ui.available_width(), 28.0], egui::Button::new("Clear air starts"))
+                .clicked()
+            {
+                let n = self.placed_air_starts.len();
+                self.record_map_undo(format!("Cleared {n} air starts"));
+                self.placed_air_starts.clear();
+                self.air_start_drag = None;
+                self.air_start_heading_drag = None;
+            }
+        }
     }
 
     fn map_references_tab(&mut self, ui: &mut egui::Ui) {
@@ -2179,6 +2265,20 @@ impl super::GroupGeneratorApp {
             self.fighter_tex_east = Some(ctx.load_texture(
                 "eastern_fighter",
                 rasterize_svg(include_bytes!("../../assets/EasternFighter.svg"), 128),
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+        if self.air_start_tex_nato.is_none() {
+            self.air_start_tex_nato = Some(ctx.load_texture(
+                "air_start_nato",
+                rasterize_svg(include_bytes!("../../assets/AirStartNATO.svg"), 128),
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+        if self.air_start_tex_east.is_none() {
+            self.air_start_tex_east = Some(ctx.load_texture(
+                "air_start_dprk",
+                rasterize_svg(include_bytes!("../../assets/AirStartEastern.svg"), 128),
                 egui::TextureOptions::LINEAR,
             ));
         }
@@ -2425,6 +2525,11 @@ impl super::GroupGeneratorApp {
                     } else if let Some(hit) = self.hit_ground_spot(map_rect, pointer).filter(|h| self.unit_hit_unlocked(h.is_ag())) {
                         self.ground_heading_drag = Some(hit);
                         self.ship_heading_drag = None;
+                        self.air_start_heading_drag = None;
+                    } else if let Some(i) = self.hit_air_start(map_rect, pointer) {
+                        self.air_start_heading_drag = Some(i);
+                        self.ship_heading_drag = None;
+                        self.ground_heading_drag = None;
                     }
                 }
             }
@@ -2443,6 +2548,25 @@ impl super::GroupGeneratorApp {
                             let dx = hx - spot.x;
                             let dz = hz - spot.z;
                             spot.heading_deg = dz.atan2(dx).to_degrees().rem_euclid(360.0);
+                        }
+                    }
+                }
+            }
+            if self.air_start_heading_drag.is_some()
+                && (response.dragged_by(egui::PointerButton::Secondary)
+                    || response.drag_started_by(egui::PointerButton::Secondary))
+            {
+                heading_drag_now = true;
+                if let (Some(i), Some(pointer)) =
+                    (self.air_start_heading_drag, response.interact_pointer_pos())
+                {
+                    if let Some(placed) = self.placed_air_starts.get_mut(i) {
+                        let origin = world_to_pos(map_rect, placed.x, placed.z);
+                        if pointer.distance(origin) >= 6.0 {
+                            let (hx, hz) = uv_to_world(pos_to_uv(map_rect, pointer));
+                            let dx = hx - placed.x;
+                            let dz = hz - placed.z;
+                            placed.field.heading_deg = dz.atan2(dx).to_degrees().rem_euclid(360.0);
                         }
                     }
                 }
@@ -2479,6 +2603,7 @@ impl super::GroupGeneratorApp {
         if response.drag_stopped() {
             self.ship_heading_drag = None;
             self.ground_heading_drag = None;
+            self.air_start_heading_drag = None;
         }
 
         let pan_with_secondary = !heading_drag_now
@@ -2616,6 +2741,31 @@ impl super::GroupGeneratorApp {
                         }
                     }
                 }
+                MapDrawingMode::PlaceAirStart => {
+                    if response.clicked_by(egui::PointerButton::Primary) {
+                        let x = x.clamp(MAP_MIN, MAP_MAX);
+                        let z = z.clamp(MAP_MIN, MAP_MAX);
+                        if let Some(field) = self
+                            .air_start_place
+                            .and_then(|i| self.air_starts.get(i).cloned())
+                        {
+                            let name = field.name.clone();
+                            self.record_map_undo(format!("Placed {name}"));
+                            self.placed_air_starts.push(PlacedAirStart { field, x, z });
+                        }
+                        if !ui.input(|i| i.modifiers.shift) {
+                            self.map_drawing_mode = MapDrawingMode::None;
+                            self.air_start_place = None;
+                        }
+                    }
+                    if response.clicked_by(egui::PointerButton::Secondary) {
+                        if let Some(i) = self.hit_air_start(map_rect, pos) {
+                            let name = self.placed_air_starts[i].field.name.clone();
+                            self.record_map_undo(format!("Removed {name}"));
+                            self.placed_air_starts.remove(i);
+                        }
+                    }
+                }
                 MapDrawingMode::None => {
                     if response.clicked_by(egui::PointerButton::Secondary) && self.wp_selected.is_some()
                     {
@@ -2648,6 +2798,7 @@ impl super::GroupGeneratorApp {
                         }
                     }
                     if response.drag_started_by(egui::PointerButton::Primary) {
+                        self.air_start_drag = None;
                         if let Some(i) = self.hit_fighter_spot(map_rect, pos) {
                             self.fighter_drag = Some(i);
                             self.ship_drag = None;
@@ -2678,6 +2829,15 @@ impl super::GroupGeneratorApp {
                             self.wp_selected = None;
                             self.fighter_drag = None;
                             self.ship_drag = None;
+                            self.objective_drag = None;
+                            self.map_drag_uv = None;
+                        } else if let Some(i) = self.hit_air_start(map_rect, pos) {
+                            self.air_start_drag = Some(i);
+                            self.fighter_drag = None;
+                            self.ship_drag = None;
+                            self.ground_drag = None;
+                            self.wp_drag = None;
+                            self.wp_selected = None;
                             self.objective_drag = None;
                             self.map_drag_uv = None;
                         } else if let Some(hit) = self.hit_objective(map_rect, pos) {
@@ -2739,6 +2899,11 @@ impl super::GroupGeneratorApp {
                                     }
                                 }
                             }
+                        } else if let Some(i) = self.air_start_drag {
+                            if let Some(placed) = self.placed_air_starts.get_mut(i) {
+                                placed.x = x.clamp(MAP_MIN, MAP_MAX);
+                                placed.z = z.clamp(MAP_MIN, MAP_MAX);
+                            }
                         } else if let Some((eastern, i)) = self.objective_drag {
                             let list = if eastern {
                                 &mut self.east_objectives
@@ -2759,6 +2924,7 @@ impl super::GroupGeneratorApp {
                         self.ground_drag = None;
                         self.wp_drag = None;
                         self.objective_drag = None;
+                        self.air_start_drag = None;
                     }
                 }
             }
@@ -2896,6 +3062,7 @@ impl super::GroupGeneratorApp {
         self.draw_map_ships(&painter, map_rect);
         self.draw_map_ground(&painter, map_rect);
         self.draw_map_objectives(&painter, map_rect);
+        self.draw_air_starts(&painter, map_rect);
 
         // 8. Draw AABB Box
         // AO: dashed ACCENT_800 outline over a ~7 % accent wash (mockup 2f).
@@ -2911,7 +3078,17 @@ impl super::GroupGeneratorApp {
         painter.extend(egui::Shape::dashed_line(&corners, Stroke::new(1.5_f32, c::ACCENT_800), 6.0, 4.0));
 
         // Tool banner at the top-center (only while a tool or a WP pick is active).
-        let banner = if let Some(t) = MAP_TOOLS
+        let banner = if self.map_drawing_mode == MapDrawingMode::PlaceAirStart {
+            let name = self
+                .air_start_place
+                .and_then(|i| self.air_starts.get(i))
+                .map(|f| f.name.as_str())
+                .unwrap_or("air start");
+            Some((
+                format!("Place {name}"),
+                "Click to place · Shift for more · Esc to cancel".to_string(),
+            ))
+        } else if let Some(t) = MAP_TOOLS
             .iter()
             .find(|t| t.0 == self.map_drawing_mode && t.0 != MapDrawingMode::None)
         {
@@ -3406,6 +3583,51 @@ impl super::GroupGeneratorApp {
             GroundKind::Train => UnitKind::Train,
         };
         self.unit_tex(eastern, unit)
+    }
+
+    fn hit_air_start(&self, map_rect: Rect, pointer: Pos2) -> Option<usize> {
+        let mut best = None;
+        let mut best_d = 18.0_f32;
+        for (i, placed) in self.placed_air_starts.iter().enumerate() {
+            let d = world_to_pos(map_rect, placed.x, placed.z).distance(pointer);
+            if d <= best_d {
+                best_d = d;
+                best = Some(i);
+            }
+        }
+        best
+    }
+
+    fn draw_air_starts(&self, painter: &egui::Painter, map_rect: Rect) {
+        let size = Vec2::splat(26.0);
+        let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+        for placed in &self.placed_air_starts {
+            let pos = world_to_pos(map_rect, placed.x, placed.z);
+            let tex = if placed.field.nato {
+                self.air_start_tex_nato.as_ref()
+            } else {
+                self.air_start_tex_east.as_ref()
+            };
+            if let Some(tex) = tex {
+                painter.image(tex.id(), Rect::from_center_size(pos, size), uv, Color32::WHITE);
+            } else {
+                painter.circle_stroke(pos, 8.0, Stroke::new(2.0_f32, faction_map_color(!placed.field.nato)));
+            }
+            draw_map_label(
+                painter,
+                pos + Vec2::new(-13.0, 13.0),
+                &placed.field.name,
+                Color32::WHITE,
+                Align2::LEFT_BOTTOM,
+            );
+            if let Some(dir) = self.dir_tex.as_ref() {
+                let heading = placed.field.heading_deg.rem_euclid(360.0).to_radians() as f32;
+                let arrow_size = Vec2::new(10.0, 13.0);
+                let offset = 13.0 + arrow_size.y * 0.5 + 3.0;
+                let dir_vec = Vec2::new(heading.sin(), -heading.cos());
+                paint_rotated_image(painter, dir, pos + dir_vec * offset, arrow_size, heading, Color32::WHITE);
+            }
+        }
     }
 
     fn draw_map_objectives(&self, painter: &egui::Painter, map_rect: Rect) {
@@ -4624,6 +4846,25 @@ impl super::GroupGeneratorApp {
         self.front_focus = Some(battle.id);
     }
 
+    /// Fake-field air starts placed on the map, at the measured ground height.
+    fn stamp_air_starts(&mut self, root: &mut crate::ast::Il2Entity) {
+        if self.placed_air_starts.is_empty() {
+            return;
+        }
+        let xs: Vec<(f64, f64)> = self.placed_air_starts.iter().map(|p| (p.x, p.z)).collect();
+        let ys: Vec<f64> = if let Some(store) = self.terrain_store() {
+            xs.iter()
+                .map(|(x, z)| store.height_at(*x, *z).unwrap_or(0.0))
+                .collect()
+        } else {
+            vec![0.0; xs.len()]
+        };
+        let group = airstart::combined_group(&self.placed_air_starts, &ys);
+        let mut next = root.max_index().saturating_add(1);
+        let (clone, _) = duplicate_template(&group, &mut next);
+        root.children.push(clone);
+    }
+
     pub(super) fn generate_front_file(&mut self) {
         let fighter_packs = match self.build_map_fighter_packs() {
             Ok(p) => p,
@@ -4688,6 +4929,7 @@ impl super::GroupGeneratorApp {
                 return;
             }
         };
+        self.stamp_air_starts(&mut pack.root);
         let terrain_note = self.apply_terrain(&mut pack.root);
         let text = serialize_group(&pack.root);
         let suggested = format!("Korea_BaseMap_{}.Group", self.current_mark().date_label());

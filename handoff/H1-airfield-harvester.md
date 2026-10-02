@@ -71,11 +71,12 @@ attacks targeting them. **That Map-mode part is not built yet** (next phase).
 
 ## Known limits
 
-- `AxisHeading/AxisLength` are the principal axis of the `MCU_TR_TaxiGraph`
-  nodes (an approximate runway, grid north). Taxi nodes do not flag the runway
-  (`Runway = 0` everywhere). Legacy maps' `Airfield { Chart }` points are
-  counted but give no axis, because their local-frame rotation convention is
-  unverified.
+- `Runway = 0` marks a runway node and `RunwayEnd = 0` marks a threshold
+  (K13–K15: Type 1 centerline; the two `RunwayEnd` nodes are the ends).
+  `AxisHeading/AxisLength` are still the principal axis of every taxi node
+  (grid north), so they follow that runway and also take in the taxiways.
+  Legacy maps' `Airfield { Chart }` points are counted but give no axis,
+  because their local-frame rotation convention is unverified.
 - Timestamps are UTC (no chrono dependency; the build must stay offline).
 - `mapload.rs` does not scan `References/Airfields/` (no recursion). Wire it in
   with P3 or the Map-mode phase.

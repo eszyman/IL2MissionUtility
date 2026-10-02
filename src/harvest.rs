@@ -27,11 +27,14 @@
 //! nothing and later extractors can mine the archive.
 //!
 //! ## Runway axis
-//! Taxi-graph nodes do not mark the runway (`Runway = 0` everywhere in the
-//! K13–K15 exports). `AxisHeading` / `AxisLength` are the principal axis of
-//! the `MCU_TR_TaxiGraph` nodes — an approximation of the main runway, grid
-//! north. Older maps keep an `Airfield { Chart { Point } }` in airfield-local
-//! coordinates instead; those points are counted in `TaxiNodes` but give no axis.
+//! A taxi node with `Runway = 0` is on the runway. On the K13–K15 exports
+//! those are the Type 1 centerline points. A runway node that also has
+//! `RunwayEnd = 0` is a threshold; the other runway nodes omit `RunwayEnd`.
+//! `AxisHeading` / `AxisLength` are still the principal axis of every
+//! `MCU_TR_TaxiGraph` node (grid north, 0 = +X), so the figure follows that
+//! runway and also takes in the taxiways. Older maps keep an
+//! `Airfield { Chart { Point } }` in airfield-local coordinates instead;
+//! those points are counted in `TaxiNodes` but give no axis.
 //!
 //! ## Public API
 //! * `GEN_FILE`, `DEFAULT_RADIUS_M`, `DEFAULT_LINK_REACH_M`, `DEFAULT_DB_DIR`
@@ -40,15 +43,17 @@
 //! * `fn default_missions_dir` / `fn find_gen_file`
 //! * `fn harvest_root` — cut + clean airfields from a parsed mission (pure)
 //! * `fn harvest_file` — archive, harvest, write group/catalog/models (I/O)
+//! * `fn place_field_spawn` — move the fakefield to the hold-short and write planes
 //! * `struct GenWatcher` — polls `_gen.mission` and reports stable rewrites
 //!
 //! ## Used by
-//! * ui.rs (Airfield) — watcher toggle, Harvest now, Harvest a file
+//! * ui.rs (Airfield) — watcher toggle, Harvest now, Harvest a file, field-spawn export
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::airstart::{self, AirStartPlane};
 use crate::airfield::{
     clean_airfield, node_link_ids, scrub_deleted, strip_ai_planes, CleanReport,
     EASTERN_PLANE_COALITIONS, WESTERN_PLANE_COALITIONS,
@@ -61,7 +66,9 @@ use crate::serialize::serialize_group;
 pub const GEN_FILE: &str = "_gen.mission";
 pub const DEFAULT_RADIUS_M: f64 = 4000.0;
 pub const DEFAULT_LINK_REACH_M: f64 = 20000.0;
-pub const DEFAULT_DB_DIR: &str = "References/Airfields";
+/// Korea install. The Airfield tab starts here; the folder fields can still be changed.
+pub const DEFAULT_MISSIONS_DIR: &str = r"C:\Program Files\IL2Series\game\data\Missions";
+pub const DEFAULT_DB_DIR: &str = r"C:\Program Files\IL2Series\game\data\Template\MP Airfields";
 
 const CATALOG_FILE: &str = "catalog.Group";
 const MODELS_FILE: &str = "models.tsv";
@@ -151,7 +158,7 @@ struct Site {
 }
 
 pub fn default_missions_dir() -> Option<PathBuf> {
-    [STEAM_MISSIONS, STANDALONE_MISSIONS]
+    [DEFAULT_MISSIONS_DIR, STEAM_MISSIONS, STANDALONE_MISSIONS]
         .iter()
         .map(PathBuf::from)
         .find(|p| p.is_dir())
@@ -603,6 +610,359 @@ pub fn airfield_file_name(name: &str, country: i32) -> String {
     format!("{safe}_{country}.Group")
 }
 
+/// 80 m runway-spawn line, centered on the fakefield. Confirmed in
+/// `Graphics1.gtp` (`/graphics/airfields/fakefield_rnwspawn.mgm`).
+const RUNWAY_SPAWN_MODEL: &str = r"graphics\airfields\fakefield_rnwspawn.mgm";
+/// Matching script. Confirmed in `Scripts.gtp` and in
+/// `Pa38_Road_to_Manchuria_11.Mission`.
+const RUNWAY_SPAWN_SCRIPT: &str = r"LuaScripts\WorldObjects\Airfields\fakefield_rnwspawn.txt";
+
+/// IL-2 editor Start Type, from the integer switch in `IL2Editor.exe`:
+/// 0 In Air, 1 Engine On, 2 Engine Off, 3 Engine Cold.
+const START_ENGINE_ON: i32 = 1;
+const START_ENGINE_OFF: i32 = 2;
+
+/// IL-2 editor Snap To, from the integer switch in `IL2Editor.exe`:
+/// 0 None, 1 Runway, 2 Parking. Parking is 2. Shipped missions that write
+/// `SnapTo = 1` are snapping to the runway, not to a parking spot.
+const SNAP_PARKING: i32 = 2;
+const SNAP_RUNWAY: i32 = 1;
+/// Engine Cold. The editor's fourth Start Type. Not written by the default
+/// field-spawn choices; the plane name still recognizes it.
+const START_ENGINE_COLD: i32 = 3;
+/// Fuel at or above this is a long-range load. The field-spawn fuel slider
+/// stores a percent, so 0.95 is 95% and 1.0 is full.
+const LONG_RANGE_FUEL: f64 = 0.95;
+
+/// Where `place_field_spawn` put the fakefield.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpawnSpot {
+    pub x: f64,
+    pub z: f64,
+    pub heading_deg: f64,
+}
+
+/// A few metres either side of the threshold still counts as just short of it.
+/// Farther onto the runway is down the strip. Farther the other way is the overrun.
+const THRESHOLD_SLACK_M: f64 = 12.0;
+
+/// Move the fakefield and its entity, and write `planes` onto the field.
+///
+/// `takeoff_heading` is the into-wind heading in degrees (0 = north, `X`
+/// north, `Z` east). Pass it when the mission wind is known. `None` uses
+/// the base end: the `RunwayEnd` threshold closer to the buildings.
+///
+/// The fakefield stays on the taxi node just short of that threshold, off
+/// the centerline, facing the runway. It is not slid along the ramp and it
+/// is not moved onto a Type 3 pad. Engine running (`parking_snap` false)
+/// writes `StartType` 1 and `SnapTo` 0 on the 80 m runway-spawn model.
+/// Engine off, parking writes `StartType` 2 and `SnapTo` 2 and leaves the
+/// field on that same hold-short. A field with no Type 3 nodes still
+/// exports. `country`, when set, is written on the airfield (NATO 601 / DPRK 502).
+pub fn place_field_spawn(
+    group: &mut Il2Entity,
+    planes: &[AirStartPlane],
+    takeoff_heading: Option<f64>,
+    country: Option<i32>,
+) -> Result<SpawnSpot, String> {
+    if planes.is_empty() {
+        return Err("Add an aircraft before placing the field.".into());
+    }
+    let air = find_one_airfield(group)?;
+    let nodes = taxi_nodes_for(group, air.entity_id)?;
+    let ends = threshold_indexes(&nodes)?;
+    let departure = departure_index(group, air.index, &nodes, ends, takeoff_heading)?;
+    let far = 1 - departure;
+    let depart = &nodes[ends[departure]];
+    let far_node = &nodes[ends[far]];
+    let spot_i = hold_short(&nodes, depart, far_node)?;
+    let spot = SpawnSpot {
+        x: nodes[spot_i].x,
+        z: nodes[spot_i].z,
+        heading_deg: heading_toward_runway(&nodes[spot_i], depart, far_node),
+    };
+    write_spawn(group, air.index, air.entity_id, &spot, planes, country)?;
+    Ok(spot)
+}
+
+struct AirRef {
+    index: i32,
+    entity_id: i32,
+}
+
+struct TaxiNode {
+    x: f64,
+    z: f64,
+    runway: bool,
+    end: bool,
+}
+
+fn find_one_airfield(group: &Il2Entity) -> Result<AirRef, String> {
+    let mut found: Vec<AirRef> = Vec::new();
+    group.for_each(&mut |e| {
+        if e.block_type != "Airfield" {
+            return;
+        }
+        let Some(index) = e.index else { return };
+        let Some(entity_id) = int_prop(e, "LinkTrId") else { return };
+        found.push(AirRef { index, entity_id });
+    });
+    match found.len() {
+        1 => Ok(found.remove(0)),
+        0 => Err("This file has no airfield.".into()),
+        _ => Err("This file has more than one airfield.".into()),
+    }
+}
+
+fn taxi_nodes_for(group: &Il2Entity, entity_id: i32) -> Result<Vec<TaxiNode>, String> {
+    let mut graphs = Vec::new();
+    collect_graphs(group, &mut graphs);
+    let graph = graphs
+        .iter()
+        .find(|g| g.objects.contains(&entity_id))
+        .copied()
+        .or_else(|| (graphs.len() == 1).then(|| graphs[0]));
+    let Some(graph) = graph else {
+        return Err("The airfield has no taxi graph.".into());
+    };
+    let mut nodes = Vec::new();
+    collect_spawn_nodes(graph, &mut nodes);
+    if nodes.is_empty() {
+        return Err("The taxi graph has no nodes.".into());
+    }
+    Ok(nodes)
+}
+
+fn collect_graphs<'a>(e: &'a Il2Entity, out: &mut Vec<&'a Il2Entity>) {
+    if e.block_type == "MCU_TR_TaxiGraph" {
+        out.push(e);
+    }
+    for child in &e.children {
+        collect_graphs(child, out);
+    }
+}
+
+fn collect_spawn_nodes(e: &Il2Entity, out: &mut Vec<TaxiNode>) {
+    for child in &e.children {
+        if child.block_type == "Node" {
+            if let (Some(x), Some(z)) = (float_prop(child, "X"), float_prop(child, "Z")) {
+                let mut runway = false;
+                let mut end = false;
+                for data in &child.children {
+                    if data.block_type != "Data" {
+                        continue;
+                    }
+                    runway |= int_prop(data, "Runway") == Some(0);
+                    end |= int_prop(data, "RunwayEnd") == Some(0);
+                }
+                out.push(TaxiNode { x, z, runway, end });
+            }
+        } else {
+            collect_spawn_nodes(child, out);
+        }
+    }
+}
+
+fn threshold_indexes(nodes: &[TaxiNode]) -> Result<[usize; 2], String> {
+    let ends: Vec<usize> = nodes.iter().enumerate().filter(|(_, n)| n.end).map(|(i, _)| i).collect();
+    if ends.len() != 2 {
+        return Err(format!(
+            "This airfield has {} runway ends; a spawn needs two.",
+            ends.len()
+        ));
+    }
+    Ok([ends[0], ends[1]])
+}
+
+fn departure_index(
+    group: &Il2Entity,
+    air_index: i32,
+    nodes: &[TaxiNode],
+    ends: [usize; 2],
+    takeoff_heading: Option<f64>,
+) -> Result<usize, String> {
+    let headings = [
+        heading_between(&nodes[ends[0]], &nodes[ends[1]]),
+        heading_between(&nodes[ends[1]], &nodes[ends[0]]),
+    ];
+    if let Some(want) = takeoff_heading {
+        let d0 = heading_delta(headings[0], want);
+        let d1 = heading_delta(headings[1], want);
+        if (d0 - d1).abs() > 1e-6 {
+            return Ok(if d0 < d1 { 0 } else { 1 });
+        }
+    }
+    let (bx, bz) = building_centroid(group, air_index)?;
+    let d0 = dist2(nodes[ends[0]].x, nodes[ends[0]].z, bx, bz);
+    let d1 = dist2(nodes[ends[1]].x, nodes[ends[1]].z, bx, bz);
+    Ok(if d0 <= d1 { 0 } else { 1 })
+}
+
+fn building_centroid(group: &Il2Entity, skip_airfield: i32) -> Result<(f64, f64), String> {
+    let mut n = 0.0;
+    let mut sx = 0.0;
+    let mut sz = 0.0;
+    group.for_each(&mut |e| {
+        if e.index == Some(skip_airfield) {
+            return;
+        }
+        if e.block_type != "Block" && e.block_type != "Ground" {
+            return;
+        }
+        if let Some((x, z)) = e.pos_xz() {
+            sx += x;
+            sz += z;
+            n += 1.0;
+        }
+    });
+    if n == 0.0 {
+        return Err("No buildings to choose a runway end.".into());
+    }
+    Ok((sx / n, sz / n))
+}
+
+fn hold_short(nodes: &[TaxiNode], departure: &TaxiNode, far: &TaxiNode) -> Result<usize, String> {
+    let (ux, uz) = unit_toward(departure, far)?;
+    let mut best: Option<(f64, usize)> = None;
+    for (i, node) in nodes.iter().enumerate() {
+        if node.runway {
+            continue;
+        }
+        let along = (node.x - departure.x) * ux + (node.z - departure.z) * uz;
+        if along.abs() > THRESHOLD_SLACK_M {
+            continue;
+        }
+        let d = dist2(node.x, node.z, departure.x, departure.z);
+        if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+            best = Some((d, i));
+        }
+    }
+    best.map(|(_, i)| i).ok_or_else(|| {
+        "No taxi node sits just short of the runway threshold.".into()
+    })
+}
+
+/// Heading from `spawn` toward the nearest point on the runway segment.
+/// That is perpendicular to the centerline: the nose points at the strip,
+/// not down it. X is north, Z is east, 0 faces north.
+fn heading_toward_runway(spawn: &TaxiNode, departure: &TaxiNode, far: &TaxiNode) -> f64 {
+    let Ok((ux, uz)) = unit_toward(departure, far) else {
+        return 0.0;
+    };
+    let along = (spawn.x - departure.x) * ux + (spawn.z - departure.z) * uz;
+    let len = ((far.x - departure.x).powi(2) + (far.z - departure.z).powi(2)).sqrt();
+    let t = along.clamp(0.0, len);
+    let cx = departure.x + ux * t;
+    let cz = departure.z + uz * t;
+    let dx = cx - spawn.x;
+    let dz = cz - spawn.z;
+    if dx * dx + dz * dz < 0.25 {
+        return heading_between(departure, far);
+    }
+    dz.atan2(dx).to_degrees().rem_euclid(360.0)
+}
+
+fn unit_toward(from: &TaxiNode, to: &TaxiNode) -> Result<(f64, f64), String> {
+    let dx = to.x - from.x;
+    let dz = to.z - from.z;
+    let len = (dx * dx + dz * dz).sqrt();
+    if len < 1.0 {
+        return Err("The runway ends are in the same place.".into());
+    }
+    Ok((dx / len, dz / len))
+}
+
+fn heading_between(from: &TaxiNode, to: &TaxiNode) -> f64 {
+    (to.z - from.z).atan2(to.x - from.x).to_degrees().rem_euclid(360.0)
+}
+
+fn heading_delta(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
+fn write_spawn(
+    group: &mut Il2Entity,
+    air_index: i32,
+    entity_id: i32,
+    spot: &SpawnSpot,
+    planes: &[AirStartPlane],
+    country: Option<i32>,
+) -> Result<(), String> {
+    let x = format!("{:.3}", spot.x);
+    let z = format!("{:.3}", spot.z);
+    let heading = format!("{:.3}", spot.heading_deg.rem_euclid(360.0));
+    let mut wrote_air = false;
+    let mut wrote_entity = false;
+    group.for_each_mut(&mut |e| {
+        let is_air = e.block_type == "Airfield" && e.index == Some(air_index);
+        let is_entity = e.block_type == "MCU_TR_Entity" && e.index == Some(entity_id);
+        if !is_air && !is_entity {
+            return;
+        }
+        e.set_property("XPos", x.clone());
+        e.set_property("ZPos", z.clone());
+        e.set_property("YOri", heading.clone());
+        if is_air {
+            if let Some(country) = country {
+                e.set_property("Country", country.to_string());
+            }
+            wrote_air = true;
+            e.set_property("Model", format!("\"{RUNWAY_SPAWN_MODEL}\""));
+            e.set_property("Script", format!("\"{RUNWAY_SPAWN_SCRIPT}\""));
+            e.children.retain(|c| c.block_type != "Planes");
+            let mut list = Il2Entity::new("Planes");
+            for (i, plane) in planes.iter().enumerate() {
+                let (start_type, snap) = if plane.parking_snap {
+                    (START_ENGINE_OFF, SNAP_PARKING)
+                } else {
+                    (START_ENGINE_ON, 0)
+                };
+                let mut entry = airstart::plane_entry(plane, 36 + i as i32, start_type, 0, snap);
+                let name = field_spawn_name(start_type, snap, plane.payload_id, plane.fuel);
+                entry.set_property("Name", format!("\"{name}\""));
+                list.children.push(entry);
+            }
+            e.children.push(list);
+        }
+        if is_entity {
+            wrote_entity = true;
+        }
+    });
+    if !wrote_air || !wrote_entity {
+        return Err("The airfield entity link is broken.".into());
+    }
+    Ok(())
+}
+
+/// Plane `Name` Erik reads in the editor. Snap To wins over Start Type.
+/// Load follows: payload 0 is Clean, payload N is `Strike N`, and fuel at or
+/// above [`LONG_RANGE_FUEL`] replaces Clean or is appended after the strike.
+fn field_spawn_name(start_type: i32, snap_to: i32, payload_id: i32, fuel: f64) -> String {
+    let condition = if snap_to == SNAP_PARKING {
+        "Parked"
+    } else if snap_to == SNAP_RUNWAY {
+        "On runway"
+    } else if start_type == START_ENGINE_OFF || start_type == START_ENGINE_COLD {
+        "Parked"
+    } else if start_type == START_ENGINE_ON {
+        "At ramp"
+    } else {
+        "In air"
+    };
+    let long_range = fuel >= LONG_RANGE_FUEL;
+    let load = if payload_id > 0 && long_range {
+        format!("Strike {payload_id} - Long range")
+    } else if payload_id > 0 {
+        format!("Strike {payload_id}")
+    } else if long_range {
+        "Long range".to_string()
+    } else {
+        "Clean".to_string()
+    };
+    format!("{condition} - {load}")
+}
+
 /// Archive `source`, harvest it, and write groups, catalog and model list into `db`.
 pub fn harvest_file(
     source: &Path,
@@ -967,6 +1327,20 @@ mod tests {
         assert!(root.find_by_name("K-13_Suwon_AF").is_some());
     }
 
+    /// A Freeflight file can put a literal quote in a tail code (`""`).
+    /// That plane sits ahead of the start airfield, so the cut has to read past it.
+    #[test]
+    fn escaped_quote_in_player_plane_still_harvests_airfield() {
+        let body = "\
+Plane\r\n{\r\n  Name = \"\";\r\n  Index = 1;\r\n  XPos = 10.000;\r\n  YPos = 0.000;\r\n  ZPos = 10.000;\r\n  AILevel = 0;\r\n  TCode = \"   \"\"&\";\r\n}\r\n\
+Airfield\r\n{\r\n  Name = \"K-27_Yonpo_AF\";\r\n  Index = 2;\r\n  XPos = 0.000;\r\n  YPos = 0.000;\r\n  ZPos = 0.000;\r\n  Country = 601;\r\n}\r\n";
+        let (root, _) = parse_mission_with_header(&mission_text(body)).expect("parse");
+        let got = harvest_root(&root, &HarvestConfig::default());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].record.name, "K-27_Yonpo_AF");
+        assert_eq!(got[0].record.country, 601);
+    }
+
     #[test]
     fn cut_block_ignores_names_inside_quotes_and_words() {
         let text = "Group\r\n{\r\n  Name = \"Options {\";\r\n}\r\nOptionsX\r\n{\r\n}\r\nOptions\r\n{\r\n  A { B = 1; }\r\n}\r\nTail\r\n{\r\n}";
@@ -1129,6 +1503,232 @@ mod tests {
         assert_eq!(w.poll(t0 + STABLE_FOR), Some(gen_path.clone()));
         assert_eq!(w.poll(t0 + STABLE_FOR * 2), None, "reported once");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn korea_folders_are_the_defaults() {
+        assert_eq!(
+            DEFAULT_MISSIONS_DIR,
+            r"C:\Program Files\IL2Series\game\data\Missions"
+        );
+        assert_eq!(
+            DEFAULT_DB_DIR,
+            r"C:\Program Files\IL2Series\game\data\Template\MP Airfields"
+        );
+        let _ = default_missions_dir();
+    }
+
+    fn taxi_xz(root: &Il2Entity) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        root.for_each(&mut |e| {
+            if e.block_type == "Node" {
+                if let (Some(x), Some(z)) = (e.property("X"), e.property("Z")) {
+                    out.push((x.to_string(), z.to_string()));
+                }
+            }
+        });
+        out
+    }
+
+    fn find_block<'a>(e: &'a Il2Entity, pred: &impl Fn(&Il2Entity) -> bool) -> Option<&'a Il2Entity> {
+        if pred(e) {
+            return Some(e);
+        }
+        e.children.iter().find_map(|c| find_block(c, pred))
+    }
+
+    fn field_and_entity(root: &Il2Entity) -> (&Il2Entity, &Il2Entity) {
+        let air = find_block(root, &|e| e.block_type == "Airfield").expect("airfield");
+        let link = int_prop(air, "LinkTrId").unwrap();
+        let entity = find_block(root, &|e| e.block_type == "MCU_TR_Entity" && e.index == Some(link)).expect("entity");
+        (air, entity)
+    }
+
+    fn planes_of(air: &Il2Entity) -> &Il2Entity {
+        air.children.iter().find(|c| c.block_type == "Planes").expect("planes")
+    }
+
+    #[test]
+    fn k13_engine_running_holds_short_of_the_base_end() {
+        let mut root = k13();
+        let nodes_before = taxi_xz(&root);
+        let (air0, ent0) = field_and_entity(&root);
+        let air_y = air0.property("YPos").unwrap().to_string();
+        let ent_y = ent0.property("YPos").unwrap().to_string();
+        let link = air0.property("LinkTrId").unwrap().to_string();
+        let mis = ent0.property("MisObjID").unwrap().to_string();
+        let mut plane = crate::airstart::default_plane("f51d");
+        plane.number = 6;
+        plane.fuel = 0.4;
+        let planes = vec![plane];
+        let spot = place_field_spawn(&mut root, &planes, None, Some(601)).unwrap();
+        assert!(
+            (spot.x - 72007.346).abs() < 0.001 && (spot.z - 287796.226).abs() < 0.001,
+            "{spot:?}"
+        );
+        assert!((spot.heading_deg - 234.0).abs() < 0.05, "heading {}", spot.heading_deg);
+        assert!((heading_delta(spot.heading_deg, 144.0) - 90.0).abs() < 1.0);
+        let (air, ent) = field_and_entity(&root);
+        for obj in [air, ent] {
+            let x: f64 = obj.property("XPos").unwrap().parse().unwrap();
+            let z: f64 = obj.property("ZPos").unwrap().parse().unwrap();
+            let h: f64 = obj.property("YOri").unwrap().parse().unwrap();
+            assert!((x - spot.x).abs() < 0.001 && (z - spot.z).abs() < 0.001);
+            assert!((h - spot.heading_deg).abs() < 0.001);
+        }
+        assert_eq!(air.property("YPos"), Some(air_y.as_str()));
+        assert_eq!(ent.property("YPos"), Some(ent_y.as_str()));
+        assert_eq!(air.property("LinkTrId"), Some(link.as_str()));
+        assert_eq!(ent.property("MisObjID"), Some(mis.as_str()));
+        assert_eq!(ent.index, int_prop(air, "LinkTrId"));
+        assert_eq!(air.index, int_prop(ent, "MisObjID"));
+        assert_eq!(taxi_xz(&root), nodes_before);
+        let plane = &planes_of(air).children[0];
+        assert_eq!(plane.property("StartType"), Some("1"));
+        assert_eq!(plane.property("SnapTo"), Some("0"));
+        assert_eq!(plane.property("Altitude"), Some("0"));
+        assert_eq!(
+            air.property("Model"),
+            Some(r#""graphics\airfields\fakefield_rnwspawn.mgm""#)
+        );
+        assert_eq!(
+            air.property("Script"),
+            Some(r#""LuaScripts\WorldObjects\Airfields\fakefield_rnwspawn.txt""#)
+        );
+        assert_eq!(plane.property("Number"), Some("6"));
+        assert_eq!(plane.property("Fuel"), Some("0.4"));
+        assert_eq!(plane.property("Name"), Some("\"At ramp - Clean\""));
+        assert!(plane.property("Script").unwrap().contains("f51d"));
+        assert_eq!(air.property("Country"), Some("601"));
+        let northwest = dist2(spot.x, spot.z, 71948.326, 287712.612).sqrt();
+        let southeast = dist2(spot.x, spot.z, 69788.467, 289281.835).sqrt();
+        assert!(northwest < southeast, "spawn should be the northwest hold-short");
+        assert!(northwest < 120.0, "hold-short {northwest:.0} m from the threshold");
+        let nose = spot.heading_deg.to_radians();
+        let toward = nose.cos() * (71948.326 - spot.x) + nose.sin() * (287712.612 - spot.z);
+        assert!(toward > 0.0, "nose faces the runway");
+    }
+
+    #[test]
+    fn preferred_heading_picks_the_into_wind_threshold() {
+        let planes = vec![crate::airstart::default_plane("f51d")];
+        let mut base = k13();
+        let mut wind = k13();
+        let base_spot = place_field_spawn(&mut base, &planes, None, None).unwrap();
+        let wind_spot = place_field_spawn(&mut wind, &planes, Some(324.0), None).unwrap();
+        assert!((heading_delta(wind_spot.heading_deg, 324.0) - 90.0).abs() < 15.0, "{}", wind_spot.heading_deg);
+        let moved = dist2(base_spot.x, base_spot.z, wind_spot.x, wind_spot.z).sqrt();
+        assert!(moved > 1000.0, "into-wind end is the other threshold, moved {moved:.0} m");
+        let to_se = dist2(wind_spot.x, wind_spot.z, 69788.467, 289281.835).sqrt();
+        assert!(to_se < 120.0, "wind spawn {to_se:.0} m from the southeast threshold");
+    }
+
+    #[test]
+    fn k14_engine_running_stays_off_the_midfield_ramp() {
+        let mut root = parse_group_file(include_str!("../References/K14 AFB_mp.Group")).unwrap();
+        let before = taxi_xz(&root);
+        let planes = vec![crate::airstart::default_plane("f86a5")];
+        let spot = place_field_spawn(&mut root, &planes, None, None).unwrap();
+        assert!(
+            (spot.x - 106612.739).abs() < 0.001 && (spot.z - 268571.103).abs() < 0.001,
+            "{spot:?}"
+        );
+        assert!((heading_delta(spot.heading_deg, 135.0) - 90.0).abs() < 15.0, "{}", spot.heading_deg);
+        let to_threshold = dist2(spot.x, spot.z, 106649.0, 268611.0).sqrt();
+        let to_ramp = dist2(spot.x, spot.z, 106299.0, 269360.0).sqrt();
+        assert!(to_threshold < 80.0, "hold-short {to_threshold:.0} m from the northwest end");
+        assert!(to_ramp > 400.0, "engine running is {to_ramp:.0} m from the midfield ramp");
+        assert_eq!(taxi_xz(&root), before);
+        let (air, _) = field_and_entity(&root);
+        assert_eq!(planes_of(air).children[0].property("StartType"), Some("1"));
+    }
+
+    #[test]
+    fn parking_snap_stays_on_the_hold_short() {
+        let running = vec![crate::airstart::default_plane("f51d")];
+        let mut parked_plane = crate::airstart::default_plane("mig15bis");
+        parked_plane.parking_snap = true;
+        let parked = vec![parked_plane];
+
+        let mut hold = k13();
+        let hold_spot = place_field_spawn(&mut hold, &running, None, None).unwrap();
+        let mut root = k13();
+        let spot = place_field_spawn(&mut root, &parked, None, None).unwrap();
+        assert!((spot.x - hold_spot.x).abs() < 0.001 && (spot.z - hold_spot.z).abs() < 0.001);
+        assert!((spot.x - 72007.346).abs() < 0.001 && (spot.z - 287796.226).abs() < 0.001, "{spot:?}");
+        assert!((spot.heading_deg - hold_spot.heading_deg).abs() < 0.001);
+        let (air, ent) = field_and_entity(&root);
+        let x: f64 = air.property("XPos").unwrap().parse().unwrap();
+        let z: f64 = air.property("ZPos").unwrap().parse().unwrap();
+        let h: f64 = air.property("YOri").unwrap().parse().unwrap();
+        assert!((x - spot.x).abs() < 0.001 && (z - spot.z).abs() < 0.001);
+        assert!((h - spot.heading_deg).abs() < 0.001);
+        let ex: f64 = ent.property("XPos").unwrap().parse().unwrap();
+        let ez: f64 = ent.property("ZPos").unwrap().parse().unwrap();
+        assert!((ex - spot.x).abs() < 0.001 && (ez - spot.z).abs() < 0.001);
+        let plane = &planes_of(air).children[0];
+        assert_eq!(plane.property("StartType"), Some("2"));
+        assert_eq!(plane.property("SnapTo"), Some("2"));
+        assert_eq!(plane.property("Altitude"), Some("0"));
+        assert_eq!(plane.property("Name"), Some("\"Parked - Clean\""));
+        assert_eq!(
+            air.property("Model"),
+            Some(r#""graphics\airfields\fakefield_rnwspawn.mgm""#)
+        );
+
+        let bare = "\
+Group\r\n{\r\nAirfield\r\n{\r\nIndex = 1;\r\nLinkTrId = 2;\r\nXPos = 0;\r\nYPos = 1;\r\nZPos = 0;\r\nModel = \"graphics\\\\airfields\\\\fakefield.mgm\";\r\n}\r\nMCU_TR_Entity\r\n{\r\nIndex = 2;\r\nMisObjID = 1;\r\nXPos = 0;\r\nYPos = 1.2;\r\nZPos = 0;\r\n}\r\nMCU_TR_TaxiGraph\r\n{\r\nIndex = 3;\r\nObjects = [2];\r\nXPos = 0;\r\nZPos = 0;\r\nShape\r\n{\r\nNode\r\n{\r\nX = 0;\r\nZ = 0;\r\nData\r\n{\r\nRunway = 0;\r\nRunwayEnd = 0;\r\n}\r\n}\r\nNode\r\n{\r\nX = 1000;\r\nZ = 0;\r\nData\r\n{\r\nRunway = 0;\r\nRunwayEnd = 0;\r\n}\r\n}\r\nNode\r\n{\r\nX = 4;\r\nZ = 16;\r\n}\r\n}\r\n}\r\nBlock\r\n{\r\nIndex = 4;\r\nXPos = 10;\r\nZPos = 10;\r\nModel = \"m\";\r\n}\r\n}\r\n";
+        let mut bare = parse_group_file(bare).unwrap();
+        let spot = place_field_spawn(&mut bare, &parked, None, None).unwrap();
+        assert!((spot.x - 4.0).abs() < 0.001 && (spot.z - 16.0).abs() < 0.001, "{spot:?}");
+        let (air, _) = field_and_entity(&bare);
+        assert_eq!(planes_of(air).children[0].property("SnapTo"), Some("2"));
+        assert_eq!(planes_of(air).children[0].property("StartType"), Some("2"));
+    }
+
+    #[test]
+    fn field_spawn_name_states_the_condition_and_the_load() {
+        assert_eq!(field_spawn_name(1, 0, 0, 0.65), "At ramp - Clean");
+        assert_eq!(field_spawn_name(1, 0, 0, 0.94), "At ramp - Clean");
+        assert_eq!(field_spawn_name(2, 2, 0, 0.65), "Parked - Clean");
+        assert_eq!(field_spawn_name(2, 0, 0, 0.5), "Parked - Clean");
+        assert_eq!(field_spawn_name(3, 0, 0, 0.5), "Parked - Clean");
+        assert_eq!(field_spawn_name(1, 2, 0, 0.5), "Parked - Clean");
+        assert_eq!(field_spawn_name(1, 1, 0, 0.5), "On runway - Clean");
+        assert_eq!(field_spawn_name(2, 1, 0, 0.5), "On runway - Clean");
+        assert_eq!(field_spawn_name(0, 0, 0, 0.5), "In air - Clean");
+        assert_eq!(field_spawn_name(1, 0, 2, 0.5), "At ramp - Strike 2");
+        assert_eq!(field_spawn_name(1, 1, 2, 0.4), "On runway - Strike 2");
+        assert_eq!(field_spawn_name(1, 0, 0, 0.95), "At ramp - Long range");
+        assert_eq!(field_spawn_name(1, 0, 0, 1.0), "At ramp - Long range");
+        assert_eq!(field_spawn_name(2, 2, 0, 1.0), "Parked - Long range");
+        assert_eq!(field_spawn_name(1, 0, 2, 0.95), "At ramp - Strike 2 - Long range");
+
+        let mut strike = crate::airstart::default_plane("f51d");
+        strike.payload_id = 2;
+        strike.fuel = 0.4;
+        let mut long_range = crate::airstart::default_plane("f51d");
+        long_range.fuel = 0.95;
+        long_range.parking_snap = true;
+        let mut both = crate::airstart::default_plane("f51d");
+        both.payload_id = 2;
+        both.fuel = 1.0;
+        let mut root = k13();
+        place_field_spawn(&mut root, &[strike, long_range, both], None, None).unwrap();
+        let (air, _) = field_and_entity(&root);
+        let names: Vec<_> = planes_of(air)
+            .children
+            .iter()
+            .map(|p| p.property("Name").unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "\"At ramp - Strike 2\"".to_string(),
+                "\"Parked - Long range\"".to_string(),
+                "\"At ramp - Strike 2 - Long range\"".to_string(),
+            ]
+        );
     }
 
     /// Smoke test on a real game mission: `IL2_MISSION=<path> cargo test -- --ignored`.

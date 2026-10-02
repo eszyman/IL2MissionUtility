@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui::accesskit::{self as ak, Role};
 use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 
+use super::airfield::country_name;
 use super::builder::{skill_name, FIELD_LABEL_W};
 use super::map::{fighter_svg_north, rasterize_svg};
 use super::*;
@@ -1062,6 +1063,54 @@ fn airfield_panels_order_and_wording() {
     }
     assert_eq!(country_name(601), "USA");
     assert_eq!(country_name(999), "country 999");
+}
+
+#[test]
+fn air_start_bank_reaches_the_map() {
+    let mut h = Harness::new("air_starts");
+    h.tab("Airfield");
+    assert!(h.has("AIR STARTS"));
+    assert!(h.has("FIELD SPAWN"));
+    assert_eq!(h.app.field_planes[0].type_id, "f51d");
+    assert!(!h.app.field_planes[0].parking_snap);
+    h.click("Add air start");
+    assert!(h.has("Air start 1"));
+    assert!(h.has("Add aircraft"));
+    assert_eq!(h.app.air_starts[0].planes[0].type_id, "f51d");
+    let name = h.find("Air start 1");
+    let dprk = h
+        .all("DPRK")
+        .into_iter()
+        .find(|n| n.rect.top() >= name.rect.top() - 4.0)
+        .expect("air start coalition");
+    h.click_at(dprk.rect.center());
+    assert!(!h.app.air_starts[0].nato);
+    assert!(h.app.field_spawn_nato, "the field spawn coalition stays NATO");
+    assert_eq!(h.app.air_starts[0].country(), 502);
+    h.tab("Map");
+    h.click("Forces");
+    assert!(h.has("Air start 1 · DPRK"));
+    assert!(h.has("Place"));
+}
+
+#[test]
+fn field_spawn_planes_are_not_the_air_start_list() {
+    let mut h = Harness::new("field_spawn_lists");
+    h.tab("Airfield");
+    assert!(h.has("FIELD SPAWN"));
+    assert!(h.has("AIR STARTS"));
+    assert!(h.has("Export field spawn…"));
+    h.app.field_planes[0].type_id = "mig15bis".into();
+    h.app.field_planes[0].parking_snap = true;
+    h.app.field_planes[0].fuel = 0.4;
+    h.click("Add air start");
+    assert_eq!(h.app.air_starts[0].planes[0].type_id, "f51d");
+    assert!(!h.app.air_starts[0].planes[0].parking_snap);
+    h.app.air_starts[0].planes[0].type_id = "la11".into();
+    h.app.air_starts[0].planes[0].fuel = 0.2;
+    assert_eq!(h.app.field_planes[0].type_id, "mig15bis");
+    assert!(h.app.field_planes[0].parking_snap);
+    assert!((h.app.field_planes[0].fuel - 0.4).abs() < 1e-9);
 }
 
 // ── Per-tab status and saved state ────────────────────────────────────────

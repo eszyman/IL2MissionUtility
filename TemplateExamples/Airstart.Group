@@ -1,0 +1,121 @@
+Airfield
+{
+  Name = "AirStart";
+  Index = 35598;
+  LinkTrId = 35599;
+  XPos = 355916.408;
+  YPos = 4.013;
+  ZPos = 331791.849;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Model = "graphics\airfields\fakefield.mgm";
+  Script = "LuaScripts\WorldObjects\Airfields\fakefield.txt";
+  Country = 601;
+  Desc = "";
+  DamageReport = 50;
+  DamageThreshold = 1;
+  DeleteAfterDeath = 1;
+  Callsign = 0;
+  Callnum = 0;
+  Planes
+  {
+    Plane
+    {
+      SetIndex = 0;
+      Number = -1;
+      AILevel = 2;
+      StartType = 0;
+      SnapTo = 0;
+      Engageable = 1;
+      Vulnerable = 1;
+      LimitAmmo = 1;
+      AIRTBDecision = 1;
+      Renewable = 1;
+      PayloadId = 0;
+      ModMask = 11011;
+      Fuel = 0.65;
+      RouteTime = 0;
+      RenewTime = 1800;
+      Altitude = 1500;
+      Spotter = -1;
+      Model = "graphics\planes\f51d\f51d.mgm";
+      Script = "LuaScripts\WorldObjects\Planes\f51d.txt";
+      Name = "";
+      Skin = "";
+      BotSkin = "";
+      AvMods = "";
+      AvSkins = "";
+      AvPayloads = "";
+      AvBotSkins = "";
+      Callsign = 36;
+      Callnum = 0;
+      TCode = "%3a%3a%5f%21%22%23";
+      TCodeColors = "000000";
+      GunLoad = [0,0,1,1,1,1];
+      GunBelt = [0,0,0,0,0,0];
+      Emblem = 1;
+    }
+    Plane
+    {
+      SetIndex = 0;
+      Number = -1;
+      AILevel = 2;
+      StartType = 0;
+      SnapTo = 0;
+      Engageable = 1;
+      Vulnerable = 1;
+      LimitAmmo = 1;
+      AIRTBDecision = 1;
+      Renewable = 1;
+      PayloadId = 0;
+      ModMask = 1;
+      Fuel = 1;
+      RouteTime = 0;
+      RenewTime = 1800;
+      Altitude = 2500;
+      Spotter = -1;
+      Model = "graphics\planes\f84e\f84e.mgm";
+      Script = "LuaScripts\WorldObjects\Planes\f84e.txt";
+      Name = "";
+      Skin = "";
+      BotSkin = "";
+      AvMods = "";
+      AvSkins = "";
+      AvPayloads = "";
+      AvBotSkins = "";
+      Callsign = 37;
+      Callnum = 0;
+      TCode = "%3a%3a%5f%21%22%23%5f%22";
+      TCodeColors = "00000000";
+      GunLoad = [0,0,0,0,0,0];
+      GunBelt = [0,0,0,0,0,0];
+      Emblem = 0;
+    }
+  }
+  ReturnPlanes = 0;
+  Hydrodrome = 0;
+  RepairTimeMultiplier = 0;
+  RehealTimeMultiplier = 0;
+  RearmTimeMultiplier = 0;
+  RefuelTimeMultiplier = 0;
+  MaintenanceRadius = 10;
+}
+
+MCU_TR_Entity
+{
+  Index = 35599;
+  Name = "Airfield entity";
+  Desc = "";
+  Targets = [];
+  Objects = [];
+  XPos = 355916.408;
+  YPos = 4.213;
+  ZPos = 331791.849;
+  XOri = 0;
+  YOri = 0;
+  ZOri = 0;
+  Enabled = 1;
+  MisObjID = 35598;
+}
+

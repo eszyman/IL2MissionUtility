@@ -11,7 +11,10 @@
 //! * Properties: `Key = Value;` where Key is an identifier **or an integer**
 //!   (e.g. `Damaged` table rows like `-1 = 1;`) and Value is a quoted string,
 //!   an integer array `[1, 2]`, or bare text up to `;` (clock times
-//!   `13:0:0`, dotted dates `1.6.1951`, plain numbers).
+//!   `13:0:0`, dotted dates `1.6.1951`, plain numbers). A doubled quote
+//!   inside a string (`""`) is a literal `"`, the way the game writes a
+//!   tail code such as `TCode = "   ""&";`. The raw text is kept, escapes
+//!   included, so a later serialize writes the same bytes.
 //! * List items: a quoted string terminated by `;` (e.g. `Trailers`) or an
 //!   unquoted `x, y;` coordinate pair (`MCU_TR_InfluenceArea.Boundary`).
 //!   Stored as properties with an empty key.
@@ -45,7 +48,7 @@
 
 
 use nom::branch::alt;
-use nom::bytes::complete::take_till;
+use nom::bytes::complete::{tag, take_while1};
 use nom::character::complete::{char, digit1, multispace0, satisfy};
 use nom::combinator::{map, opt, recognize};
 use nom::error::{Error, ErrorKind};
@@ -96,8 +99,18 @@ pub fn parse_integer_array(input: &str) -> IResult<&str, Vec<i32>> {
     .parse(input)
 }
 
+/// Interior of a `"..."` value. `""` is one literal quote, not the closer.
+/// The slice is the raw interior, so `""` stays doubled for a lossless write.
 fn quoted_string_inner(input: &str) -> IResult<&str, &str> {
-    delimited(char('"'), take_till(|c| c == '"'), char('"')).parse(input)
+    delimited(
+        char('"'),
+        recognize(many0(alt((
+            tag("\"\""),
+            take_while1(|c: char| c != '"'),
+        )))),
+        char('"'),
+    )
+    .parse(input)
 }
 
 fn quoted_list_item(input: &str) -> IResult<&str, String> {
@@ -354,6 +367,14 @@ mod tests {
         assert_eq!(entity.property("Name"), Some("\"Truck Run\""));
         assert_eq!(entity.property("Desc"), Some("\"\""));
         assert!(entity.children.is_empty());
+    }
+
+    #[test]
+    fn quoted_value_keeps_doubled_quote() {
+        let src = "Plane\r\n{\r\n  Name = \"\";\r\n  Index = 1;\r\n  TCode = \"   \"\"&\";\r\n}\r\n";
+        let entity = parse_group_file(src).expect("parse");
+        assert_eq!(entity.property("TCode"), Some("\"   \"\"&\""));
+        assert_eq!(crate::serialize::serialize_group(&entity), src);
     }
 
     #[test]
