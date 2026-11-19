@@ -7,7 +7,9 @@
 //! together; each one keeps its own field-spawn aircraft. Instructions sit
 //! at the top of the right column. The list then splits airbases and every
 //! air start inside the map area from the rest, then by DPRK or NATO, and
-//! marks a field with no runway group as data required.
+//! marks a field with no runway group as data required. A harvested file
+//! whose country sits on the wrong side of the front is left out. With no
+//! front drawn on the map, that line is the 38th parallel.
 //!
 //! `ui.rs` is the anchor. It owns the app struct (the `airfield_*` /
 //! `air_start*` / `harvest_*` fields), the mode rail, and the shortcuts,
@@ -32,7 +34,7 @@ use crate::airfield::{
 };
 use crate::airstart::{self, AirStartPlane};
 use crate::ast::Il2Entity;
-use crate::frontlines::PLACE_MARGIN;
+use crate::frontlines::{MapRefGroup, PLACE_MARGIN};
 use crate::harvest::{GenWatcher, HarvestOutcome, find_gen_file, harvest_file, place_field_spawn};
 use crate::help::HelpTopic;
 use crate::korea_fields::{self, HarvestHit};
@@ -47,6 +49,17 @@ use super::{
     AppMode, MapDrawingMode, Status, builder, center_panel, country_short, dialog, empty_state,
     group_digits, labeled_slider_suffix, mode_slot, save_with_sidecars, side_panel,
 };
+
+/// One harvested file kept so a later front can swap in the other coalition.
+/// Aircraft edits stay on the file while that coalition is off the list.
+#[derive(Clone)]
+pub(super) struct PooledAirbase {
+    pub group: MapRefGroup,
+    pub from_folder: bool,
+    pub planes: Vec<AirStartPlane>,
+    pub nato: Option<bool>,
+    pub western: Option<bool>,
+}
 
 /// One row of `catalog.Group`. Kept so a field inside the map area can be
 /// named even when its harvested group file is missing.
@@ -627,14 +640,24 @@ impl super::GroupGeneratorApp {
         }
     }
 
-    /// The drawn front, or the period line when the map is still on the timeline.
+    /// The front that decides which coalition owns a field. A line drawn on
+    /// the map wins. With none, the 38th parallel is the front.
     fn front_for_sides(&self) -> Vec<(f64, f64)> {
         let raw = if self.custom_front_xz.len() >= 2 {
             self.custom_front_xz.clone()
         } else {
-            crate::frontlines::preview_front_xz(self.front_t)
+            crate::geo::parallel_38_xz()
         };
         crate::frontlines::densify(&raw, 4_000.0)
+    }
+
+    /// Salients belong to a line the user drew. They do not ride the 38th.
+    fn salients_for_sides(&self) -> &[Vec<(f64, f64)>] {
+        if self.custom_front_xz.len() >= 2 {
+            self.salients.as_slice()
+        } else {
+            &[]
+        }
     }
 
     pub(super) fn airbase_dup_dialog(&mut self, ctx: &egui::Context) {
@@ -697,8 +720,10 @@ impl super::GroupGeneratorApp {
                 buckets.push((key, vec![copy]));
             }
         };
+        let front = self.front_for_sides();
+        let salients = self.salients_for_sides();
         for slot in &self.airbases {
-            if !airbase_in_area(&slot.root, area) {
+            if !self.airbase_in_play(slot) {
                 continue;
             }
             let id = provisions::airfield_identity(&slot.root, &slot.path);
@@ -728,6 +753,12 @@ impl super::GroupGeneratorApp {
                     .any(|slot| same_airbase_file(&slot.path, &record.file))
             {
                 continue;
+            }
+            if let Some(nato) = country_is_nato(record.country) {
+                let on_dprk = on_dprk_side(&front, salients, record.x, record.z);
+                if nato == on_dprk {
+                    continue;
+                }
             }
             let key = korea_fields::k_code(&record.name).unwrap_or_else(|| record.name.clone());
             push(
@@ -767,33 +798,23 @@ impl super::GroupGeneratorApp {
     }
 
     /// Harvested airfields for the list and the base map. A copy the user
-    /// removed stays out. If that was the coalition this side of the front
-    /// would have used, the copy they kept is placed instead.
+    /// removed stays out. A file whose country is on the wrong side of the
+    /// front stays out too, even when it is the only harvest for that field.
     pub(super) fn airfields_for_map(
         &self,
-        groups: Vec<crate::frontlines::MapRefGroup>,
+        groups: Vec<MapRefGroup>,
     ) -> provisions::AirfieldPlacement {
-        let dropped = |path: &Path| {
-            self.airbase_hidden.iter().any(|hidden| hidden == path)
-                || self
-                    .catalog_hidden
-                    .iter()
-                    .any(|file| same_airbase_file(path, file))
-        };
-        let (hidden_groups, visible): (Vec<_>, Vec<_>) =
-            groups.into_iter().partition(|group| dropped(&group.path));
-        let mut placed = self.place_harvested_airfields(visible.clone());
-        let mut have: Vec<String> = placed.groups.iter().map(airfield_key).collect();
-        let hidden_keys: Vec<String> = hidden_groups.iter().map(airfield_key).collect();
-        for group in visible {
-            let key = airfield_key(&group);
-            if have.iter().any(|kept| kept == &key) || !hidden_keys.iter().any(|hid| hid == &key) {
-                continue;
-            }
-            have.push(key);
-            placed.groups.push(group);
-        }
-        placed
+        let visible = groups
+            .into_iter()
+            .filter(|group| {
+                !self.airbase_hidden.iter().any(|hidden| hidden == &group.path)
+                    && !self
+                        .catalog_hidden
+                        .iter()
+                        .any(|file| same_airbase_file(&group.path, file))
+            })
+            .collect();
+        self.place_harvested_airfields(visible)
     }
 
     fn show_air_start(&mut self, row: &StartRow) {
@@ -917,13 +938,13 @@ impl super::GroupGeneratorApp {
         let listed = self
             .airbases
             .iter()
-            .filter(|slot| airbase_in_area(&slot.root, area))
+            .filter(|slot| self.airbase_in_play(slot))
             .count();
         let count = listed + starts.len();
         shell::section_title(ui, "Airbases", Some(&count.to_string()));
         shell::hint(
             ui,
-            "DPRK is north of the front and NATO is south. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.",
+            "DPRK is north of the front and NATO is south. A country on the wrong side of that line is left out. With no front drawn, the line is the 38th parallel. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.",
             false,
         );
         if self.front_aabb == WorldAabb::full_map() {
@@ -964,9 +985,10 @@ impl super::GroupGeneratorApp {
             self.add_airbase_file();
         }
         let front = self.front_for_sides();
+        let salients = self.salients_for_sides();
         let mut inside = Vec::new();
         for (i, slot) in self.airbases.iter().enumerate() {
-            if airbase_in_area(&slot.root, area) {
+            if self.airbase_in_play(slot) {
                 inside.push(i);
             }
         }
@@ -975,7 +997,7 @@ impl super::GroupGeneratorApp {
             &self.airbases,
             area,
             &front,
-            &self.salients,
+            salients,
         );
         gaps.retain(|gap| !self.catalog_hidden.iter().any(|file| file == &gap.file));
         if inside.is_empty() && gaps.is_empty() && starts.is_empty() {
@@ -989,7 +1011,7 @@ impl super::GroupGeneratorApp {
             let mut nato_slots = Vec::new();
             for i in inside {
                 let dprk = airbase_point(&self.airbases[i].root)
-                    .is_some_and(|(x, z)| on_dprk_side(&front, &self.salients, x, z));
+                    .is_some_and(|(x, z)| on_dprk_side(&front, salients, x, z));
                 if dprk {
                     dprk_slots.push(i);
                 } else {
@@ -999,7 +1021,7 @@ impl super::GroupGeneratorApp {
             let mut dprk_gaps = Vec::new();
             let mut nato_gaps = Vec::new();
             for gap in gaps {
-                if on_dprk_side(&front, &self.salients, gap.x, gap.z) {
+                if on_dprk_side(&front, salients, gap.x, gap.z) {
                     dprk_gaps.push(gap);
                 } else {
                     nato_gaps.push(gap);
@@ -1354,10 +1376,23 @@ impl super::GroupGeneratorApp {
             }
         };
         let outside = !airbase_in_area(&root, self.front_aabb.expanded(PLACE_MARGIN));
+        let side_ok = airbase_matches_side(
+            &root,
+            &path,
+            &self.front_for_sides(),
+            self.salients_for_sides(),
+        );
         let mut slot = AirbaseSlot::scanned(path.clone(), root);
         slot.from_folder = false;
         self.airbases.push(slot);
         let index = self.airbases.len() - 1;
+        if !side_ok {
+            self.status = Status::Info(format!(
+                "Added {}. Its country is on the wrong side of the front, so it stays off the list.",
+                path.display()
+            ));
+            return;
+        }
         if outside {
             self.status = Status::Info(format!(
                 "Added {}. It is outside this area, so it stays off the list.",
@@ -1466,6 +1501,7 @@ impl super::GroupGeneratorApp {
     fn sync_airbases(&mut self) {
         let first = self.airbase_scan_dir.is_empty();
         self.ensure_airbase_list();
+        self.reconcile_airbase_sides();
         if !first {
             return;
         }
@@ -1504,6 +1540,8 @@ impl super::GroupGeneratorApp {
     /// field that has none.
     fn apply_imported_field_spawns(&mut self, overwrite: bool) {
         let pending = self.imported_fields.clone();
+        let front = self.front_for_sides();
+        let salients = self.salients_for_sides().to_vec();
         let mut filled_folder = Vec::new();
         for imported in &pending {
             let imported_id =
@@ -1529,7 +1567,10 @@ impl super::GroupGeneratorApp {
                     filled_folder.push((imported_id.key, imported_id.country));
                 }
             } else {
-                self.airbases.push(slot_from_imported(imported));
+                let slot = slot_from_imported(imported);
+                if airbase_matches_side(&slot.root, &slot.path, &front, &salients) {
+                    self.airbases.push(slot);
+                }
             }
         }
         if !filled_folder.is_empty() {
@@ -1563,29 +1604,39 @@ impl super::GroupGeneratorApp {
             .into_iter()
             .filter_map(|path| provisions::load_group(&path).ok())
             .collect();
-        let placed = self.airfields_for_map(loaded);
-        self.airfield_coalition_notes = placed.notes;
-        let old = std::mem::take(&mut self.airbases);
-        let mut next = Vec::new();
-        for group in placed.groups {
-            if let Some(prev) = old.iter().find(|s| s.path == group.path) {
-                let mut slot = prev.clone();
-                slot.info = inspect_airfield(&group.entity);
-                slot.root = group.entity;
-                slot.from_folder = true;
-                next.push(slot);
+        let mut pool = Vec::new();
+        for group in loaded {
+            pool.push(PooledAirbase {
+                group,
+                from_folder: true,
+                planes: Vec::new(),
+                nato: None,
+                western: None,
+            });
+        }
+        for slot in &self.airbases {
+            if slot.from_folder || pool.iter().any(|p| p.group.path == slot.path) {
                 continue;
             }
-            next.push(AirbaseSlot::scanned(group.path, group.entity));
+            pool.push(PooledAirbase {
+                group: MapRefGroup {
+                    path: slot.path.clone(),
+                    entity: slot.root.clone(),
+                },
+                from_folder: false,
+                planes: slot.planes.clone(),
+                nato: Some(slot.nato),
+                western: Some(slot.western),
+            });
         }
-        for slot in old {
-            if !slot.from_folder && next.iter().all(|s| s.path != slot.path) {
-                next.push(slot);
+        for extra in &self.airbase_pool {
+            if extra.from_folder || pool.iter().any(|p| p.group.path == extra.group.path) {
+                continue;
             }
+            pool.push(extra.clone());
         }
-        next.retain(|slot| !self.airbase_hidden.iter().any(|path| path == &slot.path));
-        self.airbases = next;
-        self.apply_imported_field_spawns(false);
+        self.airbase_pool = pool;
+        self.airbase_side_stamp = None;
         self.airbase_index = crate::harvest::read_catalog(&dir.join("catalog.Group"))
             .unwrap_or_default()
             .into_iter()
@@ -1597,16 +1648,143 @@ impl super::GroupGeneratorApp {
                 country: record.country,
             })
             .collect();
+        self.reconcile_airbase_sides();
+    }
+
+    /// Rebuild the airbase list from the harvested files when the front, a
+    /// salient, or a removal changes which coalition belongs on each side.
+    pub(super) fn reconcile_airbase_sides(&mut self) {
+        if self.front_stroke.is_some() {
+            return;
+        }
+        let stamp = self.airbase_side_stamp_now();
+        if self.airbase_side_stamp == Some(stamp) {
+            return;
+        }
+        if self.airbase_pool.is_empty() {
+            self.airbase_side_stamp = Some(stamp);
+            return;
+        }
+        for slot in &self.airbases {
+            if let Some(pooled) = self
+                .airbase_pool
+                .iter_mut()
+                .find(|pooled| pooled.group.path == slot.path)
+            {
+                pooled.planes = slot.planes.clone();
+                pooled.nato = Some(slot.nato);
+                pooled.western = Some(slot.western);
+            }
+        }
+        let groups = self
+            .airbase_pool
+            .iter()
+            .map(|pooled| pooled.group.clone())
+            .collect();
+        let placed = self.airfields_for_map(groups);
+        self.airfield_coalition_notes = placed.notes;
+        let old = std::mem::take(&mut self.airbases);
+        let mut next = Vec::new();
+        for group in placed.groups {
+            let from_folder = self
+                .airbase_pool
+                .iter()
+                .find(|pooled| pooled.group.path == group.path)
+                .is_none_or(|pooled| pooled.from_folder);
+            if let Some(prev) = old.iter().find(|slot| slot.path == group.path) {
+                let mut slot = prev.clone();
+                slot.root = group.entity;
+                slot.info = inspect_airfield(&slot.root);
+                slot.from_folder = from_folder;
+                next.push(slot);
+                continue;
+            }
+            let mut slot = AirbaseSlot::scanned(group.path.clone(), group.entity);
+            slot.from_folder = from_folder;
+            if let Some(pooled) = self
+                .airbase_pool
+                .iter()
+                .find(|pooled| pooled.group.path == slot.path)
+            {
+                slot.planes = pooled.planes.clone();
+                if let Some(nato) = pooled.nato {
+                    slot.nato = nato;
+                }
+                if let Some(western) = pooled.western {
+                    slot.western = western;
+                }
+            }
+            next.push(slot);
+        }
+        for slot in old {
+            if !slot.from_folder && next.iter().all(|kept| kept.path != slot.path) {
+                next.push(slot);
+            }
+        }
+        next.retain(|slot| !self.airbase_hidden.iter().any(|path| path == &slot.path));
+        self.airbases = next;
+        self.apply_imported_field_spawns(false);
+        if self
+            .airfield_path
+            .as_ref()
+            .is_some_and(|path| self.airbases.iter().all(|slot| &slot.path != path))
+        {
+            self.airfield_path = None;
+            self.airfield_root = None;
+            self.airfield_info = None;
+        }
+        self.airbase_side_stamp = Some(stamp);
+    }
+
+    fn airbase_side_stamp_now(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        self.custom_front_xz.len().hash(&mut hasher);
+        for &(x, z) in &self.custom_front_xz {
+            x.to_bits().hash(&mut hasher);
+            z.to_bits().hash(&mut hasher);
+        }
+        for ring in &self.salients {
+            for &(x, z) in ring {
+                x.to_bits().hash(&mut hasher);
+                z.to_bits().hash(&mut hasher);
+            }
+        }
+        for path in &self.airbase_hidden {
+            path.hash(&mut hasher);
+        }
+        for file in &self.catalog_hidden {
+            file.hash(&mut hasher);
+        }
+        for pooled in &self.airbase_pool {
+            pooled.group.path.hash(&mut hasher);
+            pooled.from_folder.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     pub(super) fn place_harvested_airfields(
         &self,
-        groups: Vec<crate::frontlines::MapRefGroup>,
+        groups: Vec<MapRefGroup>,
     ) -> provisions::AirfieldPlacement {
         let front = self.front_for_sides();
+        let salients = self.salients_for_sides();
         provisions::place_matching_coalition(groups, |x, z| {
-            !on_dprk_side(&front, &self.salients, x, z)
+            !on_dprk_side(&front, salients, x, z)
         })
+    }
+
+    /// Inside the map area, and the file's country holds that side of the front.
+    pub(super) fn airbase_in_play(&self, slot: &AirbaseSlot) -> bool {
+        let area = self.front_aabb.expanded(PLACE_MARGIN);
+        airbase_in_area(&slot.root, area)
+            && airbase_matches_side(
+                &slot.root,
+                &slot.path,
+                &self.front_for_sides(),
+                self.salients_for_sides(),
+            )
     }
 
     pub(super) fn korea_fields_panel(&self, ui: &mut egui::Ui) {
@@ -1614,7 +1792,7 @@ impl super::GroupGeneratorApp {
             &self.harvest_hits(),
             self.front_aabb.expanded(PLACE_MARGIN),
             &self.front_for_sides(),
-            &self.salients,
+            self.salients_for_sides(),
         );
         ui.add_space(8.0);
         ui.separator();
@@ -1967,9 +2145,17 @@ fn airbase_needs_data(root: &Il2Entity) -> bool {
     airfields != 1 || ends < 2
 }
 
-fn airfield_key(group: &crate::frontlines::MapRefGroup) -> String {
-    let id = provisions::airfield_identity(&group.entity, &group.path);
-    korea_fields::k_code(&id.key).unwrap_or(id.key)
+fn airbase_matches_side(
+    root: &Il2Entity,
+    path: &Path,
+    front: &[(f64, f64)],
+    salients: &[Vec<(f64, f64)>],
+) -> bool {
+    let Some((x, z)) = airbase_point(root) else {
+        return true;
+    };
+    let nato = guess_nato(root, path);
+    nato != on_dprk_side(front, salients, x, z)
 }
 
 fn same_airbase_file(path: &Path, file: &str) -> bool {

@@ -381,6 +381,10 @@ struct GroupGeneratorApp {
     provisions_loaded_for: String,
     /// Harvested airfields, each with its own field-spawn list.
     airbases: Vec<airfield::AirbaseSlot>,
+    /// Every harvested file, including the coalition the front left out.
+    airbase_pool: Vec<airfield::PooledAirbase>,
+    /// Front and hidden-list stamp of the last coalition pass.
+    airbase_side_stamp: Option<u64>,
     /// Defined-airfield aircraft from the last base-map load. Applied again
     /// when the database folder is scanned.
     imported_fields: Vec<crate::airstart::ImportedField>,
@@ -683,6 +687,8 @@ impl Default for GroupGeneratorApp {
             map_provision_errors: Vec::new(),
             provisions_loaded_for: String::new(),
             airbases: Vec::new(),
+            airbase_pool: Vec::new(),
+            airbase_side_stamp: None,
             imported_fields: Vec::new(),
             airbase_hidden: Vec::new(),
             catalog_hidden: Vec::new(),

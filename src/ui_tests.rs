@@ -1679,7 +1679,7 @@ fn preloaded_airbase_can_be_removed_restored_and_added() {
     let extra = std::env::temp_dir().join(format!("il2_add_airbase_{}.Group", std::process::id()));
     std::fs::write(
         &extra,
-        tiny_named_group_at("Kimpo", "151000.000", "151000.000"),
+        tiny_named_group_at("Kimpo", "142000.000", "151000.000"),
     )
     .unwrap();
     dialog::answer(vec![extra.clone()]);
@@ -1689,7 +1689,7 @@ fn preloaded_airbase_can_be_removed_restored_and_added() {
 }
 
 #[test]
-fn double_loaded_airbase_offers_a_removal() {
+fn two_country_files_keep_the_side_that_holds_the_field() {
     let mut h = Harness::new("airbase_dup");
     let db = PathBuf::from(&h.app.harvest_db_dir);
     std::fs::create_dir_all(&db).unwrap();
@@ -1739,16 +1739,84 @@ fn double_loaded_airbase_offers_a_removal() {
         crate::mapclip::WorldAabb::from_corners(140_000.0, 140_000.0, 160_000.0, 160_000.0);
     h.app.custom_front_xz = vec![(148_000.0, 0.0), (148_000.0, 499_200.0)];
     h.tab("Airfield");
-    assert!(h.has("Airbase loaded twice"), "{:?}", h.labels());
-    assert!(h.has("Remove PRC · K-23_Pyongyang_AF"), "{:?}", h.labels());
-    assert!(h.has("Remove USA · K-23_Pyongyang_AF"), "{:?}", h.labels());
-    h.click("Remove USA · K-23_Pyongyang_AF");
-    assert!(!h.has("Airbase loaded twice"), "{:?}", h.labels());
+    assert!(
+        !h.has("Airbase loaded twice"),
+        "the USA copy is north of the front, so it is dropped: {:?}",
+        h.labels()
+    );
     assert_eq!(h.app.airbases.len(), 1);
     assert_eq!(h.app.airbases[0].path, prc);
     assert!(
         usa.is_file(),
         "removing a copy leaves the harvest file on disk"
+    );
+}
+
+#[test]
+fn airfield_drops_the_coalition_on_the_wrong_side_of_the_front() {
+    let mut h = Harness::new("airfield_side");
+    let db = PathBuf::from(&h.app.harvest_db_dir);
+    std::fs::create_dir_all(&db).unwrap();
+    let x38 = crate::geo::parallel_38_xz()[0].0;
+    let write = |name: &str, country: i32, x: f64| {
+        let x = format!("{x:.3}");
+        std::fs::write(
+            db.join(format!("{name}_{country}.Group")),
+            tiny_airfield_at(name, &x, "250000.000", &country.to_string()),
+        )
+        .unwrap();
+    };
+    write("Suwon", 601, x38 - 40_000.0);
+    write("Suwon", 502, x38 - 40_000.0);
+    write("Yonpo", 601, x38 + 40_000.0);
+    write("Yonpo", 502, x38 + 40_000.0);
+    write("SoloSouth", 502, x38 - 40_000.0);
+    h.app.custom_front_xz.clear();
+    h.tab("Airfield");
+    let files = |h: &Harness| -> Vec<String> {
+        h.app
+            .airbases
+            .iter()
+            .filter(|slot| slot.from_folder)
+            .map(|slot| {
+                slot.path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect()
+    };
+    let listed = files(&h);
+    assert!(
+        listed.iter().any(|name| name == "Suwon_601.Group"),
+        "south of the 38th keeps NATO: {listed:?}"
+    );
+    assert!(
+        listed.iter().any(|name| name == "Yonpo_502.Group"),
+        "north of the 38th keeps DPRK: {listed:?}"
+    );
+    assert!(
+        listed.iter().all(|name| {
+            name != "Suwon_502.Group" && name != "Yonpo_601.Group" && name != "SoloSouth_502.Group"
+        }),
+        "the wrong coalition is left out when no front is drawn: {listed:?}"
+    );
+
+    h.app.custom_front_xz = vec![(x38 + 80_000.0, 0.0), (x38 + 80_000.0, 499_200.0)];
+    h.settle();
+    let listed = files(&h);
+    assert!(
+        listed.iter().any(|name| name == "Suwon_601.Group"),
+        "a front north of Suwon still keeps NATO: {listed:?}"
+    );
+    assert!(
+        listed.iter().any(|name| name == "Yonpo_601.Group"),
+        "Yonpo is south of the drawn front, so the NATO file replaces DPRK: {listed:?}"
+    );
+    assert!(
+        listed.iter().all(|name| name != "Yonpo_502.Group"),
+        "the DPRK file is dropped once the front puts Yonpo on the NATO side: {listed:?}"
     );
 }
 
@@ -2081,7 +2149,7 @@ fn every_placed_air_start_is_listed_on_the_right() {
     assert!(h.has("CAP North · 80°"), "{:?}", h.labels());
     assert!(h.has("CAP South · 0°"), "{:?}", h.labels());
     assert!(h.has("Reserve · NATO"), "{:?}", h.labels());
-    let hint = h.find("DPRK is north of the front and NATO is south. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.");
+    let hint = h.find("DPRK is north of the front and NATO is south. A country on the wrong side of that line is left out. With no front drawn, the line is the 38th parallel. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.");
     let dprk = h
         .all("DPRK")
         .into_iter()

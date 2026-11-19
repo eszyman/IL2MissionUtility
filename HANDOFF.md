@@ -1,7 +1,7 @@
 # HANDOFF — IL-2 Mission Utility (Claude working copy)
 
 > Read this first in every new session. Update the **Session log** and
-> **State** sections before you stop. Last updated: 2026-11-02.
+> **State** sections before you stop. Last updated: 2026-11-18.
 
 ## 1. Where things live
 
@@ -307,3 +307,4 @@ continue at delegation-loop step 3 (§2).
 | 2026-11-02 | Cursor | **Map missions get Exclusive Activation.** Adding a profile that already holds several strike plans splits them onto separate targets. Generate writes an Exclusive Activation group whenever two or more plans are on the map, including profiles whose start zone is named like Zone In 1 and whose end timer is Mission Complete. |
 | 2026-11-02 | Cursor | **Anti-air icons and placement.** Army Generator and Map use `EasternAA.svg` and `NATOAA.svg`. A pure flak or light-AAA template is AA. Place parks those batteries in clearings around enemy objectives, enemy strike targets, or a concentration of friendly units. |
 | 2026-11-02 | Cursor | **Dead-end column waypoints.** When a two-waypoint truck column or train cannot reach the Zone In rim on both sides, one hop stops at the end of the spur and the other runs to the Zone Out rim along any connected road. |
+| 2026-11-18 | Cursor | **Airfields follow the front.** The Airfield list and base-map export drop a harvested file whose country is on the wrong side of the front. A drawn front is that line. With none drawn, the 38th parallel is the front, DPRK north and NATO south. Moving the line swaps in the other country's file. |

@@ -2627,6 +2627,7 @@ impl super::GroupGeneratorApp {
             self.reload_map_provisions();
         }
         self.ensure_airbase_list();
+        self.reconcile_airbase_sides();
         self.ensure_map_assets(ctx);
         egui::SidePanel::left("map_tools")
             .exact_width(shell::TOOL_PALETTE_W)
@@ -4097,9 +4098,9 @@ impl super::GroupGeneratorApp {
         let mut in_area = 0usize;
         let mut outside_area = 0usize;
         for slot in &self.airbases {
-            if super::airfield::airbase_in_area(&slot.root, area) {
+            if self.airbase_in_play(slot) {
                 in_area += 1;
-            } else {
+            } else if !super::airfield::airbase_in_area(&slot.root, area) {
                 outside_area += 1;
             }
         }
@@ -5569,7 +5570,7 @@ impl super::GroupGeneratorApp {
             }
         }
         for slot in &self.airbases {
-            if !super::airfield::airbase_in_area(&slot.root, place) {
+            if !self.airbase_in_play(slot) {
                 continue;
             }
             for dot in preview_dots(&slot.root, 2500) {
@@ -8731,8 +8732,8 @@ impl super::GroupGeneratorApp {
     /// ramps and any aircraft the user set. Removing one there leaves it out.
     fn airfields_for_export(&mut self) -> (Vec<MapRefGroup>, Vec<String>) {
         self.ensure_airbase_list();
+        self.reconcile_airbase_sides();
         self.remember_airbase_edits();
-        let area = self.front_aabb.expanded(PLACE_MARGIN);
         let spawns: Vec<(PathBuf, Vec<crate::airstart::AirStartPlane>, String)> = self
             .airbases
             .iter()
@@ -8748,7 +8749,7 @@ impl super::GroupGeneratorApp {
         let mut groups: Vec<MapRefGroup> = self
             .airbases
             .iter()
-            .filter(|slot| super::airfield::airbase_in_area(&slot.root, area))
+            .filter(|slot| self.airbase_in_play(slot))
             .map(|slot| MapRefGroup {
                 path: slot.path.clone(),
                 entity: slot.root.clone(),
