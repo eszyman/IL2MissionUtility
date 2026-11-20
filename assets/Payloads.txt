@@ -74,6 +74,27 @@ Payload ID,Tanks / External Fuel,Primary Ordnance,Secondary Ordnance
 49,2× Drop Tank 265 gal,2× Napalm Tank 110 gal,—
 50,None,4× AN-M64A1 500 lb HE,—
 51,None,4× AN-M64A1 500 lb HE,"4× HVAR 5"""
+52,None,4× AN-M64A1 500 lb HE,"8× HVAR 5"""
+53,None,4× AN-M64A1 500 lb HE,4× AN-M57A1 250 lb HE
+54,None,4× AN-M64A1 500 lb HE,4× AN-M88 220 lb Frag
+55,None,4× M29A1 500 lb Cluster,—
+56,None,4× M29A1 500 lb Cluster,"4× HVAR 5"""
+57,None,4× M29A1 500 lb Cluster,"8× HVAR 5"""
+58,None,4× M29A1 500 lb Cluster,4× AN-M57A1 250 lb HE
+59,None,4× M29A1 500 lb Cluster,4× AN-M88 220 lb Frag
+60,None,4× M26A2 500 lb Cluster,—
+61,None,4× M26A2 500 lb Cluster,"4× HVAR 5"""
+62,None,4× M26A2 500 lb Cluster,"8× HVAR 5"""
+63,None,4× M26A2 500 lb Cluster,4× AN-M57A1 250 lb HE
+64,None,4× M26A2 500 lb Cluster,4× AN-M88 220 lb Frag
+65,None,2× AN-M64A1 500 lb HE,2× AN-M65A1 1000 lb HE
+66,None,4× AN-M65A1 1000 lb HE,—
+67,None,4× Napalm Tank 110 gal,—
+68,None,4× Napalm Tank 110 gal,"4× HVAR 5"""
+69,None,4× Napalm Tank 110 gal,"8× HVAR 5"""
+70,None,4× Napalm Tank 110 gal,4× AN-M57A1 250 lb HE
+71,None,4× Napalm Tank 110 gal,4× AN-M88 220 lb Frag
+72,2× Drop Tank 165 gal,2× AN-M26A1 Chute Flare,"8× HVAR 5"""
 
 F-84E
 Payload ID,Tanks / External Fuel,Primary Ordnance,Secondary / Tertiary Ordnance

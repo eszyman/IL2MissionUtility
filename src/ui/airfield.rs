@@ -34,7 +34,7 @@ use crate::airfield::{
 };
 use crate::airstart::{self, AirStartPlane};
 use crate::ast::Il2Entity;
-use crate::frontlines::{MapRefGroup, PLACE_MARGIN};
+use crate::frontlines::MapRefGroup;
 use crate::harvest::{GenWatcher, HarvestOutcome, find_gen_file, harvest_file, place_field_spawn};
 use crate::help::HelpTopic;
 use crate::korea_fields::{self, HarvestHit};
@@ -152,51 +152,36 @@ impl super::GroupGeneratorApp {
     }
 
     fn airfield_left_panel(&mut self, ui: &mut egui::Ui) {
-        shell::section_title(ui, "Get the file", None);
-        numbered_step(
-            ui,
-            1,
-            "In game, open a Freeflight mission and take off from the airfield.",
-        );
-        numbered_step(
-            ui,
-            2,
-            "Open /missions/_gen.mission in the mission editor. Select the field, then File › Save Selection to File.",
-        );
-        numbered_step(ui, 3, "Load that file here.");
-        if shell::link(ui, "Help ›").clicked() {
-            self.open_help(HelpTopic::Airfield);
-        }
-        ui.add_space(6.0);
-        ui.separator();
+        shell::settings_section(ui, "airfield_harvester", "Harvester", "file or watch", true, |ui| {
+            shell::section_title(ui, "Get the file", None);
+            numbered_step(
+                ui,
+                1,
+                "In game, open a Freeflight mission and take off from the airfield.",
+            );
+            numbered_step(
+                ui,
+                2,
+                "Open /missions/_gen.mission in the mission editor. Select the field, then File › Save Selection to File.",
+            );
+            numbered_step(ui, 3, "Load that file here.");
+            if shell::link(ui, "Help ›").clicked() {
+                self.open_help(HelpTopic::Airfield);
+            }
+            ui.add_space(6.0);
+            self.harvest_section(ui);
+        });
         shell::section_title(ui, "Friendly plane coalition", None);
         shell::segmented(
             ui,
             &mut self.airfield_western,
             &[(true, "NATO [2]"), (false, "DPRK [1]")],
         );
-        shell::hint(ui, "USA airfields use NATO.", false);
-        ui.add_space(6.0);
-        ui.separator();
-        self.harvest_section(ui);
-        ui.add_space(6.0);
-        ui.separator();
-        shell::section_title(ui, "Field spawn", None);
-        shell::hint(
-            ui,
-            "The Field spawn list in the center is for the selected airbase. Each airbase keeps its own aircraft. Engine running uses the 80 m line at the hold-short. Engine off snaps a plane to parking. The field stays where it is.",
-            false,
-        );
-        ui.add_enabled_ui(self.airfield_info.is_some(), |ui| {
-            if ui
-                .add_sized([ui.available_width(), 28.0], egui::Button::new("Export field spawn…"))
-                .on_hover_text("Hold-short, nose toward the runway. Engine running on the 80 m line, or engine off snapped to parking.")
-                .clicked()
-            {
-                self.export_field_spawn();
-            }
-        });
-        ui.add_space(6.0);
+        shell::hint(ui, "Checkzone Logic", false);
+    }
+
+    fn air_start_bank(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
         ui.separator();
         shell::section_title(ui, "Air starts", Some("fake fields"));
         shell::hint(
@@ -238,6 +223,10 @@ impl super::GroupGeneratorApp {
     }
 
     fn airfield_center(&mut self, ui: &mut egui::Ui) {
+        if self.airfield_recenter {
+            ui.scroll_to_cursor(Some(Align::TOP));
+            self.airfield_recenter = false;
+        }
         shell::section_title(ui, "What Generate will change", None);
         ui.label("Strips the player and SP logic, then retargets the checkzones that were linked to the player.");
         ui.add_space(10.0);
@@ -331,6 +320,8 @@ impl super::GroupGeneratorApp {
             self.air_start_editor(ui);
             return;
         }
+        // The selected airbase keeps its own aircraft. The left-hand Field spawn
+        // block is gone; this list is how those planes are set.
         self.field_spawn_panel(ui);
     }
 
@@ -360,6 +351,34 @@ impl super::GroupGeneratorApp {
         let mut add_plane = false;
         let mut remove_plane: Option<usize> = None;
         let mut copy_plane: Option<usize> = None;
+        let mut copy_all = false;
+        let mut paste = false;
+        ui.add_enabled_ui(!self.field_planes.is_empty(), |ui| {
+            if ui
+                .add_sized([ui.available_width(), 28.0], egui::Button::new("Copy all"))
+                .clicked()
+            {
+                copy_all = true;
+            }
+        });
+        ui.add_enabled_ui(!self.plane_clip.is_empty(), |ui| {
+            if ui
+                .add_sized([ui.available_width(), 28.0], egui::Button::new("Paste"))
+                .on_hover_text("Add the copied aircraft to this airfield.")
+                .clicked()
+            {
+                paste = true;
+            }
+        });
+        if ui
+            .add_sized(
+                [ui.available_width(), 28.0],
+                egui::Button::new("Add aircraft"),
+            )
+            .clicked()
+        {
+            add_plane = true;
+        }
         for pi in 0..self.field_planes.len() {
             let summary = plane_summary(&self.field_planes[pi], true);
             let mut remove = false;
@@ -394,34 +413,6 @@ impl super::GroupGeneratorApp {
             if remove {
                 remove_plane = Some(pi);
             }
-        }
-        let mut copy_all = false;
-        let mut paste = false;
-        ui.add_enabled_ui(!self.field_planes.is_empty(), |ui| {
-            if ui
-                .add_sized([ui.available_width(), 28.0], egui::Button::new("Copy all"))
-                .clicked()
-            {
-                copy_all = true;
-            }
-        });
-        ui.add_enabled_ui(!self.plane_clip.is_empty(), |ui| {
-            if ui
-                .add_sized([ui.available_width(), 28.0], egui::Button::new("Paste"))
-                .on_hover_text("Add the copied aircraft to this airfield.")
-                .clicked()
-            {
-                paste = true;
-            }
-        });
-        if ui
-            .add_sized(
-                [ui.available_width(), 28.0],
-                egui::Button::new("Add aircraft"),
-            )
-            .clicked()
-        {
-            add_plane = true;
         }
         if let Some(pi) = copy_plane {
             self.copy_planes(vec![self.field_planes[pi].clone()]);
@@ -529,7 +520,7 @@ impl super::GroupGeneratorApp {
             false,
         );
         if placed.is_none() && self.air_starts.is_empty() {
-            shell::hint(ui, "Add an air start on the left.", false);
+            shell::hint(ui, "Add an air start on the right.", false);
             return;
         }
         if placed.is_none() && self.air_start_edit >= self.air_starts.len() {
@@ -642,7 +633,7 @@ impl super::GroupGeneratorApp {
 
     /// The front that decides which coalition owns a field. A line drawn on
     /// the map wins. With none, the 38th parallel is the front.
-    fn front_for_sides(&self) -> Vec<(f64, f64)> {
+    pub(super) fn front_for_sides(&self) -> Vec<(f64, f64)> {
         let raw = if self.custom_front_xz.len() >= 2 {
             self.custom_front_xz.clone()
         } else {
@@ -652,7 +643,7 @@ impl super::GroupGeneratorApp {
     }
 
     /// Salients belong to a line the user drew. They do not ride the 38th.
-    fn salients_for_sides(&self) -> &[Vec<(f64, f64)>] {
+    pub(super) fn salients_for_sides(&self) -> &[Vec<(f64, f64)>] {
         if self.custom_front_xz.len() >= 2 {
             self.salients.as_slice()
         } else {
@@ -708,7 +699,7 @@ impl super::GroupGeneratorApp {
     }
 
     fn next_airbase_duplicate(&self) -> Option<AirDup> {
-        let area = self.front_aabb.expanded(PLACE_MARGIN);
+        let area = self.front_aabb;
         let mut buckets: Vec<(String, Vec<AirCopy>)> = Vec::new();
         let mut push = |key: String, copy: AirCopy| {
             if self.airbase_dup_kept.iter().any(|kept| kept == &key) {
@@ -933,7 +924,7 @@ impl super::GroupGeneratorApp {
     }
 
     fn airfield_right_panel(&mut self, ui: &mut egui::Ui) {
-        let area = self.front_aabb.expanded(PLACE_MARGIN);
+        let area = self.front_aabb;
         let starts = self.start_rows();
         let listed = self
             .airbases
@@ -1062,6 +1053,7 @@ impl super::GroupGeneratorApp {
                 self.show_airbase(i);
             }
         }
+        self.air_start_bank(ui);
         self.korea_fields_panel(ui);
         ui.add_space(8.0);
         ui.separator();
@@ -1375,7 +1367,7 @@ impl super::GroupGeneratorApp {
                 return;
             }
         };
-        let outside = !airbase_in_area(&root, self.front_aabb.expanded(PLACE_MARGIN));
+        let outside = !airbase_in_area(&root, self.front_aabb);
         let side_ok = airbase_matches_side(
             &root,
             &path,
@@ -1428,6 +1420,7 @@ impl super::GroupGeneratorApp {
 
     fn show_airbase(&mut self, index: usize) {
         self.air_start_focus = false;
+        self.airfield_recenter = true;
         self.air_start_placed = None;
         self.remember_airbase_edits();
         let Some(slot) = self.airbases.get(index).cloned() else {
@@ -1777,7 +1770,7 @@ impl super::GroupGeneratorApp {
 
     /// Inside the map area, and the file's country holds that side of the front.
     pub(super) fn airbase_in_play(&self, slot: &AirbaseSlot) -> bool {
-        let area = self.front_aabb.expanded(PLACE_MARGIN);
+        let area = self.front_aabb;
         airbase_in_area(&slot.root, area)
             && airbase_matches_side(
                 &slot.root,
@@ -1790,7 +1783,7 @@ impl super::GroupGeneratorApp {
     pub(super) fn korea_fields_panel(&self, ui: &mut egui::Ui) {
         let report = korea_fields::ao_harvest(
             &self.harvest_hits(),
-            self.front_aabb.expanded(PLACE_MARGIN),
+            self.front_aabb,
             &self.front_for_sides(),
             self.salients_for_sides(),
         );
@@ -1849,6 +1842,7 @@ impl super::GroupGeneratorApp {
         hits
     }
 
+    #[allow(dead_code)]
     fn field_spawn_aircraft(&self) -> (Vec<AirStartPlane>, i32) {
         let country = if self.field_spawn_nato {
             airstart::COUNTRY_NATO
@@ -1858,6 +1852,7 @@ impl super::GroupGeneratorApp {
         (self.field_planes.clone(), country)
     }
 
+    #[allow(dead_code)]
     fn export_field_spawn(&mut self) {
         self.remember_airbase_edits();
         let Some(mut root) = self.airfield_root.clone() else {
@@ -2085,15 +2080,27 @@ fn airbase_remove_row(
 ) -> (bool, bool) {
     let mut clicked = false;
     let mut removed = false;
-    ui.horizontal(|ui| {
-        let remove_w = 72.0;
-        let name_w = (ui.available_width() - remove_w - 4.0).max(28.0);
-        let button = egui::Button::selectable(selected, label).min_size(Vec2::new(name_w, 28.0));
-        clicked = ui.add_sized([name_w, 28.0], button).clicked();
-        removed = ui
-            .add_sized([remove_w, 28.0], egui::Button::new("Remove"))
-            .clicked();
-    });
+    // Width is the viewport, measured once. Inside `horizontal`, available
+    // width already includes the button about to be added, so each later row
+    // was a spacing wider than the one above it and the names walked right.
+    let remove_w = 72.0;
+    let gap = ui.spacing().item_spacing.x;
+    let row_w = (ui.clip_rect().right() - ui.cursor().left()).max(remove_w + 28.0);
+    let name_w = (row_w - remove_w - gap).max(28.0);
+    ui.allocate_ui_with_layout(
+        Vec2::new(row_w, 28.0),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            let button = egui::Button::selectable(selected, (label, egui::Atom::grow()))
+                .min_size(Vec2::new(name_w, 28.0))
+                .wrap_mode(egui::TextWrapMode::Truncate);
+            clicked = ui.add_sized([name_w, 28.0], button).clicked();
+            removed = ui
+                .add_sized([remove_w, 28.0], egui::Button::new("Remove"))
+                .clicked();
+        },
+    );
     if data_required {
         ui.label(RichText::new("Data required").color(c::WARN_TEXT));
     }
@@ -2110,8 +2117,8 @@ fn airbase_button(ui: &mut egui::Ui, label: &str, selected: bool, data_required:
     clicked
 }
 
-/// The map keeps a reference group when any of its objects falls inside the
-/// area box plus 10 km. An airbase is in the area on that same rule.
+/// An airbase is in the list when its position is inside the drawn area.
+/// The 10 km margin used for scenery does not pull in a field just outside.
 pub(super) fn airbase_in_area(root: &Il2Entity, area: WorldAabb) -> bool {
     if let Some((x, z)) = root.pos_xz()
         && area.contains(x, z)
@@ -2323,6 +2330,38 @@ fn plane_card(ui: &mut egui::Ui, plane: &mut AirStartPlane, salt: &str, field_sp
                 }
             }
         });
+    ui.add_space(4.0);
+    let (start_type, snap_to) = if !field_spawn {
+        (0, 0)
+    } else if plane.parking_snap {
+        (2, 2)
+    } else {
+        (1, 0)
+    };
+    let auto = airstart::automatic_plane_name(start_type, snap_to, plane.payload_id, plane.fuel);
+    let mut shown = if plane.name.trim().is_empty() {
+        auto.clone()
+    } else {
+        plane.name.clone()
+    };
+    ui.label("Name");
+    let edit = ui
+        .add(
+            egui::TextEdit::singleline(&mut shown)
+                .desired_width(ui.available_width())
+                .min_size(Vec2::new(0.0, 28.0)),
+        )
+        .on_hover_text(
+            "Filled in from the start and the load. Type over it to keep your own. Clear it to restore the automatic name.",
+        );
+    if edit.changed() {
+        let typed = shown.trim();
+        if typed.is_empty() || typed == auto {
+            plane.name.clear();
+        } else {
+            plane.name = typed.to_string();
+        }
+    }
     ui.add_space(4.0);
     if field_spawn {
         ui.label("Start");

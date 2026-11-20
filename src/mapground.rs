@@ -1,8 +1,9 @@
 //! mapground.rs — park ground groups on dry terrain (or road/rail)
 //!
 //! Places Army Generator copies inside one coalition's influence area:
-//! armor/supply/artillery on open land (`watermap` open cells), infantry on
-//! any dry land (not water), trains and perfect columns on `mapnet` lines.
+//! armor/supply/artillery on open land (`watermap` open cells, not woods),
+//! infantry on any dry land (not water), trains and perfect columns on
+//! `mapnet` lines.
 //! Hashes each group toward an objective (AttackArea later snaps there, or
 //! across the front along heading when none are marked) and records soft
 //! placement issues for the status line. Infantry parks in the front band
@@ -1219,22 +1220,14 @@ fn sample_terrain(
     out
 }
 
-/// Coarse open ground, refined by the editor tiles when a capture is installed
-/// and the caller has entered a cover guard. Water stays closed. Woods close a
-/// cell the coarse mask called open. A beige field opens dry land the coarse
-/// mask left closed. No tile reading keeps the coarse answer.
+/// Dry open ground from the packed mask. Woods and water are closed.
+/// The check is one byte. It does not open an editor photograph.
 fn open_ground(terrain: &TerrainMap, x: f64, z: f64) -> bool {
-    if terrain.is_water_xz(x, z) {
-        return false;
-    }
-    match crate::editormap::placement_cover(x, z) {
-        Some(crate::editormap::Cover::Wood) => false,
-        Some(crate::editormap::Cover::Field) => terrain.is_land_xz(x, z),
-        None => terrain.is_open_xz(x, z),
-    }
+    terrain.is_open_xz(x, z)
 }
 
-/// When `prefer_cover` is set, keep non-open dry cells if there are enough of them.
+/// When `prefer_cover` is set, keep photographed woods if there are enough of
+/// them. Otherwise keep dry cells the mask does not call open.
 fn apply_cover_preference(
     terrain: &TerrainMap,
     pts: Vec<(f64, f64)>,
@@ -1243,6 +1236,14 @@ fn apply_cover_preference(
 ) -> Vec<(f64, f64)> {
     if !prefer_cover || pts.is_empty() {
         return pts;
+    }
+    let woods: Vec<(f64, f64)> = pts
+        .iter()
+        .copied()
+        .filter(|&(x, z)| terrain.is_woods_xz(x, z))
+        .collect();
+    if woods.len() >= need {
+        return woods;
     }
     let cover: Vec<(f64, f64)> = pts
         .iter()
@@ -1477,6 +1478,61 @@ mod tests {
                 "heading {} should face closest objective ({expected})",
                 s.heading_deg
             );
+        }
+    }
+
+    fn woods_east_open_west() -> TerrainMap {
+        let w = 8u32;
+        let mut cells = vec![4u8; (w * w) as usize];
+        for y in 0..w {
+            for x in 4..w {
+                cells[(y * w + x) as usize] = 8;
+            }
+        }
+        pack_map(w, cells)
+    }
+
+    #[test]
+    fn infantry_prefers_woods_and_armor_stays_on_open() {
+        let terrain = woods_east_open_west();
+        let aabb = WorldAabb::from_corners(100_000.0, 40_000.0, 200_000.0, 460_000.0);
+        let jobs = vec![GroundJob::new(GroundKind::Infantry, None); 3];
+        let layout = place_ground_jobs(
+            true,
+            &jobs,
+            &[],
+            aabb,
+            &[],
+            true,
+            &terrain,
+            PlaceOpts::UNCONSTRAINED,
+        )
+        .unwrap();
+        assert_eq!(layout.spots.len(), 3);
+        for s in &layout.spots {
+            assert!(
+                terrain.is_woods_xz(s.x, s.z),
+                "infantry at ({}, {}) should prefer woods",
+                s.x,
+                s.z
+            );
+            assert!(!terrain.is_open_xz(s.x, s.z));
+        }
+        let armor = place_ground(
+            true,
+            [3, 0, 0],
+            &[],
+            aabb,
+            &[],
+            true,
+            &terrain,
+            PlaceOpts::UNCONSTRAINED,
+        )
+        .unwrap();
+        assert_eq!(armor.spots.len(), 3);
+        for s in &armor.spots {
+            assert!(terrain.is_open_xz(s.x, s.z));
+            assert!(!terrain.is_woods_xz(s.x, s.z));
         }
     }
 

@@ -59,3 +59,14 @@ the image from the tiles without touching the editor.
 
 `py -3 tools/mapcapture/capture.py selftest` checks the stitch math, a screen
 grab, and Windows OCR. It does not send keys.
+
+## Woods mask
+
+Placement does not open these tiles. After a capture, bake the olive woods
+into `assets/combined_terrain.bin` (bit 8). Water and road bits stay as they
+are. The open bit is cleared on woods and set on beige fields. Run it again
+after MapHelper rebuilds the bin, because MapHelper does not write bit 8.
+
+```text
+py -3 tools/mapcapture/bake_woods.py
+```

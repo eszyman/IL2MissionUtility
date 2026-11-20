@@ -168,6 +168,20 @@ fn model_positions(entity: &Il2Entity) -> Vec<(f64, f64)> {
     out
 }
 
+/// Centroid of every object that carries a Model. That is the unit on the
+/// map (vehicle, train, ship, gun), not a logic MCU parked beside it.
+pub fn visual_centroid(entity: &Il2Entity) -> Option<(f64, f64)> {
+    let models = model_positions(entity);
+    if models.is_empty() {
+        return None;
+    }
+    let n = models.len() as f64;
+    Some((
+        models.iter().map(|p| p.0).sum::<f64>() / n,
+        models.iter().map(|p| p.1).sum::<f64>() / n,
+    ))
+}
+
 fn collect_model_positions(entity: &Il2Entity, out: &mut Vec<(f64, f64)>) {
     if has_model(entity) {
         if let Some(p) = entity.pos_xz() {

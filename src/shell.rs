@@ -518,6 +518,8 @@ pub enum ToolIcon {
     Salient,
     Arrow,
     Objective,
+    /// An air start from the Airfield bank: a small aircraft.
+    AirStart,
     Undo,
     Redo,
 }
@@ -611,6 +613,12 @@ pub(crate) fn tool_icon_paths(icon: ToolIcon) -> Vec<(Vec<Pos2>, bool)> {
                 ],
                 false,
             ),
+        ],
+        // Fuselage with wings, nose toward the top right.
+        ToolIcon::AirStart => vec![
+            (vec![p(6.0, 18.0), p(18.0, 6.0)], false),
+            (vec![p(8.0, 10.0), p(16.0, 14.0)], false),
+            (vec![p(14.0, 8.0), p(18.0, 6.0), p(16.0, 10.0)], false),
         ],
         // M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-4
         ToolIcon::Undo => {
@@ -894,7 +902,11 @@ pub fn mode_rail(ui: &mut Ui, labels: &[&str], selected: &mut usize) -> bool {
         resp.on_hover_text(format!("Ctrl {}", i + 1));
     }
     ui.add_space(4.0);
-    ui.label(RichText::new("Ctrl 1–6").small().color(c::NEUTRAL_700));
+    ui.label(
+        RichText::new(format!("Ctrl 1–{}", labels.len()))
+            .small()
+            .color(c::NEUTRAL_700),
+    );
     ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
@@ -1183,7 +1195,21 @@ pub fn read_shortcuts(ctx: &egui::Context, map_active: bool) -> Shortcuts {
         s.help = i.consume_key(Modifiers::NONE, Key::F1);
         // Not consumed: egui's own popups, combo boxes and text edits also close on Esc.
         s.escape = i.key_pressed(Key::Escape);
+        // Ctrl 1–5 follow the rail: Map, Template, Army, Mission Tasking, Airfields.
+        // Bare 1–6 stay map tools, and only while the map is up.
         let nums = [
+            Key::Num1,
+            Key::Num2,
+            Key::Num3,
+            Key::Num4,
+            Key::Num5,
+        ];
+        for (n, k) in nums.iter().enumerate() {
+            if i.consume_key(Modifiers::COMMAND, *k) {
+                s.tab = Some(n);
+            }
+        }
+        let tools = [
             Key::Num1,
             Key::Num2,
             Key::Num3,
@@ -1191,11 +1217,11 @@ pub fn read_shortcuts(ctx: &egui::Context, map_active: bool) -> Shortcuts {
             Key::Num5,
             Key::Num6,
         ];
-        for (n, k) in nums.iter().enumerate() {
-            if i.consume_key(Modifiers::COMMAND, *k) {
-                s.tab = Some(n);
-            } else if map_active && !typing && i.consume_key(Modifiers::NONE, *k) {
-                s.map_tool = Some(n);
+        if map_active && !typing {
+            for (n, k) in tools.iter().enumerate() {
+                if i.consume_key(Modifiers::NONE, *k) {
+                    s.map_tool = Some(n);
+                }
             }
         }
     });

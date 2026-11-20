@@ -2217,8 +2217,16 @@ fn place_ref_groups(
         if anchored_outside(&entity, place) {
             continue;
         }
-        strip_catalog_waypoints(&mut entity);
-        prune_to_aabb(&mut entity, place);
+        let mut deleted = HashSet::new();
+        strip_catalog_waypoints(&mut entity, &mut deleted);
+        prune_to_aabb(&mut entity, place, &mut deleted);
+        if !deleted.is_empty() {
+            // The patched mission lists approach waypoints on the airfield
+            // entity. Dropping those blocks without clearing the ids leaves
+            // the old numbers in Objects, and the next group's new indexes
+            // reuse them. The flag then draws on the wrong field.
+            crate::airfield::scrub_deleted(&mut entity, &deleted);
+        }
         if !spatially_relevant(&entity, place) {
             continue;
         }
@@ -2294,18 +2302,38 @@ where
 
 /// Landscape MARKS use MCU_Waypoint as catalog pins. Preview them; do not stamp
 /// thousands of waypoints into the generated group (the editor already has the scene).
-fn strip_catalog_waypoints(entity: &mut Il2Entity) {
+/// Indexes of every removed block, including nested ones, go into `deleted`.
+fn strip_catalog_waypoints(entity: &mut Il2Entity, deleted: &mut HashSet<i32>) {
     entity.children.retain_mut(|child| {
-        strip_catalog_waypoints(child);
-        child.block_type != "MCU_Waypoint"
+        if child.block_type == "MCU_Waypoint" {
+            collect_indices(child, deleted);
+            false
+        } else {
+            strip_catalog_waypoints(child, deleted);
+            true
+        }
     });
 }
 
-fn prune_to_aabb(entity: &mut Il2Entity, aabb: WorldAabb) {
+fn prune_to_aabb(entity: &mut Il2Entity, aabb: WorldAabb, deleted: &mut HashSet<i32>) {
     entity.children.retain_mut(|child| {
-        prune_to_aabb(child, aabb);
-        spatially_relevant(child, aabb)
+        prune_to_aabb(child, aabb, deleted);
+        if spatially_relevant(child, aabb) {
+            true
+        } else {
+            collect_indices(child, deleted);
+            false
+        }
     });
+}
+
+fn collect_indices(entity: &Il2Entity, out: &mut HashSet<i32>) {
+    if let Some(id) = entity.index {
+        out.insert(id);
+    }
+    for child in &entity.children {
+        collect_indices(child, out);
+    }
 }
 
 fn spatially_relevant(entity: &Il2Entity, aabb: WorldAabb) -> bool {
@@ -3755,6 +3783,121 @@ mod tests {
         assert!(airfields.find_by_name("K-23_Pyongyang_AF").is_some());
         assert!(pack.root.find_by_name("K-13_Suwon_AF").is_none());
         assert!(airfields.find_by_name("DPRK").is_some());
+    }
+
+    #[test]
+    fn export_rewrites_indexes_after_dropping_approach_waypoints() {
+        fn node(block: &str, id: i32, name: &str, x: f64, z: f64) -> Il2Entity {
+            let mut e = Il2Entity::new(block);
+            e.index = Some(id);
+            e.set_property("Index", id.to_string());
+            e.set_name(name);
+            e.set_property("XPos", format!("{x:.3}"));
+            e.set_property("ZPos", format!("{z:.3}"));
+            e
+        }
+        fn field(name: &str, country: i32, x: f64, z: f64) -> Il2Entity {
+            let mut root = Il2Entity::new("Group");
+            root.set_name(name);
+            let mut air = node("Airfield", 1, name, x, z);
+            air.set_property("Country", country.to_string());
+            air.set_property("LinkTrId", "2");
+            let mut entity = node("MCU_TR_Entity", 2, "Airfield entity", x, z);
+            entity.set_property("MisObjID", "1");
+            entity.set_objects(vec![]);
+            root.children.push(air);
+            root.children.push(entity);
+            root
+        }
+
+        let mut kimpo = field("K-14_Kimpo_AF", 601, 106_612.0, 268_571.0);
+        kimpo.children.push(node(
+            "Block",
+            3,
+            "Kimpo windsock",
+            105_558.0,
+            269_437.0,
+        ));
+
+        let mut pyonggang = field("K-21_Pyonggang_AF", 503, 203_550.0, 312_334.0);
+        // Allocation starts at 100 and the side groups take 100–102, so
+        // Kimpo's airfield becomes 103. The stripped approach waypoint
+        // still carries that number, which is the collision.
+        pyonggang.children[1].set_objects(vec![103, 12]);
+        pyonggang.children.push(node(
+            "MCU_Waypoint",
+            103,
+            "APPROACH",
+            205_969.0,
+            321_355.0,
+        ));
+        pyonggang.children.push(node(
+            "Block",
+            12,
+            "Pyonggang light",
+            203_796.0,
+            312_378.0,
+        ));
+        let mut far = node("MCU_Timer", 13, "Far link", 203_550.0, 312_334.0);
+        far.set_targets(vec![14]);
+        pyonggang.children.push(far);
+        pyonggang.children.push(node("Block", 14, "Far shed", 1_000.0, 1_000.0));
+
+        let mut next = 100;
+        let aabb = WorldAabb::from_corners(50_000.0, 150_000.0, 250_000.0, 400_000.0);
+        let (landscape, airfields, n) = super::place_ref_groups(
+            &[
+                MapRefGroup {
+                    path: PathBuf::from("K-14.Group"),
+                    entity: kimpo,
+                },
+                MapRefGroup {
+                    path: PathBuf::from("K-21.Group"),
+                    entity: pyonggang,
+                },
+            ],
+            aabb,
+            &mut next,
+        );
+        assert!(landscape.is_none());
+        assert_eq!(n, 2);
+        let airfields = airfields.expect("airfields");
+        assert!(airfields.find_by_name("APPROACH").is_none());
+        assert!(airfields.find_by_name("Far shed").is_none());
+
+        let kimpo = airfields
+            .find_by_name("K-14_Kimpo_AF")
+            .expect("kimpo group");
+        let kimpo_af = kimpo
+            .children
+            .iter()
+            .find(|c| c.block_type == "Airfield")
+            .expect("kimpo airfield");
+        let pyong = airfields
+            .find_by_name("K-21_Pyonggang_AF")
+            .expect("pyonggang group");
+        let pyong_af = pyong
+            .children
+            .iter()
+            .find(|c| c.block_type == "Airfield")
+            .expect("pyonggang airfield");
+        let entity = pyong
+            .children
+            .iter()
+            .find(|c| c.name() == Some("Airfield entity"))
+            .expect("pyonggang entity");
+        let light = pyong
+            .find_by_name("Pyonggang light")
+            .expect("kept block");
+        assert_eq!(entity.objects, vec![light.index.unwrap()]);
+        assert_ne!(light.index, Some(12));
+        assert!(!entity.objects.contains(&kimpo_af.index.unwrap()));
+        assert_eq!(
+            entity.property("MisObjID"),
+            Some(pyong_af.index.unwrap().to_string().as_str())
+        );
+        let timer = pyong.find_by_name("Far link").expect("timer");
+        assert!(timer.targets.is_empty());
     }
 }
 

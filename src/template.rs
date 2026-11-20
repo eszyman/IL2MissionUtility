@@ -18,8 +18,9 @@
 //! hop sits on the +X line unless that Goto stores an offset
 //! (`wp_north_m` / `wp_east_m`) or a loop (`loop_to`). Mission packages
 //! (`apply_mission_package`) fill those for a CAP diamond or a strike
-//! (formation by aircraft role, IP, 3 km AttackArea, home at high
-//! priority, Mission Complete).
+//! (formation by aircraft role, IP, 3 km AttackArea, time on target from
+//! a proximity over the target, home at high priority, a proximity at WP 2
+//! that ends the mission, Mission Complete).
 //!
 //! ## Public API
 //! * `struct TemplateOptions` + `fn generate_template` — the build.
@@ -101,8 +102,31 @@ pub const DEFAULT_TIMER_S: f32 = 5.0;
 pub const PLACEMENT_SPACING: f32 = 150.0;
 /// Default path spacing along +X (north) when a Goto WP has no offset.
 pub const WAYPOINT_SPACING_M: f32 = 4_000.0;
-/// Strike AttackArea run, in seconds.
+/// Veteran AttackArea time. Plain 7 min, Low 5, Normal 4, Veteran 2, Ace 1.
 pub const STRIKE_ATTACK_S: f32 = 120.0;
+/// Time on Target for every strike skill. Long enough for another pass.
+pub const STRIKE_TOT_S: f32 = 480.0;
+
+/// AttackArea duration for a strike lead, from `AILevel` 0–4.
+pub fn strike_window_s(skill: i32) -> f32 {
+    match skill.clamp(0, 4) {
+        0 => 420.0,
+        1 => 300.0,
+        2 => 240.0,
+        3 => STRIKE_ATTACK_S,
+        _ => 60.0,
+    }
+}
+
+fn skill_label(skill: i32) -> &'static str {
+    match skill.clamp(0, 4) {
+        0 => "Plain",
+        1 => "Low",
+        2 => "Normal",
+        3 => "Veteran",
+        _ => "Ace",
+    }
+}
 /// Initial point, metres from the target. Long enough for the attack run to line up.
 pub const STRIKE_IP_M: f32 = 8_000.0;
 /// How far the IP sits off the inbound radial, in degrees. Yields a turn past 30°.
@@ -1007,6 +1031,8 @@ pub struct OrderSpec {
     pub wp_east_m: Option<f32>,
     /// On arrival, this waypoint targets that earlier WP MCU so the pattern repeats.
     pub loop_to: Option<u32>,
+    /// Strike Time on Target. A proximity over the target starts it, not the IP.
+    pub proximity_start: bool,
 }
 
 impl Default for OrderSpec {
@@ -1033,6 +1059,7 @@ impl Default for OrderSpec {
             wp_north_m: None,
             wp_east_m: None,
             loop_to: None,
+            proximity_start: false,
         }
     }
 }
@@ -1791,6 +1818,11 @@ pub fn place_strike_at(group: &mut Il2Entity, pose: StrikePose) -> bool {
             if e.block_type != "Plane" && e.block_type != "MCU_TR_Entity" {
                 return;
             }
+            // Fake marks are not planes. The target mark stays on the attack
+            // point. The WP 2 mark is snapped onto the home waypoint below.
+            if e.name().is_some_and(|n| n.starts_with("Fake Object")) {
+                return;
+            }
             if let Some((x, z)) = e.pos_xz() {
                 let sx = x + dx;
                 let sz = z + dz;
@@ -1824,7 +1856,83 @@ pub fn place_strike_at(group: &mut Il2Entity, pose: StrikePose) -> bool {
             e.set_property("ZPos", format!("{z:.3}"));
         }
     });
+    // WP 2 Prox and its same-side mark sit on the home waypoint. Placement
+    // rewrites WP 2 after the group translate, so they follow that point.
+    group.for_each_mut(&mut |e| {
+        let Some(name) = e.name() else {
+            return;
+        };
+        if name.starts_with(WP2_PROX) || name.starts_with(WP2_FAKE) {
+            e.set_property("XPos", format!("{:.3}", start.0));
+            e.set_property("ZPos", format!("{:.3}", start.1));
+        }
+    });
+    retime_strike_failsafes(group);
     true
+}
+
+const FAILSAFE_IP: &str = "FAILSAFE IP";
+const FAILSAFE_WP2: &str = "FAILSAFE WP2";
+const TOT_PROX: &str = "Time on Target Prox";
+/// Home-arrival proximity. Armed by the Goto WP 2 delay, not by PULSE OUT.
+const WP2_PROX: &str = "WP 2 Prox";
+/// Same-side mark for [`WP2_PROX`]. The `Fake Object ` prefix is the load skip.
+const WP2_FAKE: &str = "Fake Object WP2";
+
+/// Seconds to fly `distance_m` at `speed_kmh`, times `factor`.
+fn failsafe_seconds(distance_m: f64, speed_kmh: f64, factor: f64) -> f64 {
+    let speed = if speed_kmh < 1.0 { 100.0 } else { speed_kmh };
+    let seconds = distance_m / (speed * 1000.0 / 3600.0);
+    (seconds * factor).max(1.0)
+}
+
+fn horiz_m(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+/// Rewrite FAILSAFE IP and FAILSAFE WP2 from the placed WP 1, WP 2, and
+/// AttackArea. Map placement moves those points after the template is built.
+pub fn retime_strike_failsafes(group: &mut Il2Entity) {
+    let Some(ip) = group.find_by_name("WP 1").and_then(|w| w.pos_xz()) else {
+        return;
+    };
+    let Some(home) = group.find_by_name("WP 2").and_then(|w| w.pos_xz()) else {
+        return;
+    };
+    let speed = group
+        .find_by_name("WP 1")
+        .and_then(|w| w.property("Speed"))
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(100.0);
+    let mut attack = None;
+    group.for_each(&mut |e| {
+        if attack.is_none() && e.block_type == "MCU_CMD_AttackArea" {
+            attack = e.pos_xz();
+        }
+    });
+    let ip_s = failsafe_seconds(horiz_m(home, ip), speed, 2.0);
+    let home_leg = match attack {
+        Some(at) => horiz_m(at, home).max(horiz_m(ip, home)),
+        None => horiz_m(ip, home),
+    };
+    let wp2_s = failsafe_seconds(home_leg, speed, 3.0);
+    set_failsafe_time(group, FAILSAFE_IP, ip_s);
+    set_failsafe_time(group, FAILSAFE_WP2, wp2_s);
+}
+
+fn set_failsafe_time(group: &mut Il2Entity, name: &str, seconds: f64) {
+    let prefix = format!("{name} ");
+    group.for_each_mut(&mut |e| {
+        if e.block_type != "MCU_Timer" {
+            return;
+        }
+        let Some(n) = e.name() else {
+            return;
+        };
+        if n == name || n.starts_with(&prefix) {
+            e.set_property("Time", format_time(seconds));
+        }
+    });
 }
 
 /// One AttackArea after the first, when a group has several flights and
@@ -1983,12 +2091,6 @@ const CAP_ABORTS: &[EntityEvent] = &[
     EntityEvent::OnPilotWounded,
 ];
 
-const STRIKE_ABORTS: &[EntityEvent] = &[
-    EntityEvent::OnPlaneBingoBombs,
-    EntityEvent::OnPlaneCriticalDamage,
-    EntityEvent::OnPilotWounded,
-];
-
 /// Replace this aircraft lead's orders with a CAP diamond or a strike.
 /// Wingmen of the lead get the same abort events. Strike also sets a bomb
 /// or rocket payload on each aircraft in the flight that has one.
@@ -2025,7 +2127,8 @@ pub fn apply_mission_package(
         }
         MissionPackage::Strike => {
             let script = seats[seat].unit.script.clone();
-            seats[seat].orders = strike_orders(base, western, &script);
+            let skill = seats[seat].skill;
+            seats[seat].orders = strike_orders(base, western, &script, skill);
             force_strike_airstart(seats, seat);
             strike_arm(seats, seat)
         }
@@ -2037,9 +2140,9 @@ pub fn apply_mission_package(
         .iter()
         .rposition(|o| o.kind == OrderKind::GotoWaypoint)
         .unwrap_or(0);
-    let kinds = match package {
+    let kinds: &[EntityEvent] = match package {
         MissionPackage::Cap => CAP_ABORTS,
-        MissionPackage::Strike => STRIKE_ABORTS,
+        MissionPackage::Strike => &[],
     };
     let mut hooks: Vec<EventHook> = kinds
         .iter()
@@ -2063,7 +2166,7 @@ pub fn apply_mission_package(
             wingmen += 1;
         }
     }
-    if wingmen > 0 {
+    if wingmen > 0 && !kinds.is_empty() {
         detail.push_str(&format!(" {wingmen} wingmen use the same abort."));
     }
     detail.push_str(
@@ -2125,8 +2228,9 @@ fn cap_orders(base: u32, spacing: f32, rtb_north: f32, rtb_east: f32) -> Vec<Ord
     ]
 }
 
-fn strike_orders(base: u32, western: bool, script: &str) -> Vec<OrderSpec> {
+fn strike_orders(base: u32, western: bool, script: &str, skill: i32) -> Vec<OrderSpec> {
     let geo = strike_geometry(western, STRIKE_START_M);
+    let window = strike_window_s(skill);
     let mut form = OrderSpec::default();
     form.kind = OrderKind::Formation;
     // Attack aircraft: Column - Flights wedge. Fighters: Column - Pairs.
@@ -2135,24 +2239,21 @@ fn strike_orders(base: u32, western: bool, script: &str) -> Vec<OrderSpec> {
     let mut attack = OrderSpec::default();
     attack.kind = OrderKind::AttackArea;
     attack.priority = 2;
-    attack.time_s = STRIKE_ATTACK_S;
+    attack.time_s = window;
     attack.attack_area = DEFAULT_ATTACK_AREA_M;
+    // Attack Ground, not Attack Ground Targets. OnAreaAttacked only fires for
+    // Attack Ground, and a strike on units does not use that report.
     attack.set_attack_area_target(AttackAreaTarget::Ground);
-    let mut report = OrderSpec::default();
-    report.kind = OrderKind::OnAreaAttacked;
-    report.delay_s = 0.0;
-    // Same window as AttackArea. OnAreaAttacked does not always fire, so this
-    // timer runs beside the attack and still starts the home Goto.
     let mut tot = OrderSpec::default();
     tot.kind = OrderKind::TimeOnTarget;
-    tot.time_s = STRIKE_ATTACK_S;
+    tot.time_s = STRIKE_TOT_S;
+    tot.proximity_start = true;
     let mut done = OrderSpec::default();
     done.kind = OrderKind::MissionComplete;
     vec![
         form,
         placed_goto(base, 1, geo.ip_north, geo.ip_east, None),
         attack,
-        report,
         tot,
         placed_goto(base + 1, 2, geo.start_north, geo.start_east, None),
         done,
@@ -2172,6 +2273,7 @@ fn force_strike_airstart(seats: &mut [TemplateSeat], lead: usize) {
 
 fn strike_arm(seats: &mut [TemplateSeat], lead: usize) -> String {
     let shape = formation_label(air_formation_id(&seats[lead].unit.script), UnitKind::Plane);
+    let route = strike_route_sentence(seats, lead, &shape);
     let mut lead_summary = None;
     let mut missing = false;
     for i in flight_indexes(seats, lead) {
@@ -2189,18 +2291,20 @@ fn strike_arm(seats: &mut [TemplateSeat], lead: usize) -> String {
         }
     }
     if let Some(summary) = lead_summary {
-        format!(
-            "Loadout {summary}. {shape}, IP 8 km, AttackArea 3 km for 2 min, then home. Time on Target runs with the attack and sends the flight home if OnAreaAttacked does not fire. Also home on bingo bombs, critical damage, or wounded. OnKilled ticks ALL DESTROYED and pulses MISSION END once the flight is gone. Zone Out will not end the mission."
-        )
+        format!("Loadout {summary}. {route}")
     } else if missing {
-        format!(
-            "No bomb or rocket loadout for this aircraft; payload unchanged. {shape}, IP 8 km, AttackArea 3 km for 2 min, then home. Time on Target runs with the attack and sends the flight home if OnAreaAttacked does not fire. OnKilled ticks ALL DESTROYED and pulses MISSION END once the flight is gone. Zone Out will not end the mission."
-        )
+        format!("No bomb or rocket loadout for this aircraft; payload unchanged. {route}")
     } else {
-        format!(
-            "{shape}, IP 8 km, AttackArea 3 km for 2 min, then home. Time on Target runs with the attack and sends the flight home if OnAreaAttacked does not fire. OnKilled ticks ALL DESTROYED and pulses MISSION END once the flight is gone. Zone Out will not end the mission."
-        )
+        route
     }
+}
+
+fn strike_route_sentence(seats: &[TemplateSeat], lead: usize, shape: &str) -> String {
+    let skill = seats[lead].skill.clamp(0, 4);
+    format!(
+        "{shape}, IP 8 km, AttackArea 3 km. The lead ({}) stays over the target for 8 min. Time on Target starts when that lead is within a proximity of an opposite-coalition fake object at the target (50% of the attack area). PULSE OUT arms that proximity, and Deactivate Units turns it off on cleanup. The flight then goes to WP 2. A proximity at WP 2 ends the mission. FAILSAFE IP scrubs to WP 2 after twice the IP leg. FAILSAFE WP2 pulses MISSION END after three times the leg home. Zone Out will not end the mission.",
+        skill_label(skill)
+    )
 }
 
 /// Where an entity event pulses: shared Force Complete, the flight wipe
@@ -4440,10 +4544,9 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
             } else if let Some(next_i) = chain_delay_to(&emitted[si], oi) {
                 let src = emitted[si][next_i].source_index;
                 // A report still starts the next order when abort events Then
-                // that same order (strike: OnAreaAttacked and the damage /
-                // bingo events share one high-priority Goto). Time on Target
-                // is the parallel failsafe: it starts that Goto even when
-                // OnAreaAttacked does not fire. Other hops wait for the event.
+                // that same order. Time on Target is the parallel timer: it
+                // starts that Goto even when the report does not fire. Other
+                // hops wait for the event.
                 let failsafe = is_report || emitted[si][oi].time_on_target;
                 if failsafe || !triggered[si].contains(&src) {
                     targets.push(emitted[si][next_i].delay.index.unwrap());
@@ -4636,6 +4739,20 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
         }
     }
 
+    let strike_wiring = wire_strike_package(
+        opts,
+        &placed,
+        &mut emitted,
+        &mut waypoints,
+        mission_end_id,
+        &mut next_id,
+        &mut pulse_out,
+        &mut deactivate_units,
+        activate.as_mut(),
+        spawn.as_mut(),
+        delete.as_mut(),
+    );
+
     logic.children.extend([
         begin,
         pulse,
@@ -4662,6 +4779,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
         logic.children.push(d);
     }
     logic.children.extend(go_home_counters);
+    logic.children.extend(strike_wiring.logic);
     if let Some(wait) = rtb_wait {
         logic.children.push(wait);
     }
@@ -4694,6 +4812,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
         units_g.children.push(unit.object);
         units_g.children.push(unit.entity);
     }
+    units_g.children.extend(strike_wiring.units);
     for steps in emitted {
         orders_g
             .children
@@ -4987,6 +5106,427 @@ fn wire_waypoint_chain(
     }
     for i in 0..waypoints.len() {
         waypoints[i].set_targets(extra[i].clone());
+    }
+}
+
+struct StrikeHome {
+    ip: usize,
+    attack: usize,
+    tot: usize,
+    home: usize,
+}
+
+/// AttackArea, then Time on Target, with a Goto before and a Goto after.
+fn strike_home_layout(steps: &[EmittedOrder]) -> Option<StrikeHome> {
+    let attack = steps.iter().position(|s| {
+        s.cmd
+            .as_ref()
+            .is_some_and(|c| c.block_type == "MCU_CMD_AttackArea")
+    })?;
+    let tot = steps
+        .iter()
+        .skip(attack + 1)
+        .position(|s| s.time_on_target)
+        .map(|p| attack + 1 + p)?;
+    if steps[attack + 1..tot].iter().any(|s| s.goto_wp.is_some()) {
+        return None;
+    }
+    let ip = steps[..attack].iter().rposition(|s| s.goto_wp.is_some())?;
+    let home = steps
+        .iter()
+        .skip(tot + 1)
+        .position(|s| s.goto_wp.is_some())
+        .map(|p| tot + 1 + p)?;
+    Some(StrikeHome {
+        ip,
+        attack,
+        tot,
+        home,
+    })
+}
+
+fn push_target(entity: &mut Il2Entity, id: i32) {
+    if entity.targets.contains(&id) {
+        return;
+    }
+    let mut ids = entity.targets.clone();
+    ids.push(id);
+    entity.set_targets(ids);
+}
+
+fn push_object(entity: &mut Il2Entity, id: i32) {
+    if entity.objects.contains(&id) {
+        return;
+    }
+    let mut ids = entity.objects.clone();
+    ids.push(id);
+    entity.set_objects(ids);
+}
+
+/// Country on the other side of the strike. 6xx (USA) is Western, so the
+/// mark is USSR 501. 5xx (USSR, DPRK, PRC) gets USA 601.
+fn opposite_country(country: i32) -> i32 {
+    if western_country(country) { 501 } else { 601 }
+}
+
+/// Proximity anchor. Not a seat: load skips `Fake Object` and `Fake Object …`
+/// (the target mark and the WP 2 mark).
+fn strike_fake_object(
+    name: &str,
+    country: i32,
+    x: f64,
+    z: f64,
+    next_id: &mut i32,
+) -> (Il2Entity, Il2Entity) {
+    let mut object = Il2Entity::new("Vehicle");
+    let object_id = *next_id;
+    *next_id += 1;
+    object.index = Some(object_id);
+    object.set_property("Index", object_id.to_string());
+    object.set_name(name);
+    object.set_property("XPos", format!("{x:.3}"));
+    object.set_property("YPos", "0.000");
+    object.set_property("ZPos", format!("{z:.3}"));
+    object.set_property("XOri", "0");
+    object.set_property("YOri", "0");
+    object.set_property("ZOri", "0");
+    object.set_property(
+        "Script",
+        "\"LuaScripts\\WorldObjects\\fixedobjects\\fake_object.txt\"",
+    );
+    object.set_property(
+        "Model",
+        "\"graphics\\fixedobjects\\fake_object\\fake_object.mgm\"",
+    );
+    object.set_property("Desc", "\"\"");
+    object.set_property("Country", country.to_string());
+    object.set_property("NumberInFormation", "0");
+    object.set_property("Vulnerable", "0");
+    object.set_property("Engageable", "0");
+    object.set_property("LimitAmmo", "1");
+    object.set_property("AILevel", "2");
+    object.set_property("DamageReport", "50");
+    object.set_property("DamageThreshold", "1");
+    object.set_property("DeleteAfterDeath", "1");
+    object.set_property("CoopStart", "0");
+    object.set_property("Spotter", "-1");
+    object.set_property("BeaconChannel", "0");
+    object.set_property("Callsign", "0");
+    object.set_property("PayloadId", "0");
+    object.set_property("ModMask", "1");
+    object.set_property("Fuel", "1");
+    object.set_property("Callnum", "0");
+    object.set_property("Skin", "\"\"");
+    object.set_property("BotSkin", "\"\"");
+    object.set_property("PinToTerrain", "1");
+
+    let mut entity = mcu("MCU_TR_Entity", &format!("{name} entity"), next_id, x, z);
+    let entity_id = entity.index.unwrap();
+    object.set_property("LinkTrId", entity_id.to_string());
+    entity.set_property("MisObjID", object_id.to_string());
+    entity.set_property("Enabled", "0");
+    entity.set_property("YPos", "0.200");
+    (object, entity)
+}
+
+struct StrikeWiring {
+    logic: Vec<Il2Entity>,
+    units: Vec<Il2Entity>,
+}
+
+fn proximity_mcu(
+    name: &str,
+    distance: f64,
+    next_id: &mut i32,
+    x: f64,
+    y: f64,
+    z: f64,
+) -> Il2Entity {
+    let mut e = mcu("MCU_Proximity", name, next_id, x, z);
+    e.set_property("YPos", format!("{y:.3}"));
+    e.set_property("Distance", format!("{distance:.0}"));
+    e.set_property("Closer", "1");
+    e
+}
+
+/// Waypoint bubble in metres.
+///
+/// `Area` is the radius the editor stores on `MCU_Waypoint`. `Radius`,
+/// `Size`, and `Zone` are read only when `Area` is absent.
+fn waypoint_bubble_m(wp: &Il2Entity) -> Option<f64> {
+    for key in ["Area", "Radius", "Size", "Zone"] {
+        let Some(raw) = wp.property(key) else {
+            continue;
+        };
+        if let Ok(v) = raw.trim().trim_matches('"').parse::<f64>() {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// Strike time on target starts from a proximity over the target, not from
+/// the IP waypoint. A second proximity at WP 2, armed when the flight is
+/// sent home, pulses MISSION END. FAILSAFE IP and FAILSAFE WP2 bound the two legs.
+fn wire_strike_package(
+    opts: &TemplateOptions,
+    placed: &[PlacedUnit],
+    emitted: &mut [Vec<EmittedOrder>],
+    waypoints: &mut [Il2Entity],
+    mission_end_id: i32,
+    next_id: &mut i32,
+    pulse_out: &mut Il2Entity,
+    deactivate_units: &mut Il2Entity,
+    mut activate: Option<&mut Il2Entity>,
+    mut spawn: Option<&mut Il2Entity>,
+    mut delete: Option<&mut Il2Entity>,
+) -> StrikeWiring {
+    let mut extra = Vec::new();
+    let mut units = Vec::new();
+    let mut package_n = 0usize;
+    for si in 0..emitted.len() {
+        if !receives_orders(&opts.seats, si) {
+            continue;
+        }
+        let Some(layout) = strike_home_layout(&emitted[si]) else {
+            continue;
+        };
+        let tot_src = emitted[si][layout.tot].source_index;
+        if !opts.seats[si]
+            .orders
+            .get(tot_src)
+            .is_some_and(|o| o.proximity_start)
+        {
+            continue;
+        }
+        package_n += 1;
+        let suffix = if package_n == 1 {
+            String::new()
+        } else {
+            format!(" {package_n}")
+        };
+        let tot_id = emitted[si][layout.tot].delay.index.unwrap();
+        let home_timer = emitted[si][layout.home].delay.index.unwrap();
+        let ip_wp = emitted[si][layout.ip].goto_wp.unwrap().max(1) as usize - 1;
+        let home_wp = emitted[si][layout.home].goto_wp.unwrap().max(1) as usize - 1;
+        if ip_wp >= waypoints.len() || home_wp >= waypoints.len() {
+            continue;
+        }
+        let radius: f64 = emitted[si][layout.attack]
+            .cmd
+            .as_ref()
+            .and_then(|c| c.property("AttackArea"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(f64::from(DEFAULT_ATTACK_AREA_M));
+        let (ax, az) = emitted[si][layout.attack]
+            .cmd
+            .as_ref()
+            .and_then(|c| c.pos_xz())
+            .unwrap_or((ORIGIN_X, ORIGIN_Z));
+        let (ip_x, ip_z) = waypoints[ip_wp].pos_xz().unwrap_or((ORIGIN_X, ORIGIN_Z));
+        let (home_x, home_z) = waypoints[home_wp].pos_xz().unwrap_or((ORIGIN_X, ORIGIN_Z));
+        let speed = f64::from(opts.waypoint_speed);
+        let ip_s = failsafe_seconds(horiz_m((home_x, home_z), (ip_x, ip_z)), speed, 2.0);
+        let home_leg =
+            horiz_m((ax, az), (home_x, home_z)).max(horiz_m((ip_x, ip_z), (home_x, home_z)));
+        let wp2_s = failsafe_seconds(home_leg, speed, 3.0);
+        let (tx, tz) = emitted[si][layout.ip]
+            .delay
+            .pos_xz()
+            .unwrap_or((ORIGIN_X, ORIGIN_Z));
+        let (hx, hz) = emitted[si][layout.home]
+            .delay
+            .pos_xz()
+            .unwrap_or((ORIGIN_X, ORIGIN_Z));
+
+        let mut failsafe_ip = timer(
+            &format!("{FAILSAFE_IP}{suffix}"),
+            ip_s,
+            next_id,
+            tx,
+            tz + MCU_GAP,
+        );
+        let mut failsafe_wp2 = timer(
+            &format!("{FAILSAFE_WP2}{suffix}"),
+            wp2_s,
+            next_id,
+            hx,
+            hz + MCU_GAP,
+        );
+        let mut scrub_wp = mcu(
+            "MCU_Deactivate",
+            &format!("Scrub WP {}", ip_wp + 1),
+            next_id,
+            tx,
+            tz + MCU_GAP * 2.0,
+        );
+        let wp1_id = waypoints[ip_wp].index.unwrap();
+        scrub_wp.set_objects(vec![wp1_id]);
+        failsafe_ip.set_targets(vec![home_timer, scrub_wp.index.unwrap()]);
+
+        let mut off_ip = mcu(
+            "MCU_Deactivate",
+            &format!("Deactivate {FAILSAFE_IP}{suffix}"),
+            next_id,
+            tx + MCU_GAP,
+            tz,
+        );
+        off_ip.set_objects(vec![failsafe_ip.index.unwrap()]);
+
+        let mut off_wp2 = mcu(
+            "MCU_Deactivate",
+            &format!("Deactivate {FAILSAFE_WP2}{suffix}"),
+            next_id,
+            hx + MCU_GAP,
+            hz,
+        );
+        off_wp2.set_objects(vec![failsafe_wp2.index.unwrap()]);
+        failsafe_wp2.set_targets(vec![mission_end_id]);
+
+        let y = f64::from(opts.seats[si].altitude);
+        let mut prox = proximity_mcu(
+            &format!("{TOT_PROX}{suffix}"),
+            radius * 0.5,
+            next_id,
+            ax,
+            y,
+            az,
+        );
+        let (fake, fake_entity) = strike_fake_object(
+            &format!("Fake Object{suffix}"),
+            opposite_country(opts.seats[si].country),
+            ax,
+            az,
+            next_id,
+        );
+        let fake_entity_id = fake_entity.index.unwrap();
+        let prox_id = prox.index.unwrap();
+        prox.set_objects(vec![placed[si].entity_id, fake_entity_id]);
+        // The flight's own side. 5xx (USSR, DPRK, PRC) is Eastern [1].
+        // 6xx (USA) is Western [2]. The fake object's Country is the other side.
+        let coalitions = if western_country(opts.seats[si].country) {
+            "[2]"
+        } else {
+            "[1]"
+        };
+        prox.set_property("PlaneCoalitions", coalitions.to_string());
+        push_target(pulse_out, prox_id);
+        push_target(deactivate_units, prox_id);
+        push_object(deactivate_units, fake_entity_id);
+        if let Some(a) = activate.as_mut() {
+            push_object(a, fake_entity_id);
+        }
+        if let Some(s) = spawn.as_mut() {
+            push_object(s, fake_entity_id);
+        }
+        if let Some(d) = delete.as_mut() {
+            push_object(d, fake_entity_id);
+        }
+        units.push(fake);
+        units.push(fake_entity);
+        let mut off_prox = mcu(
+            "MCU_Deactivate",
+            &format!("Deactivate {TOT_PROX}{suffix}"),
+            next_id,
+            ax,
+            az + MCU_GAP,
+        );
+        off_prox.set_objects(vec![prox.index.unwrap()]);
+        prox.set_targets(vec![tot_id, off_prox.index.unwrap()]);
+
+        // Distance reads WP 2's MCU_Waypoint `Area` (the waypoint radius) and
+        // adds 100 m. `Radius`, `Size`, and `Zone` are used only when `Area`
+        // is missing. No radius means the bubble is 100 m around the point.
+        let wp2_distance = waypoint_bubble_m(&waypoints[home_wp]).unwrap_or(0.0) + 100.0;
+        let mut home_prox = proximity_mcu(
+            &format!("{WP2_PROX}{suffix}"),
+            wp2_distance,
+            next_id,
+            home_x,
+            y,
+            home_z,
+        );
+        let (home_fake, home_fake_entity) = strike_fake_object(
+            &format!("{WP2_FAKE}{suffix}"),
+            opts.seats[si].country,
+            home_x,
+            home_z,
+            next_id,
+        );
+        let home_fake_entity_id = home_fake_entity.index.unwrap();
+        let home_prox_id = home_prox.index.unwrap();
+        home_prox.set_objects(vec![placed[si].entity_id, home_fake_entity_id]);
+        // Same side as the flight, matching the Time on Target proximity.
+        // The fake's Country is this flight's country, not the other side.
+        home_prox.set_property("PlaneCoalitions", coalitions.to_string());
+        // Not armed here. The flight spawns on WP 2, so PULSE OUT would end
+        // the mission before the aircraft leave. The home-leg delay arms it.
+        push_target(deactivate_units, home_prox_id);
+        push_object(deactivate_units, home_fake_entity_id);
+        if let Some(a) = activate.as_mut() {
+            push_object(a, home_fake_entity_id);
+        }
+        if let Some(s) = spawn.as_mut() {
+            push_object(s, home_fake_entity_id);
+        }
+        if let Some(d) = delete.as_mut() {
+            push_object(d, home_fake_entity_id);
+        }
+        units.push(home_fake);
+        units.push(home_fake_entity);
+        let mut off_home_prox = mcu(
+            "MCU_Deactivate",
+            &format!("Deactivate {WP2_PROX}{suffix}"),
+            next_id,
+            home_x,
+            home_z + MCU_GAP,
+        );
+        off_home_prox.set_objects(vec![home_prox_id]);
+        // MISSION END runs the short cleanup (Force Complete, Deactivate
+        // Units, and the end timer the next plan listens to). The self
+        // deactivate turns this proximity off. Deactivate FAILSAFE WP2 stops
+        // that long timer from pulsing MISSION END a second time: Force
+        // Complete cancels the waypoint before the waypoint can do it.
+        home_prox.set_targets(vec![
+            mission_end_id,
+            off_home_prox.index.unwrap(),
+            off_wp2.index.unwrap(),
+        ]);
+
+        push_target(
+            &mut emitted[si][layout.ip].delay,
+            failsafe_ip.index.unwrap(),
+        );
+        push_target(
+            &mut emitted[si][layout.home].delay,
+            failsafe_wp2.index.unwrap(),
+        );
+        push_target(&mut emitted[si][layout.home].delay, home_prox_id);
+        let kept: Vec<i32> = waypoints[ip_wp]
+            .targets
+            .iter()
+            .copied()
+            .filter(|id| *id != tot_id)
+            .collect();
+        waypoints[ip_wp].set_targets(kept);
+        push_target(&mut waypoints[ip_wp], off_ip.index.unwrap());
+        push_target(&mut waypoints[home_wp], off_wp2.index.unwrap());
+
+        extra.extend([
+            failsafe_ip,
+            failsafe_wp2,
+            scrub_wp,
+            off_ip,
+            off_wp2,
+            prox,
+            off_prox,
+            home_prox,
+            off_home_prox,
+        ]);
+    }
+    StrikeWiring {
+        logic: extra,
+        units,
     }
 }
 
@@ -5701,6 +6241,12 @@ fn collect_unit_objects<'a>(e: &'a Il2Entity, out: &mut Vec<&'a Il2Entity>) {
         e.block_type.as_str(),
         "Plane" | "Vehicle" | "Train" | "Ship"
     ) {
+        // Generated with the strike proximity. Not a seat.
+        if e.name()
+            .is_some_and(|n| n == "Fake Object" || n.starts_with("Fake Object "))
+        {
+            return;
+        }
         out.push(e);
     }
     for c in &e.children {
@@ -5975,6 +6521,22 @@ fn read_zones(
         {
             mark_consumed(e, consumed);
         }
+        let Some(name) = e.name() else {
+            return;
+        };
+        if name == FAILSAFE_IP
+            || name == FAILSAFE_WP2
+            || name.starts_with("FAILSAFE IP ")
+            || name.starts_with("FAILSAFE WP2 ")
+            || name.starts_with(TOT_PROX)
+            || name.starts_with(WP2_PROX)
+            || name.starts_with("Deactivate FAILSAFE")
+            || name.starts_with("Deactivate Time on Target")
+            || name.starts_with("Deactivate WP 2 Prox")
+            || name.starts_with("Scrub WP")
+        {
+            mark_consumed(e, consumed);
+        }
     });
     consume_named_block(root, "MCU_Deactivate", "Self Deactivate", consumed);
     consume_named_block(root, "MCU_Deactivate", "Deactivate Unit(s)", consumed);
@@ -6219,6 +6781,23 @@ fn read_native_orders(
             opts.seats[seat].orders.push(spec);
         }
     }
+    visit(root, &mut |e| {
+        if e.block_type != "MCU_Proximity" {
+            return;
+        }
+        for &tid in &e.targets {
+            let Some(&(seat, oi)) = timer_to_order.get(&tid) else {
+                continue;
+            };
+            if opts.seats[seat]
+                .orders
+                .get(oi)
+                .is_some_and(|o| o.kind == OrderKind::TimeOnTarget)
+            {
+                opts.seats[seat].orders[oi].proximity_start = true;
+            }
+        }
+    });
 }
 
 fn sort_native_timers<'a>(
@@ -6286,6 +6865,44 @@ fn sort_native_timers<'a>(
             *incoming.entry(tar).or_insert(0) += 1;
         }
     });
+    // A proximity starts Time on Target when the flight is over the target.
+    // That timer has no order-timer predecessor, so without this edge load
+    // treats it as a second chain and puts it before the attack.
+    let mut attack_then_tot: HashMap<i32, Vec<i32>> = HashMap::new();
+    let attack_ids: Vec<i32> = mine
+        .iter()
+        .filter_map(|(kind, timer)| {
+            if matches!(kind, OrderKind::Attack | OrderKind::AttackArea) {
+                timer.index
+            } else {
+                None
+            }
+        })
+        .collect();
+    if attack_ids.len() == 1 {
+        let attack_id = attack_ids[0];
+        visit(root, &mut |e| {
+            if e.block_type != "MCU_Proximity" {
+                return;
+            }
+            for &tid in &e.targets {
+                if !mine_ids.contains(&tid) {
+                    continue;
+                }
+                let is_tot = mine.iter().any(|(kind, timer)| {
+                    timer.index == Some(tid) && *kind == OrderKind::TimeOnTarget
+                });
+                if !is_tot {
+                    continue;
+                }
+                let nexts = attack_then_tot.entry(attack_id).or_default();
+                if !nexts.contains(&tid) {
+                    nexts.push(tid);
+                    *incoming.entry(tid).or_insert(0) += 1;
+                }
+            }
+        });
+    }
     let mut frontier: Vec<i32> = Vec::new();
     if let Some(after) = root.find_by_name("AFTER BRING UP") {
         for &id in &after.targets {
@@ -6316,6 +6933,12 @@ fn sort_native_timers<'a>(
         let mut nexts = next_order_timer_ids(timer, by_index, order_ids);
         let reports = report_next.get(&id).cloned().unwrap_or_default();
         for &n in &reports {
+            if !nexts.contains(&n) {
+                nexts.push(n);
+            }
+        }
+        let stacked = attack_then_tot.get(&id).cloned().unwrap_or_default();
+        for &n in &stacked {
             if !nexts.contains(&n) {
                 nexts.push(n);
             }
@@ -10411,15 +11034,22 @@ mod tests {
         let mut opts = TemplateOptions::default();
         opts.seats = vec![TemplateSeat::new(plane)];
         opts.seats[0].country = 601;
+        opts.seats[0].skill = 2;
         opts.waypoint_count = 0;
         let applied =
             apply_mission_package(&mut opts.seats, 0, MissionPackage::Strike, 4_000.0).unwrap();
         assert!(applied.disable_zone_out);
         assert!(applied.detail.contains("Loadout"), "{}", applied.detail);
+        assert!(
+            applied
+                .detail
+                .contains("A proximity at WP 2 ends the mission.")
+        );
         opts.zone_out_enabled = false;
         assert_ne!(opts.seats[0].payload_id, 0);
         assert!((opts.seats[0].altitude - AIR_START_ALTITUDE_M).abs() < 0.1);
         assert_eq!(opts.seats[0].start_type, PlaneStart::Air.as_i32());
+        let window = strike_window_s(opts.seats[0].skill);
         let orders = &opts.seats[0].orders;
         assert_eq!(orders[0].kind, OrderKind::Formation);
         assert_eq!(orders[0].formation_type, AIR_COLUMN_PAIRS);
@@ -10427,16 +11057,16 @@ mod tests {
         assert_eq!(orders[1].priority, 1);
         assert_eq!(orders[2].kind, OrderKind::AttackArea);
         assert_eq!(orders[2].priority, 2);
-        assert!((orders[2].time_s - 120.0).abs() < 0.1);
+        assert!((orders[2].time_s - window).abs() < 0.1);
         assert!((orders[2].attack_area - 3000.0).abs() < 0.1);
         assert!(orders[2].attack_ground);
         assert!(!orders[2].attack_air);
-        assert_eq!(orders[3].kind, OrderKind::OnAreaAttacked);
-        assert_eq!(orders[4].kind, OrderKind::TimeOnTarget);
-        assert!((orders[4].time_s - 120.0).abs() < 0.1);
-        assert_eq!(orders[5].kind, OrderKind::GotoWaypoint);
-        assert_eq!(orders[5].priority, 2);
-        assert_eq!(orders[6].kind, OrderKind::MissionComplete);
+        assert!(!orders[2].attack_g_targets);
+        assert_eq!(orders[3].kind, OrderKind::TimeOnTarget);
+        assert!((orders[3].time_s - STRIKE_TOT_S).abs() < 0.1);
+        assert_eq!(orders[4].kind, OrderKind::GotoWaypoint);
+        assert_eq!(orders[4].priority, 2);
+        assert_eq!(orders[5].kind, OrderKind::MissionComplete);
         let geo = strike_geometry(true, STRIKE_START_M);
         assert!(strike_turn_deg(geo) >= 30.0, "{}", strike_turn_deg(geo));
         let ip_d = orders[1]
@@ -10444,20 +11074,10 @@ mod tests {
             .unwrap()
             .hypot(orders[1].wp_east_m.unwrap());
         assert!((ip_d - STRIKE_IP_M).abs() < 1.0, "{ip_d}");
-        assert!((orders[5].wp_north_m.unwrap() - geo.start_north).abs() < 1.0);
-        assert!(
-            opts.seats[0]
-                .events
-                .iter()
-                .filter(|e| e.then != EventThen::AllDestroyed)
-                .all(|e| e.then == EventThen::Order(5))
-        );
-        assert!(
-            opts.seats[0]
-                .events
-                .iter()
-                .any(|e| { e.kind == EntityEvent::OnKilled && e.then == EventThen::AllDestroyed })
-        );
+        assert!((orders[4].wp_north_m.unwrap() - geo.start_north).abs() < 1.0);
+        assert_eq!(opts.seats[0].events.len(), 1);
+        assert_eq!(opts.seats[0].events[0].kind, EntityEvent::OnKilled);
+        assert_eq!(opts.seats[0].events[0].then, EventThen::AllDestroyed);
         let laid = order_tree_layout(orders, &opts.seats[0].events);
         let attack_col = &laid[2];
         let labels: Vec<_> = attack_col
@@ -10467,17 +11087,7 @@ mod tests {
                 OrderTreeNode::Order(oi) => orders[*oi].kind.label().to_string(),
             })
             .collect();
-        assert_eq!(
-            labels,
-            vec![
-                "OnPlaneCriticalDamage",
-                "OnPilotWounded",
-                "OnBingoBombs",
-                "OnAreaAttacked",
-                "AttackArea",
-                "Time on Target",
-            ]
-        );
+        assert_eq!(labels, vec!["AttackArea", "Time on Target"]);
 
         let pack = generate_template(&opts).unwrap();
         assert!(pack.find_by_name("STRIKE END").is_none());
@@ -10497,47 +11107,60 @@ mod tests {
         let attack_delay = pack.find_by_name("AttackArea 1").unwrap();
         let tot = pack.find_by_name("Time on Target 1").unwrap();
         let home_goto = pack.find_by_name("Goto WP 2").unwrap();
-        assert_eq!(tot.property("Time"), Some("120"));
+        let ip_goto = pack.find_by_name("Goto WP 1").unwrap();
+        assert_eq!(tot.property("Time"), Some("480"));
         assert!(ip.targets.contains(&attack_delay.index.unwrap()));
         assert!(
-            ip.targets.contains(&tot.index.unwrap()),
-            "IP must pulse Time on Target beside AttackArea, got {:?}",
+            !ip.targets.contains(&tot.index.unwrap()),
+            "the IP must not start Time on Target, got {:?}",
             ip.targets
         );
         assert!(
             !attack_delay.targets.contains(&tot.index.unwrap()),
-            "AttackArea and Time on Target are parallel, not in series"
+            "AttackArea and Time on Target are not in series"
         );
         assert!(
             tot.targets.contains(&home_goto.index.unwrap()),
             "Time on Target must start the home Goto, got {:?}",
             tot.targets
         );
-        assert!(!tot.targets.is_empty(), "Time on Target must have a target");
         assert!(!ip.targets.contains(&home.index.unwrap()));
         let done = pack.find_by_name("Mission Complete 1").unwrap();
         assert!(home.targets.contains(&done.index.unwrap()));
-        let report = pack.find_by_name("OnAreaAttacked 1").unwrap();
+        assert!(pack.find_by_name("OnAreaAttacked 1").is_none());
+        assert!(pack.find_by_name("Go Home Once 1").is_none());
+        let events = entity_events(&pack);
+        assert!(
+            events.iter().all(|(ty, _)| *ty == 13),
+            "only OnKilled is wired, got {events:?}"
+        );
+        let fail_ip = pack.find_by_name("FAILSAFE IP").unwrap();
+        let fail_wp2 = pack.find_by_name("FAILSAFE WP2").unwrap();
+        let scrub = pack.find_by_name("Scrub WP 1").unwrap();
+        assert!(ip_goto.targets.contains(&fail_ip.index.unwrap()));
+        assert!(ip_goto.targets.contains(&ip.index.unwrap()));
+        assert!(fail_ip.targets.contains(&home_goto.index.unwrap()));
+        assert!(fail_ip.targets.contains(&scrub.index.unwrap()));
+        assert_eq!(scrub.objects, vec![ip.index.unwrap()]);
+        let off_ip = pack.find_by_name("Deactivate FAILSAFE IP").unwrap();
+        assert!(ip.targets.contains(&off_ip.index.unwrap()));
+        assert_eq!(off_ip.objects, vec![fail_ip.index.unwrap()]);
+        assert!(home_goto.targets.contains(&fail_wp2.index.unwrap()));
+        assert!(fail_wp2.targets.contains(&hub.index.unwrap()));
+        let off_wp2 = pack.find_by_name("Deactivate FAILSAFE WP2").unwrap();
+        assert!(home.targets.contains(&off_wp2.index.unwrap()));
+        assert_eq!(off_wp2.objects, vec![fail_wp2.index.unwrap()]);
+        let speed: f64 = ip.property("Speed").unwrap().parse().unwrap();
+        let (ix0, iz0) = ip.pos_xz().unwrap();
+        let (hx0, hz0) = home.pos_xz().unwrap();
+        let expect_ip = failsafe_seconds((ix0 - hx0).hypot(iz0 - hz0), speed, 2.0);
+        let got_ip: f64 = fail_ip.property("Time").unwrap().parse().unwrap();
+        assert!((got_ip - expect_ip).abs() < 0.05, "{got_ip} vs {expect_ip}");
         let force = pack
             .find_by_name("Force Complete - High")
             .unwrap()
             .index
             .unwrap();
-        let once = pack.find_by_name("Go Home Once 1").unwrap();
-        assert_eq!(once.property("Counter"), Some("1"));
-        assert_eq!(once.property("Dropcount"), Some("0"));
-        assert_eq!(once.targets, vec![home_goto.index.unwrap()]);
-        let abort = entity_events(&pack)
-            .into_iter()
-            .find(|(ty, _)| *ty == 9)
-            .expect("bingo bombs")
-            .1;
-        assert_eq!(abort, once.index.unwrap());
-        assert!(
-            report.targets.contains(&home_goto.index.unwrap()),
-            "OnAreaAttacked still starts the home Goto directly"
-        );
-        assert!(!report.targets.contains(&once.index.unwrap()));
         assert!(
             !home_goto.targets.contains(&force),
             "home Goto must not pulse Force Complete with the waypoint, got {:?}",
@@ -10607,12 +11230,112 @@ mod tests {
             saw_plane && saw_entity,
             "formation Objects is the plane entity"
         );
+        let prox = pack.find_by_name("Time on Target Prox").unwrap();
+        assert_eq!(prox.block_type, "MCU_Proximity");
+        assert_eq!(prox.property("Distance"), Some("1500"));
+        assert_eq!(prox.property("Closer"), Some("1"));
+        assert_eq!(prox.property("PlaneCoalitions"), Some("[2]"));
+        assert_eq!(prox.property("YPos"), Some("1500.000"));
+        let mark = pack.find_by_name("Fake Object").unwrap();
+        assert_eq!(mark.block_type, "Vehicle");
+        assert!(
+            mark.property("Model")
+                .is_some_and(|m| m.contains("fake_object.mgm") && !m.contains("primary")),
+            "{:?}",
+            mark.property("Model")
+        );
+        assert_eq!(mark.property("Country"), Some("501"));
+        let mark_entity: i32 = mark.property("LinkTrId").unwrap().parse().unwrap();
+        assert_eq!(prox.objects, vec![linked, mark_entity]);
+        assert!(
+            pack.find_by_name("PULSE OUT")
+                .unwrap()
+                .targets
+                .contains(&prox.index.unwrap())
+        );
+        let deactivate = pack.find_by_name("Deactivate Units").unwrap();
+        assert!(deactivate.targets.contains(&prox.index.unwrap()));
+        assert!(deactivate.objects.contains(&mark_entity));
+        assert!(
+            pack.find_by_name("Activate Units")
+                .unwrap()
+                .objects
+                .contains(&mark_entity)
+        );
+        assert!(prox.targets.contains(&tot.index.unwrap()));
+        let off_prox = pack.find_by_name("Deactivate Time on Target Prox").unwrap();
+        assert!(prox.targets.contains(&off_prox.index.unwrap()));
+        assert_eq!(off_prox.objects, vec![prox.index.unwrap()]);
+        let home_prox = pack.find_by_name("WP 2 Prox").unwrap();
+        assert_eq!(home_prox.block_type, "MCU_Proximity");
+        let (hpx, hpz) = home_prox.pos_xz().unwrap();
+        assert!(
+            (hpx - hx).abs() < 1.0 && (hpz - hz).abs() < 1.0,
+            "WP 2 Prox sits on WP 2, got {hpx},{hpz} vs {hx},{hz}"
+        );
+        assert_eq!(home_prox.property("YPos"), Some("1500.000"));
+        assert_eq!(home_prox.property("Closer"), Some("1"));
+        assert_eq!(home_prox.property("PlaneCoalitions"), Some("[2]"));
+        let bubble = waypoint_bubble_m(home);
+        assert_eq!(bubble, Some(300.0));
+        let expect_dist = format!("{:.0}", bubble.unwrap_or(0.0) + 100.0);
+        assert_eq!(home_prox.property("Distance"), Some(expect_dist.as_str()));
+        let mut bare = Il2Entity::new("MCU_Waypoint");
+        assert!(waypoint_bubble_m(&bare).is_none());
+        assert_eq!(waypoint_bubble_m(&bare).unwrap_or(0.0) + 100.0, 100.0);
+        bare.set_property("Radius", "250");
+        assert_eq!(waypoint_bubble_m(&bare).unwrap(), 250.0);
+        bare.set_property("Area", "300");
+        assert_eq!(
+            waypoint_bubble_m(&bare).unwrap(),
+            300.0,
+            "Area is the radius; Radius is only a fallback"
+        );
+        let home_mark = pack.find_by_name("Fake Object WP2").unwrap();
+        assert_eq!(home_mark.block_type, "Vehicle");
+        assert_eq!(home_mark.property("Country"), Some("601"));
+        assert_ne!(home_mark.property("Country"), Some("501"));
+        let home_mark_entity: i32 = home_mark.property("LinkTrId").unwrap().parse().unwrap();
+        assert_eq!(home_prox.objects, vec![linked, home_mark_entity]);
+        assert!(
+            !pack
+                .find_by_name("PULSE OUT")
+                .unwrap()
+                .targets
+                .contains(&home_prox.index.unwrap()),
+            "PULSE OUT must not arm WP 2 Prox"
+        );
+        assert!(
+            home_goto.targets.contains(&home_prox.index.unwrap()),
+            "Goto WP 2 arms WP 2 Prox, got {:?}",
+            home_goto.targets
+        );
+        let off_home = pack.find_by_name("Deactivate WP 2 Prox").unwrap();
+        assert!(home_prox.targets.contains(&hub.index.unwrap()));
+        assert!(home_prox.targets.contains(&off_home.index.unwrap()));
+        assert_eq!(off_home.objects, vec![home_prox.index.unwrap()]);
+        assert!(
+            home_prox.targets.contains(&off_wp2.index.unwrap()),
+            "arrival must cancel FAILSAFE WP2 so MISSION END pulses once"
+        );
+        assert!(deactivate.targets.contains(&home_prox.index.unwrap()));
+        assert!(deactivate.objects.contains(&home_mark_entity));
+        assert!(
+            pack.find_by_name("Activate Units")
+                .unwrap()
+                .objects
+                .contains(&home_mark_entity)
+        );
         let area = pack.find_by_name("AttackArea").unwrap();
         assert_eq!(area.property("Priority"), Some("2"));
+        assert_eq!(area.property("Time"), Some("240"));
+        assert_eq!(area.property("AttackGround"), Some("1"));
+        assert_eq!(area.property("AttackGTargets"), Some("0"));
         assert!(pack.find_by_name("Goto WP 1").is_some());
         assert!(pack.find_by_name("Goto WP 2").is_some());
         assert!(pack.find_by_name("Return to WP 1").is_none());
         let loaded = load_template(&pack, &builtin_plane_catalog()).unwrap();
+        assert_eq!(loaded.options.seats.len(), 1);
         let kinds: Vec<_> = loaded.options.seats[0]
             .orders
             .iter()
@@ -10624,7 +11347,6 @@ mod tests {
                 "Formation",
                 "Goto WP",
                 "AttackArea",
-                "OnAreaAttacked",
                 "Time on Target",
                 "Goto WP",
                 "Mission Complete",
@@ -10635,29 +11357,158 @@ mod tests {
         assert_eq!(loaded_orders[1].waypoint, 1);
         assert_eq!(loaded_orders[1].loop_to, None);
         assert_eq!(loaded_orders[2].priority, 2);
-        assert_eq!(loaded_orders[4].kind, OrderKind::TimeOnTarget);
-        assert!((loaded_orders[4].time_s - 120.0).abs() < 0.1);
-        assert_eq!(loaded_orders[5].kind, OrderKind::GotoWaypoint);
-        assert_eq!(loaded_orders[5].waypoint, 2);
-        assert_eq!(loaded_orders[5].priority, 2);
-        assert_eq!(loaded_orders[5].loop_to, None);
+        assert_eq!(loaded_orders[3].kind, OrderKind::TimeOnTarget);
+        assert!(loaded_orders[3].proximity_start);
+        assert!((loaded_orders[3].time_s - STRIKE_TOT_S).abs() < 0.1);
+        assert_eq!(loaded_orders[4].kind, OrderKind::GotoWaypoint);
+        assert_eq!(loaded_orders[4].waypoint, 2);
+        assert_eq!(loaded_orders[4].priority, 2);
+        assert_eq!(loaded_orders[4].loop_to, None);
         assert!(
             loaded.options.seats[0]
                 .events
                 .iter()
-                .filter(|e| e.then != EventThen::AllDestroyed)
-                .all(|e| e.then == EventThen::Order(5))
+                .all(|e| { e.kind == EntityEvent::OnKilled && e.then == EventThen::AllDestroyed })
         );
         assert!(
-            loaded.options.seats[0]
-                .events
-                .iter()
-                .any(|e| { e.kind == EntityEvent::OnKilled && e.then == EventThen::AllDestroyed })
+            loaded.warnings.iter().all(|w| {
+                !w.contains("FAILSAFE")
+                    && !w.contains("Time on Target Prox")
+                    && !w.contains("WP 2 Prox")
+                    && !w.contains("Fake Object")
+            }),
+            "{:?}",
+            loaded.warnings
+        );
+
+        opts.bring_up = BringUp::Spawn;
+        let spawned = generate_template(&opts).unwrap();
+        let spawned_mark: i32 = spawned
+            .find_by_name("Fake Object WP2")
+            .unwrap()
+            .property("LinkTrId")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            spawned
+                .find_by_name("Trigger Spawner")
+                .unwrap()
+                .objects
+                .contains(&spawned_mark)
+        );
+        assert!(
+            spawned
+                .find_by_name("Trigger Delete")
+                .unwrap()
+                .objects
+                .contains(&spawned_mark)
+        );
+        assert!(
+            spawned
+                .find_by_name("Deactivate Units")
+                .unwrap()
+                .objects
+                .contains(&spawned_mark)
         );
 
         let dprk = strike_geometry(false, STRIKE_START_M);
         assert!(dprk.start_north > 0.0 && dprk.start_east.abs() < 1.0);
         assert!(strike_turn_deg(dprk) >= 30.0);
+
+        let mut moved = pack.clone();
+        assert!(place_strike_at(
+            &mut moved,
+            StrikePose {
+                target_x: 100_000.0,
+                target_z: 100_000.0,
+                start_x: 160_000.0,
+                start_z: 100_000.0,
+                ip_x: 108_000.0,
+                ip_z: 100_000.0,
+            },
+        ));
+        let far: f64 = moved
+            .find_by_name("FAILSAFE IP")
+            .unwrap()
+            .property("Time")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(far > got_ip, "a longer IP leg lengthens FAILSAFE IP");
+        let (px, pz) = moved
+            .find_by_name("Time on Target Prox")
+            .unwrap()
+            .pos_xz()
+            .unwrap();
+        assert!((px - 100_000.0).abs() < 1.0 && (pz - 100_000.0).abs() < 1.0);
+        let (mx, mz) = moved.find_by_name("Fake Object").unwrap().pos_xz().unwrap();
+        assert!((mx - 100_000.0).abs() < 1.0 && (mz - 100_000.0).abs() < 1.0);
+        let (ex, ez) = moved
+            .find_by_name("Fake Object entity")
+            .unwrap()
+            .pos_xz()
+            .unwrap();
+        assert!((ex - 100_000.0).abs() < 1.0 && (ez - 100_000.0).abs() < 1.0);
+        let (wpx, wpz) = moved.find_by_name("WP 2 Prox").unwrap().pos_xz().unwrap();
+        assert!(
+            (wpx - 160_000.0).abs() < 1.0 && (wpz - 100_000.0).abs() < 1.0,
+            "WP 2 Prox follows the placed home waypoint"
+        );
+        let (fx, fz) = moved
+            .find_by_name("Fake Object WP2")
+            .unwrap()
+            .pos_xz()
+            .unwrap();
+        assert!((fx - 160_000.0).abs() < 1.0 && (fz - 100_000.0).abs() < 1.0);
+        let (fe_x, fe_z) = moved
+            .find_by_name("Fake Object WP2 entity")
+            .unwrap()
+            .pos_xz()
+            .unwrap();
+        assert!((fe_x - 160_000.0).abs() < 1.0 && (fe_z - 100_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn strike_proximity_is_eastern_for_dprk() {
+        let mut opts = one_mig();
+        opts.seats[0].country = 502;
+        apply_mission_package(&mut opts.seats, 0, MissionPackage::Strike, 4_000.0).unwrap();
+        opts.zone_out_enabled = false;
+        let pack = generate_template(&opts).unwrap();
+        assert_eq!(
+            pack.find_by_name("Time on Target Prox")
+                .unwrap()
+                .property("PlaneCoalitions"),
+            Some("[1]")
+        );
+        assert_eq!(
+            pack.find_by_name("Fake Object")
+                .unwrap()
+                .property("Country"),
+            Some("601")
+        );
+        assert_eq!(
+            pack.find_by_name("WP 2 Prox")
+                .unwrap()
+                .property("PlaneCoalitions"),
+            Some("[1]")
+        );
+        assert_eq!(
+            pack.find_by_name("Fake Object WP2")
+                .unwrap()
+                .property("Country"),
+            Some("502")
+        );
+    }
+
+    #[test]
+    fn strike_window_tracks_lead_skill() {
+        assert_eq!(strike_window_s(0), 420.0);
+        assert_eq!(strike_window_s(1), 300.0);
+        assert_eq!(strike_window_s(2), 240.0);
+        assert_eq!(strike_window_s(3), 120.0);
+        assert_eq!(strike_window_s(4), 60.0);
     }
 
     #[test]

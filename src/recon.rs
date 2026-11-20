@@ -68,8 +68,9 @@ use crate::weapon_range::{
     UNKNOWN_ARMOR_M, UNKNOWN_ARTILLERY_M, group_has_ground_attack_area, group_weapon_range,
 };
 
-/// Same 500 ms stagger as the fighter-pack randomizer. 100 ms is too tight.
-const WATERFALL_STEP_S: f64 = 0.5;
+/// Same 500 ms stagger as the fighter-pack randomizer. 100 ms is too tight
+/// for the server: several MCU chains on one tick hitch the mission.
+pub(crate) const WATERFALL_STEP_S: f64 = 0.5;
 /// Local MCU icon stagger only — copies themselves use `placement` grid.
 const MCU_STAGGER_COLS: usize = 10;
 
@@ -730,6 +731,47 @@ pub fn park_recon_copies_headed(root: &mut Il2Entity, spots: &[(f64, f64)], head
     }
 }
 
+fn nearly(a: f64, b: f64) -> bool {
+    (a - b).abs() < 0.05
+}
+
+fn same_path(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(p, q)| nearly(p.0, q.0) && nearly(p.1, q.1))
+}
+
+/// Where a loaded copy sits. A parked column uses its lead vehicle. Anything
+/// else uses the model centroid. A logic MCU is not the unit.
+fn kept_anchor(root: &Il2Entity, network: Option<&crate::mapnet::NetworkSpot>) -> (f64, f64) {
+    if let Some(lead) = network.and_then(|net| net.unit_xz.first().copied()) {
+        return lead;
+    }
+    if let Some(net) = crate::mapnet::inspect_parked_network(root) {
+        if let Some(lead) = net.unit_xz.first().copied() {
+            return lead;
+        }
+    }
+    crate::placement::visual_centroid(root)
+        .or_else(|| root.first_xz())
+        .unwrap_or((0.0, 0.0))
+}
+
+fn ground_unchanged(spot: &GroundSpot, copy: &ArmyCopyInfo) -> bool {
+    nearly(spot.x, copy.x)
+        && nearly(spot.z, copy.z)
+        && crate::placement::heading_delta(copy.heading, spot.heading_deg).abs() < 0.05
+        && match (&spot.network, &copy.network) {
+            (Some(live), Some(saved)) => {
+                same_path(&live.unit_xz, &saved.unit_xz)
+                    && same_path(&live.waypoints, &saved.waypoints)
+            }
+            (None, None) => same_path(spot.path_waypoints(), &copy.waypoints),
+            _ => false,
+        }
+}
+
 fn park_one_ground_copy(child: &mut Il2Entity, spot: &GroundSpot) {
     if let Some(net) = &spot.network {
         mapnet::park_route_copy(
@@ -752,6 +794,9 @@ fn park_one_ground_copy(child: &mut Il2Entity, spot: &GroundSpot) {
 /// Park a loaded copy. Heading is a delta from the yaw already in the file
 /// (templates face north so this matches [`park_one_ground_copy`]).
 fn park_one_ground_copy_from(child: &mut Il2Entity, spot: &GroundSpot, copy: &ArmyCopyInfo) {
+    if ground_unchanged(spot, copy) {
+        return;
+    }
     if let Some(net) = &spot.network {
         mapnet::park_route_copy(
             child,
@@ -764,7 +809,7 @@ fn park_one_ground_copy_from(child: &mut Il2Entity, spot: &GroundSpot, copy: &Ar
     }
     let delta = crate::placement::heading_delta(copy.heading, spot.heading_deg);
     crate::placement::apply_group_heading(child, delta);
-    let from = child.first_xz().unwrap_or((0.0, 0.0));
+    let from = kept_anchor(child, None);
     crate::placement::move_anchor_to(child, from, (spot.x, spot.z));
     if !spot.waypoints.is_empty() {
         mapnet::park_path_waypoints(child, &spot.waypoints);
@@ -886,8 +931,8 @@ pub fn inspect_army_copies(root: &Il2Entity) -> Vec<ArmyCopyInfo> {
     army_copy_refs(root)
         .into_iter()
         .map(|copy| {
-            let (x, z) = copy.first_xz().unwrap_or((0.0, 0.0));
             let network = crate::mapnet::inspect_parked_network(copy);
+            let (x, z) = kept_anchor(copy, network.as_ref());
             let route = crate::mapnet::inspect_route(copy);
             let on_net = network.is_some() || route.is_some();
             let wp_ahead = if on_net {
@@ -954,10 +999,15 @@ pub fn park_army_mixed(
         |child: &mut Il2Entity, kind: crate::weapon_range::ArmyUnitKind, copy: &ArmyCopyInfo| {
             if kind == crate::weapon_range::ArmyUnitKind::Ship {
                 if let Some(&(x, z, heading)) = ships.get(si) {
-                    let delta = crate::placement::heading_delta(copy.heading, heading);
-                    crate::placement::apply_group_heading(child, delta);
-                    let from = child.first_xz().unwrap_or((0.0, 0.0));
-                    crate::placement::move_anchor_to(child, from, (x, z));
+                    let same = (x - copy.x).abs() < 0.05
+                        && (z - copy.z).abs() < 0.05
+                        && crate::placement::heading_delta(copy.heading, heading).abs() < 0.05;
+                    if !same {
+                        let delta = crate::placement::heading_delta(copy.heading, heading);
+                        crate::placement::apply_group_heading(child, delta);
+                        let from = kept_anchor(child, None);
+                        crate::placement::move_anchor_to(child, from, (x, z));
+                    }
                     si += 1;
                 }
             } else if let Some(spot) = ground.get(gi) {
@@ -2529,22 +2579,175 @@ mod tests {
         let copies = inspect_army_copies(&tmpl);
         assert_eq!(copies.len(), 1);
         assert!((copies[0].heading - 90.0).abs() < 2.0);
-        let from = tmpl.first_xz().unwrap();
         let mut spot = GroundSpot::at(
-            from.0,
-            from.1,
+            copies[0].x,
+            copies[0].z,
             true,
             copies[0].heading,
             GroundKind::Supply,
             None,
         );
-        spot.waypoints = copies[0].waypoints.clone();
+        spot.network = copies[0].network.clone();
+        spot.waypoints = copies[0]
+            .network
+            .as_ref()
+            .map(|net| net.waypoints.clone())
+            .unwrap_or_else(|| copies[0].waypoints.clone());
         let mut parked = tmpl.clone();
         park_army_mixed(&mut parked, &copies, &[], &[spot]);
-        let after = inspect_army_copies(&parked);
-        assert!((after[0].heading - 90.0).abs() < 2.0);
-        let (x, z) = parked.first_xz().unwrap();
-        assert!((x - from.0).abs() < 1.0);
-        assert!((z - from.1).abs() < 1.0);
+        assert_eq!(parked, tmpl);
+    }
+
+    #[test]
+    fn reimport_sits_on_the_unit_and_a_second_export_does_not_move_it() {
+        fn node(block: &str, x: &str, z: &str, model: Option<&str>) -> Il2Entity {
+            let mut e = Il2Entity::new(block);
+            e.set_property("XPos", x);
+            e.set_property("ZPos", z);
+            e.set_property("YPos", "0.000");
+            e.set_property("YOri", "10.000");
+            if let Some(model) = model {
+                e.set_property("Model", model);
+            }
+            e
+        }
+
+        let mut column = Il2Entity::new("Group");
+        column.set_name("DPRK_Truck_Column [1]");
+        column.children.push(node(
+            "MCU_TR_MissionBegin",
+            "173959.620",
+            "300259.315",
+            None,
+        ));
+        column.children.push(node(
+            "Vehicle",
+            "164490.828",
+            "300502.783",
+            Some(r"graphics\vehicles\gaz-63.mgm"),
+        ));
+        column.children.push(node(
+            "Vehicle",
+            "164400.000",
+            "300400.000",
+            Some(r"graphics\vehicles\gaz-63.mgm"),
+        ));
+        let copies = inspect_army_copies(&column);
+        let off_logic = (copies[0].x - 173959.620).hypot(copies[0].z - 300259.315);
+        assert!(
+            off_logic > 1_000.0,
+            "column anchor sat on the logic MCU, {off_logic} m away"
+        );
+        assert!((copies[0].x - 164445.0).abs() < 80.0);
+
+        let mut armor = Il2Entity::new("Group");
+        armor.set_name("Unit Template [1]");
+        armor.children.push(node("MCU_Timer", "132945.798", "290987.415", None));
+        armor.children.push(node(
+            "Vehicle",
+            "132710.646",
+            "290800.000",
+            Some(r"graphics\vehicles\m4a3e8.mgm"),
+        ));
+        let armor_copies = inspect_army_copies(&armor);
+        assert!((armor_copies[0].x - 132710.646).abs() < 0.01);
+        assert!((armor_copies[0].z - 290800.0).abs() < 0.01);
+
+        let mut train = Il2Entity::new("Group");
+        train.children.push(node(
+            "MCU_TR_MissionBegin",
+            "170690.675",
+            "292646.332",
+            None,
+        ));
+        train.children.push(node(
+            "Train",
+            "161090.675",
+            "292646.332",
+            Some(r"graphics\trains\type475-1\type475-1.mgm"),
+        ));
+        let train_copies = inspect_army_copies(&train);
+        assert!((train_copies[0].x - 161090.675).abs() < 0.01);
+        assert!((train_copies[0].z - 292646.332).abs() < 0.01);
+
+        let mut fleet = Il2Entity::new("Group");
+        fleet.children.push(node("MCU_TR_MissionBegin", "50000.000", "50000.000", None));
+        let mut ship = node(
+            "Ship",
+            "100000.000",
+            "200000.000",
+            Some(r"graphics\ships\seiner.mgm"),
+        );
+        ship.set_property(
+            "Script",
+            r"LuaScripts\WorldObjects\Ships\seiner-gunboat.txt",
+        );
+        fleet.children.push(ship);
+        let ship_copies = inspect_army_copies(&fleet);
+        assert_eq!(
+            ship_copies[0].kind,
+            crate::weapon_range::ArmyUnitKind::Ship
+        );
+        assert!((ship_copies[0].x - 100_000.0).abs() < 0.01);
+        assert!((ship_copies[0].z - 200_000.0).abs() < 0.01);
+
+        let mut spot = GroundSpot::at(
+            copies[0].x,
+            copies[0].z,
+            true,
+            copies[0].heading,
+            GroundKind::Supply,
+            None,
+        );
+        spot.network = copies[0].network.clone();
+        spot.waypoints = copies[0].waypoints.clone();
+        let before = column.clone();
+        park_army_mixed(&mut column, &copies, &[], &[spot]);
+        assert_eq!(column, before);
+
+        let before_armor = armor.clone();
+        let armor_spot = GroundSpot::at(
+            armor_copies[0].x,
+            armor_copies[0].z,
+            true,
+            armor_copies[0].heading,
+            GroundKind::Armor,
+            None,
+        );
+        park_army_mixed(&mut armor, &armor_copies, &[], &[armor_spot]);
+        assert_eq!(armor, before_armor);
+
+        let before_ship = fleet.clone();
+        park_army_mixed(
+            &mut fleet,
+            &ship_copies,
+            &[(ship_copies[0].x, ship_copies[0].z, ship_copies[0].heading)],
+            &[],
+        );
+        assert_eq!(fleet, before_ship);
+
+        let moved = GroundSpot::at(
+            armor_copies[0].x + 500.0,
+            armor_copies[0].z,
+            true,
+            armor_copies[0].heading,
+            GroundKind::Armor,
+            None,
+        );
+        park_army_mixed(&mut armor, &armor_copies, &[], &[moved]);
+        let gun = armor
+            .children
+            .iter()
+            .find(|c| c.block_type == "Vehicle")
+            .and_then(|c| c.pos_xz())
+            .unwrap();
+        let logic = armor
+            .children
+            .iter()
+            .find(|c| c.block_type == "MCU_Timer")
+            .and_then(|c| c.pos_xz())
+            .unwrap();
+        assert!((gun.0 - (132710.646 + 500.0)).abs() < 0.01);
+        assert!((logic.0 - (132945.798 + 500.0)).abs() < 0.01);
     }
 }

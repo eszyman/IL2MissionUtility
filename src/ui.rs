@@ -1,16 +1,17 @@
 //! # ui.rs — egui front-end for the IL-2 Group Generator
 //!
 //! The GUI entry point. Boots the eframe window, holds all UI state in
-//! [`GroupGeneratorApp`], and routes the six mode tabs (Template, Army
-//! Generator, Fighter Pack, Exclusive Activation, Airfield, Map) to their
-//! panels. The detached Help viewport lives in [`crate::help`]; this file
+//! [`GroupGeneratorApp`], and routes the mode tabs (Template, Army
+//! Generator, Mission Tasking, Airfield, Map). Fighter Pack and Exclusive
+//! Activation are sections of Mission Tasking.
+//! to their panels. The detached Help viewport lives in [`crate::help`]; this file
 //! is otherwise the only egui code.
 //!
 //! Presentation only: no AST parsing and no group generation live here. This
 //! file talks to the rest of the crate strictly through public APIs —
 //! [`crate::parser`] loads files, [`crate::template`] / [`crate::pack`] /
 //! [`crate::flights`] / [`crate::bombers`] / [`crate::recon`] /
-//! [`crate::frontlines`] / [`crate::airfield`] build them, and
+//! [`crate::frontlines`] / [`crate::airfield`] / [`crate::airtask`] build them, and
 //! [`crate::serialize`] writes them. Anything that needs the AST does so in
 //! those modules, not here.
 //!
@@ -48,6 +49,7 @@ use crate::aircraft::{
 };
 use crate::airfield::AirfieldInfo;
 use crate::airstart::{AirStartField, AirStartPlane, PlacedAirStart};
+use crate::airtask::{self, AirOptions};
 use crate::bombers::{
     BomberInput, BomberPlanInfo, MISSION_WINDOW_S, SUGGESTED_END_NAMES, SUGGESTED_TRIGGER_NAMES,
     extract_exclusive_plans, inspect_plan, link_bomber_plans_with, looks_like_exclusive_pack,
@@ -132,22 +134,41 @@ enum AppMode {
     Recon,
     Airfield,
     Map,
+    AirTasking,
 }
 
-/// Index of `mode` in `MODES` (the per-tab status slots follow it).
+/// Status-slot index. Fighter Pack and Exclusive stay addressable after they
+/// left the rail, so their lines are not stored on top of Template.
 fn mode_slot(mode: AppMode) -> usize {
-    MODES.iter().position(|(m, _)| *m == mode).unwrap_or(0)
+    match mode {
+        AppMode::Template => 0,
+        AppMode::Recon => 1,
+        AppMode::Fighter => 2,
+        AppMode::Exclusive => 3,
+        AppMode::Airfield => 4,
+        AppMode::Map => 5,
+        AppMode::AirTasking => 6,
+    }
 }
 
-/// Rail order (docs/ui-redesign/README.md §4). Ctrl 1–6 follow it.
-const MODES: [(AppMode, &str); 6] = [
+/// Rail order. Map is listed first. The app still opens on Template.
+/// Ctrl 1–5 follow this list. Fighter packs and exclusive plans are sections
+/// of Mission Tasking, not their own tabs.
+const MODES: [(AppMode, &str); 5] = [
+    (AppMode::Map, "Map"),
     (AppMode::Template, "Template"),
     (AppMode::Recon, "Army Generator"),
-    (AppMode::Fighter, "Fighter Pack"),
-    (AppMode::Exclusive, "Exclusive Activation"),
-    (AppMode::Airfield, "Airfield"),
-    (AppMode::Map, "Map"),
+    (AppMode::AirTasking, "Mission Tasking"),
+    (AppMode::Airfield, "Airfields"),
 ];
+
+/// Which part of Mission Tasking is on screen. The rail stays on Air Tasking.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TaskView {
+    Tasking,
+    Exclusive,
+    Fighters,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReconSubmode {
@@ -172,6 +193,330 @@ struct BomberSlot {
     selected_triggers: Vec<i32>,
     selected_completion: Option<i32>,
 }
+
+/// Shown at the top of the Air Tasking tab.
+fn air_how_it_plays() -> String {
+    format!(
+        "{} Placed flights are layers on the map. Generate on the map writes them from those placements. Each following group on a base map waits {} s, so they do not share a server tick.",
+        airtask::FIRING_HINT,
+        crate::recon::WATERFALL_STEP_S
+    )
+}
+
+struct FlightEstimate {
+    name: String,
+    eastern: bool,
+    secs: f64,
+    /// 1 in this many, where the flight estimates overlap.
+    chance: u32,
+    runs: u32,
+    spread: airtask::AirSpread,
+}
+
+fn waypoint_kmh(group: &crate::ast::Il2Entity) -> f64 {
+    let mut speed = None;
+    group.for_each(&mut |entity| {
+        if speed.is_none() && entity.block_type == "MCU_Waypoint" {
+            if let Some(value) = entity.property("Speed").and_then(|text| text.parse::<f64>().ok()) {
+                if value >= 1.0 {
+                    speed = Some(value);
+                }
+            }
+        }
+    });
+    speed.unwrap_or(100.0)
+}
+
+fn mission_flight_secs(mission: &map::PlacedMission) -> f64 {
+    let legs = [
+        (
+            (mission.start_x, mission.start_z),
+            (mission.ip_x, mission.ip_z),
+        ),
+        (
+            (mission.ip_x, mission.ip_z),
+            (mission.target_x, mission.target_z),
+        ),
+        (
+            (mission.target_x, mission.target_z),
+            (mission.start_x, mission.start_z),
+        ),
+    ];
+    let meters: f64 = legs
+        .iter()
+        .map(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1))
+        .sum();
+    airtask::flight_secs(meters, waypoint_kmh(&mission.root))
+}
+
+fn flight_estimates(missions: &[map::PlacedMission]) -> Vec<FlightEstimate> {
+    missions
+        .iter()
+        .filter(|mission| mission.air_task && mission.air_enabled)
+        .map(|mission| FlightEstimate {
+            name: mission.name.clone(),
+            eastern: mission.eastern,
+            secs: mission_flight_secs(mission),
+            chance: mission.air_weight.max(1) as u32,
+            runs: mission.air_runs.max(1),
+            spread: mission.air_spread,
+        })
+        .collect()
+}
+
+/// Where two route estimates overlap, and the 1 in Y label for the sorties there.
+fn route_overlap(intervals: &[(f64, f64, u32)]) -> Option<(f64, f64, String)> {
+    let mut best: Option<(f64, f64)> = None;
+    for (index, left) in intervals.iter().enumerate() {
+        for right in intervals.iter().skip(index + 1) {
+            let start = left.0.max(right.0);
+            let end = left.1.min(right.1);
+            if end <= start {
+                continue;
+            }
+            let wider = best.is_none_or(|(from, to)| end - start > to - from);
+            if wider {
+                best = Some((start, end));
+            }
+        }
+    }
+    let (start, end) = best?;
+    let overlapping: Vec<u32> = intervals
+        .iter()
+        .filter(|(from, to, _)| *from < end && *to > start)
+        .map(|(_, _, chance)| *chance)
+        .collect();
+    let floor = overlapping.len() as u32;
+    let odds: Vec<String> = overlapping
+        .iter()
+        .map(|chance| format!("1 in {}", (*chance).max(floor)))
+        .collect();
+    if odds.len() < 2 {
+        return None;
+    }
+    Some((start, end, odds.join(" · ")))
+}
+
+/// The mission window. Gold bars are route time. Marks are the launch attempts.
+/// 1 in Y is drawn only on the overlap of those route times.
+fn task_timeline(
+    ui: &mut egui::Ui,
+    options: &AirOptions,
+    _zone_plans: usize,
+    missions: &[map::PlacedMission],
+    _selected: Option<usize>,
+) {
+    let check_zone = options.trigger == airtask::AirTrigger::Zone;
+    let flights = flight_estimates(missions);
+    let window_s = options.window_secs().max(60.0);
+    let window_label = if options.window_min >= 60 && options.window_min % 60 == 0 {
+        format!("{} h", options.window_min / 60)
+    } else {
+        format!("{} min", options.window_min)
+    };
+    shell::section_title(ui, "Timeline", Some(&window_label));
+    let rows = flights.len().max(1) as f32;
+    let height = 28.0 + rows * 14.0 + if check_zone { 52.0 } else { 40.0 };
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let label = FontId::new(12.0, FontFamily::Proportional);
+    let x0 = rect.left() + 8.0;
+    let x1 = rect.right() - 8.0;
+    let baseline = rect.top() + 16.0 + rows * 14.0;
+    let at = |secs: f64| {
+        let t = (secs / window_s).clamp(0.0, 1.0) as f32;
+        x0 + (x1 - x0) * t
+    };
+    let mut spacing = options.clone();
+    spacing.launches = 0;
+    spacing.spread = airtask::AirSpread::Even;
+    let grid = airtask::schedule_secs(&spacing);
+    let schedules: Vec<Vec<f64>> = if check_zone {
+        flights.iter().map(|_| grid.clone()).collect()
+    } else {
+        flights
+            .iter()
+            .map(|flight| airtask::sortie_marks(options, flight.runs, flight.spread))
+            .collect()
+    };
+    let gold = Color32::from_rgba_unmultiplied(196, 148, 58, 110);
+    let mut past_window = false;
+    let mut intervals: Vec<(f64, f64, u32)> = Vec::new();
+    for (row, flight) in flights.iter().enumerate() {
+        let start = schedules
+            .get(row)
+            .and_then(|marks| marks.first().copied())
+            .unwrap_or(0.0);
+        if flight.secs <= 0.0 {
+            continue;
+        }
+        let y = rect.top() + 4.0 + row as f32 * 14.0;
+        let end = start + flight.secs;
+        if end > window_s {
+            past_window = true;
+        }
+        intervals.push((start, end, flight.chance));
+        let bar = Rect::from_min_max(Pos2::new(at(start), y), Pos2::new(at(end), y + 10.0));
+        painter.rect_filled(bar, 2.0, gold);
+        let side = if flight.eastern { c::DPRK } else { c::NATO };
+        painter.rect_filled(
+            Rect::from_min_max(Pos2::new(bar.left(), y), Pos2::new(bar.left() + 4.0, y + 10.0)),
+            1.0,
+            side,
+        );
+        let minutes = (flight.secs / 60.0).round() as u32;
+        painter.text(
+            Pos2::new(bar.left() + 6.0, y + 5.0),
+            Align2::LEFT_CENTER,
+            format!("{} {minutes} min", flight.name),
+            label.clone(),
+            c::TEXT,
+        );
+    }
+    if let Some((band_start, band_end, odds)) = route_overlap(&intervals) {
+        let band = Rect::from_min_max(
+            Pos2::new(at(band_start), baseline - 18.0),
+            Pos2::new(at(band_end), baseline - 4.0),
+        );
+        painter.rect_stroke(
+            band,
+            2.0,
+            Stroke::new(1.0_f32, c::TEXT),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            band.center(),
+            Align2::CENTER_CENTER,
+            odds,
+            label.clone(),
+            c::TEXT,
+        );
+    }
+    painter.line_segment(
+        [Pos2::new(x0, baseline), Pos2::new(x1, baseline)],
+        Stroke::new(2.0_f32, c::NEUTRAL_700),
+    );
+    if check_zone {
+        let open = options.zone_open_secs();
+        for mark in &grid {
+            let band = Rect::from_min_max(
+                Pos2::new(at(*mark), baseline + 4.0),
+                Pos2::new(at(mark + open), baseline + 12.0),
+            );
+            painter.rect_filled(band, 2.0, c::ACCENT.linear_multiply(0.35));
+        }
+    }
+    let cap = if options.launch_while_active {
+        options.budget.max(1).min(flights.len().max(1) as u32)
+    } else {
+        1
+    };
+    let mut events: Vec<(f64, usize, bool)> = Vec::new();
+    for (index, marks) in schedules.iter().enumerate() {
+        let eastern = flights.get(index).is_some_and(|flight| flight.eastern);
+        for mark in marks {
+            events.push((*mark, index, eastern));
+        }
+    }
+    events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut airborne: Vec<f64> = Vec::new();
+    let mut cursor = 0;
+    while cursor < events.len() {
+        let time = events[cursor].0;
+        let mut group = Vec::new();
+        while cursor < events.len() && (events[cursor].0 - time).abs() < 0.5 {
+            group.push(events[cursor]);
+            cursor += 1;
+        }
+        airborne.retain(|done| *done > time);
+        let room = airborne.len() as u32 >= cap;
+        for (offset, (_, index, eastern)) in group.iter().enumerate() {
+            let pos = Pos2::new(at(time), baseline);
+            let side = if *eastern { c::DPRK } else { c::NATO };
+            let launches = !room && offset == 0;
+            if launches {
+                painter.circle_filled(pos, 4.0, side);
+                let duration = flights.get(*index).map(|flight| flight.secs).unwrap_or(0.0);
+                if duration > 0.0 {
+                    airborne.push(time + duration);
+                }
+            } else {
+                painter.circle_stroke(pos, 4.0, Stroke::new(1.5_f32, side));
+            }
+        }
+    }
+    let magazine: u32 = flights.iter().map(|flight| flight.runs.max(1)).sum();
+    let open_note = if !check_zone {
+        if flights.is_empty() {
+            "Each sortie keeps its own marks.".to_string()
+        } else {
+            format!("{magazine} flights in the magazine.")
+        }
+    } else if options.zone_open_min == 0 {
+        "The area stays open until the next mark.".to_string()
+    } else {
+        format!("The area stays open {} min.", options.zone_open_min)
+    };
+    let mut caption = open_note;
+    if past_window {
+        caption = format!("{caption} A route runs past this window.");
+    }
+    painter.text(
+        Pos2::new(x1, rect.bottom() - 2.0),
+        Align2::RIGHT_BOTTOM,
+        caption,
+        label,
+        c::NEUTRAL_700,
+    );
+}
+
+/// (label, what changes in the mission). No MCU names.
+const AIR_CONTROLS: &[(&str, &str)] = &[
+    (
+        "First wait, minutes",
+        "How long after the mission starts before the first mark. 0 means the first sortie can start immediately.",
+    ),
+    (
+        "Minutes between tries",
+        "How long after one mark before the next. A sortie waits for the next mark instead of starting the moment the previous flight ends.",
+    ),
+    (
+        "Skip a turn, percent",
+        "The chance a mark passes with no sortie. 0 means nothing is skipped.",
+    ),
+    (
+        "Launch chance, percent",
+        "When a mark comes up, the chance a sortie actually launches. 100 means it always launches.",
+    ),
+    (
+        "Sorties per side",
+        "Check zone mode. How many sorties NATO can have in the air, and how many DPRK can, before that side waits. 1 keeps one per side.",
+    ),
+    (
+        "Extra minutes on target",
+        "Check zone mode. How long a sortie keeps the mission window from ending it early. 0 leaves the flight on its own plan.",
+    ),
+    (
+        "Draw chance",
+        "1 in this many, where the route times overlap. The smallest value is the number of sorties.",
+    ),
+    (
+        "Times in the order",
+        "How many times this sortie fires. Generate builds that many flights on this path. The wait, the minutes between, and the mission length cap how many fit.",
+    ),
+    (
+        "Mission length, minutes",
+        "How long the package runs. 180 is 3 hours. Raise it when a route runs past the window.",
+    ),
+    (
+        "Zone stays open, minutes",
+        "How long the area stays hot after a mark. 0 means until the next mark.",
+    ),
+    (
+        "Out at once",
+        "How many different sorties can be out together. A mark is missed once this many are already out.",
+    ),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UnitKind {
@@ -294,6 +639,15 @@ struct GroupGeneratorApp {
     bomber_selected: Option<usize>,
     /// The generated Exclusive Activation pack whose plans were added (header "Editing {stem}").
     bomber_loaded_path: Option<PathBuf>,
+    /// Sortie selected in `map_missions` on the Mission Tasking roster.
+    air_selected: Option<usize>,
+    /// Library or template package open in the center, not placed yet.
+    air_draft: Option<map::AirPackageDraft>,
+    /// Last target lists for the package in the center.
+    package_target_cache: std::cell::RefCell<Option<map::PackageHitCache>>,
+    air_options: AirOptions,
+    /// Tasking, exclusive plans, or fighter packs. The rail stays on Mission Tasking.
+    task_view: TaskView,
     recon_submode: ReconSubmode,
     recon_slots: Vec<ReconSlot>,
     recon_rework: Vec<ReconSlot>,
@@ -330,6 +684,10 @@ struct GroupGeneratorApp {
     map_mission_bank: Vec<map::MissionTemplate>,
     /// Strikes dropped on the map. Each keeps its target, IP, and start.
     map_missions: Vec<map::PlacedMission>,
+    /// Attack-flag notes for the tasking list. Rebuilt when the missions or
+    /// the units they can aim at change, not on every frame.
+    mission_notes: Vec<Vec<String>>,
+    mission_notes_stamp: u64,
     /// Bank index while the map tool is placing a mission.
     mission_place: Option<usize>,
     mission_drag: Option<(usize, map::MissionHandle)>,
@@ -367,6 +725,10 @@ struct GroupGeneratorApp {
     editor_map_on: bool,
     editor_tex: HashMap<(i32, i32), TextureHandle>,
     editor_miss: std::collections::HashSet<(i32, i32)>,
+    /// Close-up tiles decode on a worker. The UI only uploads a finished one.
+    editor_tx: Option<std::sync::mpsc::SyncSender<map::EditorTileMsg>>,
+    editor_rx: Option<std::sync::mpsc::Receiver<map::EditorTileMsg>>,
+    editor_inflight: std::collections::HashSet<(i32, i32)>,
     map_zoom: f32,
     map_pan: Pos2,
     map_refs: Vec<MapRefGroup>,
@@ -397,6 +759,8 @@ struct GroupGeneratorApp {
     airbase_dup_kept: Vec<String>,
     /// The center editor shows the selected air start. The list is on the right.
     air_start_focus: bool,
+    /// The center was showing the other editor. Scroll it back to the top once.
+    airfield_recenter: bool,
     /// Catalog rows, so a field in the map area with no group file can still be named.
     airbase_index: Vec<airfield::IndexedAirbase>,
     /// Empty until the Airfield tab should read the database folder again.
@@ -442,6 +806,15 @@ struct GroupGeneratorApp {
     /// it is released, so the rest of that drag draws nothing.
     map_void_drag: bool,
     map_fighters: Option<MapFighterLayout>,
+    /// Layers on the map. Hidden groups stay in the file and are not drawn.
+    fighters_shown: bool,
+    units_shown: bool,
+    /// Which loaded army is choosing a new unit icon.
+    army_icon_slot: Option<usize>,
+    /// Per-group hides under the master unit switch. Hidden groups stay in the file.
+    ground_east_shown: bool,
+    ground_nato_shown: bool,
+    ships_shown: bool,
     map_imported_fighters: Vec<ImportedFighterPack>,
     fighter_waves: u32,
     fighter_fill: bool,
@@ -485,7 +858,7 @@ struct GroupGeneratorApp {
     help_topic: HelpTopic,
     status: Status,
     /// Each tab's status while another tab is shown, in `MODES` order (`set_mode` swaps).
-    tab_status: [Status; 6],
+    tab_status: [Status; 7],
     /// Status text last seen, and the tab's edit fingerprint when it appeared (`age_status`).
     status_seen: String,
     status_fp: u64,
@@ -602,7 +975,7 @@ impl Default for GroupGeneratorApp {
             .map(|ac| default_skill(ac.id))
             .collect();
         Self {
-            mode: AppMode::Fighter,
+            mode: AppMode::Template,
             custom_path: None,
             linked_groups: 3,
             flight_count: 4,
@@ -620,6 +993,11 @@ impl Default for GroupGeneratorApp {
             map_strike_focus: map::StrikeFocus::Tanks,
             bomber_selected: None,
             bomber_loaded_path: None,
+            air_selected: None,
+            air_draft: None,
+            package_target_cache: std::cell::RefCell::new(None),
+            air_options: AirOptions::default(),
+            task_view: TaskView::Tasking,
             recon_submode: ReconSubmode::New,
             recon_slots: Vec::new(),
             recon_rework: Vec::new(),
@@ -651,6 +1029,8 @@ impl Default for GroupGeneratorApp {
             air_start_heading_drag: None,
             map_mission_bank: Vec::new(),
             map_missions: Vec::new(),
+            mission_notes: Vec::new(),
+            mission_notes_stamp: 0,
             mission_place: None,
             mission_drag: None,
             mission_snap: Vec::new(),
@@ -678,6 +1058,9 @@ impl Default for GroupGeneratorApp {
             editor_map_on: false,
             editor_tex: HashMap::new(),
             editor_miss: std::collections::HashSet::new(),
+            editor_tx: None,
+            editor_rx: None,
+            editor_inflight: std::collections::HashSet::new(),
             map_zoom: 1.0,
             map_pan: Pos2::new(0.5, 0.5),
             map_refs: Vec::new(),
@@ -694,6 +1077,7 @@ impl Default for GroupGeneratorApp {
             catalog_hidden: Vec::new(),
             airbase_dup_kept: Vec::new(),
             air_start_focus: false,
+            airfield_recenter: false,
             airbase_index: Vec::new(),
             airbase_scan_dir: String::new(),
             airfield_coalition_notes: Vec::new(),
@@ -725,6 +1109,12 @@ impl Default for GroupGeneratorApp {
             front_stroke: None,
             map_void_drag: false,
             map_fighters: None,
+            fighters_shown: true,
+            units_shown: true,
+            army_icon_slot: None,
+            ground_east_shown: true,
+            ground_nato_shown: true,
+            ships_shown: true,
             map_imported_fighters: Vec::new(),
             fighter_waves: 2,
             fighter_fill: false,
@@ -855,16 +1245,21 @@ impl GroupGeneratorApp {
             )
             .show(ctx, |ui| self.page_header_bar(ui));
         // Each page adds its own side and center panels; only panels scroll.
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => self.template_page(ctx),
             AppMode::Recon => self.recon_page(ctx),
             AppMode::Fighter => self.fighter_page(ctx),
             AppMode::Exclusive => self.bomber_page(ctx),
             AppMode::Airfield => self.airfield_page(ctx),
             AppMode::Map => self.map_page(ctx),
+            AppMode::AirTasking => self.air_page(ctx),
         }
         self.confirm_dialogs(ctx);
-        self.airbase_dup_dialog(ctx);
+        // The Airfield tab asks which copy to keep. Map mode uses the side of
+        // the front and does not ask.
+        if self.mode == AppMode::Airfield {
+            self.airbase_dup_dialog(ctx);
+        }
         help::show_window(ctx, &mut self.help_open, &mut self.help_topic);
         self.settle_undo();
         self.age_status();
@@ -872,14 +1267,25 @@ impl GroupGeneratorApp {
 }
 
 impl GroupGeneratorApp {
+    /// Mission Tasking keeps one rail slot. Its section decides which page,
+    /// generate action, and undo stack run.
+    fn work_mode(&self) -> AppMode {
+        match (self.mode, self.task_view) {
+            (AppMode::AirTasking, TaskView::Fighters) => AppMode::Fighter,
+            (AppMode::AirTasking, TaskView::Exclusive) => AppMode::Exclusive,
+            (mode, _) => mode,
+        }
+    }
+
     fn page_help_topic(&self) -> HelpTopic {
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => HelpTopic::Template,
             AppMode::Fighter => HelpTopic::Fighter,
             AppMode::Exclusive => HelpTopic::Exclusive,
             AppMode::Recon => HelpTopic::Recon,
             AppMode::Airfield => HelpTopic::Airfield,
             AppMode::Map => HelpTopic::Front,
+            AppMode::AirTasking => HelpTopic::Overview,
         }
     }
 
@@ -948,7 +1354,7 @@ impl GroupGeneratorApp {
     /// until all pass. Map has none: any period makes a valid base map.
     fn readiness_checks(&self) -> Vec<shell::Check> {
         use shell::Check;
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => vec![Check::new(!self.tpl_seats.is_empty(), "At least one unit")],
             AppMode::Recon => match self.recon_submode {
                 ReconSubmode::New => {
@@ -1022,6 +1428,12 @@ impl GroupGeneratorApp {
                 "An airfield file loaded",
             )],
             AppMode::Map => Vec::new(),
+            AppMode::AirTasking => vec![Check::new(
+                self.map_missions
+                    .iter()
+                    .any(|mission| mission.air_task && mission.air_enabled),
+                "At least one sortie on the map",
+            )],
         }
     }
 
@@ -1032,7 +1444,7 @@ impl GroupGeneratorApp {
     }
 
     fn primary_action_inner(&mut self) {
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => self.generate_unit_template(),
             AppMode::Recon => match self.recon_submode {
                 ReconSubmode::New => self.generate_recon_file(),
@@ -1042,12 +1454,13 @@ impl GroupGeneratorApp {
             AppMode::Exclusive => self.generate_bomber_file(),
             AppMode::Airfield => self.export_airfield(),
             AppMode::Map => self.generate_front_file(),
+            AppMode::AirTasking => self.generate_air_file(),
         }
     }
 
     /// The header's first secondary button and Ctrl O. Fighter Pack has none.
     fn load_action(&mut self) {
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template if self.is_dirty(AppMode::Template) => {
                 self.confirm = Some(Confirm::LoadTemplate)
             }
@@ -1063,6 +1476,7 @@ impl GroupGeneratorApp {
             AppMode::Fighter => {}
             AppMode::Exclusive => self.add_bomber_template(),
             AppMode::Airfield => self.load_airfield(),
+            AppMode::AirTasking => self.add_air_template(),
         }
     }
 
@@ -1106,6 +1520,23 @@ impl GroupGeneratorApp {
                 file_label(&self.airfield_path, false),
                 "Generate File",
             ),
+            AppMode::AirTasking => {
+                let file = match self.task_view {
+                    TaskView::Exclusive => self
+                        .bomber_loaded_path
+                        .as_ref()
+                        .filter(|p| self.bomber_slots.iter().any(|s| &s.path == *p))
+                        .and_then(|p| p.file_stem())
+                        .and_then(|n| n.to_str())
+                        .map(|n| format!("Editing {n}")),
+                    TaskView::Fighters => Some(
+                        file_label(&self.custom_path, false)
+                            .unwrap_or_else(|| "Built-in logic".into()),
+                    ),
+                    TaskView::Tasking => None,
+                };
+                ("Mission Tasking", file, "Generate File")
+            }
             AppMode::Map => {
                 let battle = self
                     .front_focus
@@ -1120,8 +1551,10 @@ impl GroupGeneratorApp {
             }
         };
         let mode = self.mode;
+        let work = self.work_mode();
         let submode = self.recon_submode;
         let mut new_submode = submode;
+        let mut new_task = self.task_view;
         let (mut load, mut reset, mut add_folder) = (false, false, false);
         let checks = self.readiness_checks();
         let generate = shell::page_header(
@@ -1142,9 +1575,20 @@ impl GroupGeneratorApp {
                         ],
                     );
                 }
+                if mode == AppMode::AirTasking {
+                    shell::segmented(
+                        ui,
+                        &mut new_task,
+                        &[
+                            (TaskView::Tasking, "Tasking"),
+                            (TaskView::Exclusive, "Exclusive plans"),
+                            (TaskView::Fighters, "Fighter packs"),
+                        ],
+                    );
+                }
             },
             // Right-to-left: the button added last sits leftmost.
-            |ui| match mode {
+            |ui| match work {
                 AppMode::Template => {
                     reset = ui
                         .button("Reset")
@@ -1187,6 +1631,14 @@ impl GroupGeneratorApp {
                         .on_hover_text("Ctrl O")
                         .clicked();
                 }
+                AppMode::AirTasking => {
+                    load = ui
+                        .button("Add templates…")
+                        .on_hover_text(
+                            "Place a strike group on the next unused enemy target in the map area.  (Ctrl O)",
+                        )
+                        .clicked();
+                }
                 AppMode::Map => {
                     load = ui
                         .button("Load base map…")
@@ -1196,8 +1648,9 @@ impl GroupGeneratorApp {
             },
         );
         self.recon_submode = new_submode;
+        self.task_view = new_task;
         if reset {
-            self.confirm = match mode {
+            self.confirm = match work {
                 AppMode::Fighter => Some(Confirm::ResetFighter),
                 _ if self.tpl_seats.is_empty() => {
                     self.reset_template_confirmed();
@@ -1250,7 +1703,7 @@ impl GroupGeneratorApp {
 
     /// Everything a user can edit on the current tab, as text (selection excluded).
     fn tab_edit_text(&self) -> String {
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => self.tpl_fingerprint(),
             AppMode::Map => self.map_fingerprint(),
             AppMode::Recon => {
@@ -1308,6 +1761,34 @@ impl GroupGeneratorApp {
                 )
             ),
             AppMode::Airfield => format!("{:?}{}", self.airfield_path, self.airfield_western),
+            AppMode::AirTasking => format!(
+                "{:?}",
+                (
+                    self.map_missions
+                        .iter()
+                        .filter(|mission| mission.air_task)
+                        .map(|mission| {
+                            (
+                                mission.name.clone(),
+                                mission.eastern,
+                                mission.target_x as i64,
+                                mission.target_z as i64,
+                                mission.air_enabled,
+                                mission.air_runs,
+                                mission.air_weight,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                    self.air_options.trigger,
+                    self.air_options.first_delay_min,
+                    self.air_options.period_min,
+                    self.air_options.quiet_pct,
+                    self.air_options.zone_chance_pct,
+                    self.air_options.budget,
+                    self.air_options.extension_min,
+                    self.air_options.window_min,
+                )
+            ),
         }
     }
 
@@ -1320,7 +1801,7 @@ impl GroupGeneratorApp {
             text.hash(&mut h);
             h.finish()
         }
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => {
                 let fp = hash(self.tpl_fingerprint());
                 self.tpl_undo.settle(fp);
@@ -1390,17 +1871,18 @@ impl GroupGeneratorApp {
                 ));
                 self.map_undo.settle(fp);
             }
-            AppMode::Fighter | AppMode::Airfield => {}
+            AppMode::Fighter | AppMode::Airfield | AppMode::AirTasking => {}
         }
     }
 
     /// The undo label shown in the status bar for the current tab.
     fn undo_label(&self) -> Option<&str> {
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => self.tpl_undo.label(),
             AppMode::Recon => self.recon_undo.label(),
             AppMode::Exclusive => self.bomber_undo.label(),
-            AppMode::Map => self.map_undo_label(),
+            // Placement edits made from Mission Tasking live on the map stack.
+            AppMode::Map | AppMode::AirTasking => self.map_undo_label(),
             AppMode::Fighter | AppMode::Airfield => None,
         }
     }
@@ -1409,7 +1891,7 @@ impl GroupGeneratorApp {
     /// undoes the last action: a drawing (the drawn-mark undo) or a Clear.
     fn undo_current_tab(&mut self) {
         let label = self.undo_label().map(str::to_owned);
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => {
                 if let Some(s) = self.tpl_undo.take() {
                     self.tpl_restore(s);
@@ -1431,7 +1913,7 @@ impl GroupGeneratorApp {
                     self.bomber_selected = selected;
                 }
             }
-            AppMode::Map => match self.map_undo_kind() {
+            AppMode::Map | AppMode::AirTasking => match self.map_undo_kind() {
                 Some(MapAction::Clear) => {
                     if let Some(f) = self.map_undo.take() {
                         self.restore_map_forces(f);
@@ -2405,8 +2887,8 @@ impl GroupGeneratorApp {
         ui.spacing_mut().slider_width = 110.0;
         shell::section_title(ui, "Pack", None);
         labeled_slider(ui, "Linked groups", &mut self.linked_groups, 1..=10);
-        labeled_slider(ui, "Flights", &mut self.flight_count, 1..=10);
-        labeled_slider(ui, "Max in a flight", &mut self.max_in_flight, 1..=8);
+        stepped_count(ui, "Flights", &mut self.flight_count, 1..=10);
+        stepped_count(ui, "Max in a flight", &mut self.max_in_flight, 1..=8);
         if shell::hint(ui, "Each flight is one randomizer slot.", true) {
             self.open_help(HelpTopic::Fighter);
         }
@@ -2446,22 +2928,8 @@ impl GroupGeneratorApp {
         let summary = format!("{:.0}–{:.0} m", self.altitude_min, self.altitude_max);
         let mut help = false;
         shell::settings_section(ui, "fighter_alt", "Altitude range", &summary, true, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Min");
-                ui.add(
-                    egui::DragValue::new(&mut self.altitude_min)
-                        .range(100.0..=9000.0)
-                        .speed(25.0)
-                        .suffix(" m"),
-                );
-                ui.label("Max");
-                ui.add(
-                    egui::DragValue::new(&mut self.altitude_max)
-                        .range(100.0..=9000.0)
-                        .speed(25.0)
-                        .suffix(" m"),
-                );
-            });
+            stepped_altitude(ui, "Min", &mut self.altitude_min);
+            stepped_altitude(ui, "Max", &mut self.altitude_max);
             help = shell::hint(ui, "Complete 4-ships split 2 low / 2 high.", true);
         });
         if self.altitude_min > self.altitude_max {
@@ -2557,6 +3025,674 @@ impl GroupGeneratorApp {
         self.altitude_min = d.altitude_min;
         self.altitude_max = d.altitude_max;
         self.status = Status::Info("Fighter Pack reset to the default settings.".into());
+    }
+
+    // ── Air Tasking ────────────────────────────────────────────────────────
+
+    fn air_page(&mut self, ctx: &egui::Context) {
+        if self.map_missions.is_empty() {
+            self.air_selected = None;
+        } else if self.air_selected.is_none_or(|i| i >= self.map_missions.len()) {
+            self.air_selected = Some(0);
+        }
+        side_panel(ctx, "air_left", true, 290.0, |ui| self.air_plans_panel(ui));
+        side_panel(ctx, "air_right", false, 290.0, |ui| {
+            self.air_settings_panel(ui)
+        });
+        center_panel(ctx, "air_center", |ui| self.air_center(ui));
+    }
+
+    fn air_plans_panel(&mut self, ui: &mut egui::Ui) {
+        // The map Forces dock keeps visibility and objectives. Placement of
+        // fighters, packages, and army groups lives here; the map parks them.
+        self.task_fighters(ui);
+        ui.separator();
+        shell::section_title(ui, "Air support library", Some("opens in the middle"));
+        for (index, def) in airtask::builtin_library().iter().enumerate() {
+            let selected = self
+                .air_draft
+                .as_ref()
+                .is_some_and(|draft| draft.library == Some(index));
+            if ui
+                .add_sized(
+                    [ui.available_width(), 28.0],
+                    egui::Button::selectable(selected, def.name),
+                )
+                .on_hover_text(format!(
+                    "Open this {} package in the middle. It is placed after the mission is set.",
+                    def.side
+                ))
+                .clicked()
+            {
+                self.stage_library_package(index);
+            }
+        }
+        if ui
+            .add_sized(
+                [ui.available_width(), 28.0],
+                egui::Button::new("Load package…"),
+            )
+            .on_hover_text("Load a strike package built in Template")
+            .clicked()
+        {
+            self.add_air_template();
+        }
+        ui.add_space(8.0);
+        ui.separator();
+        shell::section_title(
+            ui,
+            "Missions",
+            Some(&format!("{}", self.map_missions.len())),
+        );
+        if self.map_missions.is_empty() {
+            shell::hint(
+                ui,
+                "A package becomes a mission after Sweep or Strike is set in the middle.",
+                false,
+            );
+        }
+        let mut clicked = None;
+        let mut open_exclusive = None;
+        for i in 0..self.map_missions.len() {
+            let mission = &self.map_missions[i];
+            let side = if mission.eastern { "DPRK" } else { "NATO" };
+            let title = format!("{} · {}", i + 1, mission.name);
+            let meta = format!(
+                "{side} · {}{}",
+                mission.target_label,
+                if mission.hidden {
+                    " · hidden"
+                } else if mission.air_task && !mission.air_enabled {
+                    " · left out"
+                } else {
+                    ""
+                }
+            );
+            let selected = self.air_selected == Some(i) && self.air_draft.is_none();
+            let card = ui.scope(|ui| {
+                plan_card(ui, selected, false, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(title).font(FontId::new(13.0, theme::bold_family())),
+                        )
+                        .truncate()
+                        .sense(Sense::hover()),
+                    );
+                    ui.add(
+                        egui::Label::new(RichText::new(meta).small().color(c::NEUTRAL_700))
+                            .sense(Sense::hover()),
+                    );
+                });
+            });
+            let hit = ui.interact(
+                card.response.rect,
+                ui.id().with(("mission_hit", i)),
+                Sense::click(),
+            );
+            if hit.hovered() {
+                ui.painter().rect_stroke(
+                    card.response.rect,
+                    0.0,
+                    Stroke::new(1.0_f32, c::ACCENT),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if hit.clicked() {
+                clicked = Some(i);
+            }
+            ui.add_space(4.0);
+        }
+        if clicked.is_some() {
+            self.air_draft = None;
+            self.air_selected = clicked;
+        }
+        ui.add_space(8.0);
+        ui.separator();
+        self.task_units(ui);
+        if !self.bomber_slots.is_empty() {
+            ui.add_space(4.0);
+            shell::section_title(
+                ui,
+                &format!("Exclusive · {}", self.bomber_slots.len()),
+                Some("one plan at a time"),
+            );
+            for i in 0..self.bomber_slots.len() {
+                let name = self.bomber_slots[i].info.name.clone();
+                if ui.button(format!("{} · {name}", i + 1)).clicked() {
+                    open_exclusive = Some(i);
+                }
+            }
+        }
+        if let Some(i) = open_exclusive {
+            self.task_view = TaskView::Exclusive;
+            self.bomber_selected = Some(i);
+        }
+    }
+
+    fn air_settings_panel(&mut self, ui: &mut egui::Ui) {
+        shell::section_title(ui, "When a sortie may launch", None);
+        shell::hint(
+            ui,
+            "The note in the middle is what happens if you leave these as they are.",
+            false,
+        );
+        ui.add_space(4.0);
+        let start_hint = "On a timer only spawns the sortie at the mark, with no check zone. A mark while a sortie is still out is missed. On a timer with a check zone, the mark opens the area and a player there starts the sortie.";
+        let response = egui::ComboBox::from_id_salt("air_trigger")
+            .selected_text(self.air_options.trigger.label())
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for mode in airtask::AirTrigger::ALL {
+                    ui.selectable_value(&mut self.air_options.trigger, mode, mode.label())
+                        .on_hover_text(start_hint);
+                }
+            })
+            .response;
+        response.on_hover_text(start_hint);
+        ui.add_space(6.0);
+        air_control(ui, 8, &mut self.air_options.window_min, 5..=360);
+        air_control(ui, 0, &mut self.air_options.first_delay_min, 0..=120);
+        air_control(ui, 1, &mut self.air_options.period_min, 1..=60);
+        air_control(ui, 2, &mut self.air_options.quiet_pct, 0..=100);
+        air_control(ui, 3, &mut self.air_options.zone_chance_pct, 0..=100);
+        if self.air_options.trigger == airtask::AirTrigger::Clock {
+            ui.checkbox(
+                &mut self.air_options.launch_while_active,
+                "Launch while a sortie is still out",
+            )
+            .on_hover_text("Off: a mark is missed while any sortie is out. On: another sortie that is not already out can start, up to Out at once.");
+            if self.air_options.launch_while_active {
+                let sortie_count = self
+                    .map_missions
+                    .iter()
+                    .filter(|mission| mission.air_task && mission.air_enabled)
+                    .count()
+                    .max(1) as u32;
+                let magazine = self
+                    .map_missions
+                    .iter()
+                    .filter(|mission| mission.air_task && mission.air_enabled)
+                    .map(|mission| mission.air_runs.max(1))
+                    .sum::<u32>()
+                    .max(sortie_count);
+                air_control(ui, 10, &mut self.air_options.budget, 1..=magazine);
+            }
+        } else {
+            air_control(ui, 4, &mut self.air_options.budget, 1..=6);
+            air_control(ui, 5, &mut self.air_options.extension_min, 0..=30);
+            let period = self.air_options.period_min.max(1);
+            air_control(ui, 9, &mut self.air_options.zone_open_min, 0..=period);
+        }
+    }
+
+    fn air_center(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("How this plays").font(FontId::new(16.0, theme::heading_family())));
+        ui.add_space(4.0);
+        ui.label(air_how_it_plays());
+        ui.add_space(8.0);
+        let zone_plans = self
+            .map_missions
+            .iter()
+            .filter(|mission| !mission.air_task)
+            .count()
+            + self.bomber_slots.len();
+        task_timeline(
+            ui,
+            &self.air_options,
+            zone_plans,
+            &self.map_missions,
+            self.air_selected,
+        );
+        ui.add_space(12.0);
+        if self.air_draft.is_some() {
+            self.air_package_builder(ui);
+            return;
+        }
+        if self.map_missions.is_empty() {
+            if empty_state(
+                ui,
+                "Choose a package from Air support library.",
+                "F-80C HVAR strike",
+            ) {
+                self.stage_library_package(1);
+            }
+            return;
+        }
+        let i = self
+            .air_selected
+            .filter(|i| *i < self.map_missions.len())
+            .unwrap_or(0);
+        let mut remove = false;
+        let mut duplicate = false;
+        let mut edit = false;
+        let side = if self.map_missions[i].eastern {
+            "DPRK"
+        } else {
+            "NATO"
+        };
+        let air = self.map_missions[i].air_task;
+        let name = self.map_missions[i].name.clone();
+        let target = self.map_missions[i].target_label.clone();
+        let kind = if air { "sortie" } else { "mission" };
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new(format!("{side} {kind}"))
+                        .small()
+                        .color(c::NEUTRAL_700),
+                );
+                ui.label(RichText::new(&name).font(FontId::new(24.0, theme::heading_family())));
+                ui.label(
+                    RichText::new(format!("Aimed at {target}. Placed on the map."))
+                        .small()
+                        .color(c::NEUTRAL_700),
+                );
+            });
+            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                remove = ui.button("Remove").clicked();
+                duplicate = ui
+                    .button("Duplicate")
+                    .on_hover_text("Copy this sortie so the next one can aim somewhere else")
+                    .clicked();
+                edit = ui
+                    .button("Edit")
+                    .on_hover_text("Change sweep or strike, the target, and the home base")
+                    .clicked();
+            });
+        });
+        if duplicate {
+            self.duplicate_mission(i);
+            return;
+        }
+        if edit {
+            self.edit_placed_mission(i);
+            return;
+        }
+        ui.add_space(8.0);
+        let mut show = !self.map_missions[i].hidden;
+        if ui
+            .checkbox(&mut show, "Show on the map")
+            .on_hover_text("Hide this layer while you place the others. Generate still writes it.")
+            .changed()
+        {
+            self.map_missions[i].hidden = !show;
+        }
+        if air {
+            ui.checkbox(&mut self.map_missions[i].air_enabled, "Include in the mission")
+                .on_hover_text("Turn this off to keep the sortie on the map but leave it out of the file Generate writes.");
+            let sortie_count = self
+                .map_missions
+                .iter()
+                .filter(|mission| mission.air_task && mission.air_enabled)
+                .count()
+                .max(1) as u32;
+            let mut weight = self.map_missions[i].air_weight.max(1) as u32;
+            if weight < sortie_count {
+                weight = sortie_count;
+            }
+            air_control(ui, 6, &mut weight, sortie_count..=24);
+            self.map_missions[i].air_weight = weight as i32;
+            let minutes = (mission_flight_secs(&self.map_missions[i]) / 60.0).round() as u32;
+            ui.label(
+                RichText::new(format!(
+                    "1 in {weight}. The route on the map is about {minutes} min."
+                ))
+                .color(c::NEUTRAL_700),
+            );
+            if self.air_options.trigger == airtask::AirTrigger::Clock {
+                ui.add_space(8.0);
+                ui.label("Load the marks");
+                ui.horizontal(|ui| {
+                    ui.set_min_height(28.0);
+                    for spread in airtask::AirSpread::ALL {
+                        let selected = self.map_missions[i].air_spread == spread;
+                        if ui
+                            .add_sized(
+                                [72.0, 28.0],
+                                egui::Button::selectable(selected, spread.label()),
+                            )
+                            .on_hover_text(
+                                "Where this sortie's firings sit in the mission. Even uses the whole window. Front, middle, and end pack them into that part.",
+                            )
+                            .clicked()
+                        {
+                            self.map_missions[i].air_spread = spread;
+                        }
+                    }
+                });
+                let cap = airtask::marks_that_fit(&self.air_options).max(1);
+                let mut times = self.map_missions[i].air_runs.clamp(1, cap);
+                air_control(ui, 7, &mut times, 1..=cap);
+                self.map_missions[i].air_runs = times;
+                ui.label(
+                    RichText::new(format!(
+                        "Generate builds {times} flights on this path."
+                    ))
+                    .color(c::NEUTRAL_700),
+                );
+            }
+        }
+        if let Some(path) = &self.map_missions[i].air_path {
+            let path = path.clone();
+            show_missing_locale_hint(ui, &path);
+        }
+        if remove {
+            let removed = self.map_missions[i].name.clone();
+            self.map_missions.remove(i);
+            self.air_selected = if self.map_missions.is_empty() {
+                None
+            } else {
+                Some(i.min(self.map_missions.len() - 1))
+            };
+            self.status = Status::Info(format!("{removed} was removed from the map."));
+        }
+    }
+
+    fn add_air_template(&mut self) {
+        let Some(paths) = dialog::FileDialog::new()
+            .add_filter("IL-2 Group", &["Group", "group"])
+            .pick_files()
+        else {
+            return;
+        };
+        let mut staged = 0usize;
+        let mut last_err = None;
+        for path in paths {
+            match load_group(&path) {
+                Ok(root) => {
+                    let named = airtask::inspect_air_plan(&root).ok();
+                    let strike = crate::template::strike_side(&root).is_some();
+                    if named.is_none() && !strike {
+                        last_err = Some(
+                            "That group is not a strike package. Apply Strike on the lead in Template first."
+                                .into(),
+                        );
+                        continue;
+                    }
+                    let stem = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Package");
+                    let name = map::package_title(&root, stem);
+                    self.stage_air_group(name, root, path);
+                    staged += 1;
+                }
+                Err(err) => last_err = Some(err),
+            }
+        }
+        if staged == 0 {
+            if !matches!(self.status, Status::Error(_)) {
+                self.status = Status::Error(
+                    last_err.unwrap_or_else(|| "No package was opened.".into()),
+                );
+            }
+        } else if staged > 1 {
+            self.status = Status::Info(
+                "The last package is in the middle. Set its mission, then load the others."
+                    .into(),
+            );
+        }
+    }
+
+    /// Mission parameters for the package open in the center.
+    fn air_package_builder(&mut self, ui: &mut egui::Ui) {
+        let Some((side, name)) = self.air_draft.as_ref().map(|draft| {
+            let side = if draft.eastern { "DPRK" } else { "NATO" };
+            (side, draft.name.clone())
+        }) else {
+            return;
+        };
+        ui.label(RichText::new(side).small().color(c::NEUTRAL_700));
+        ui.label(RichText::new(&name).font(FontId::new(24.0, theme::heading_family())));
+        ui.add_space(8.0);
+        ui.label("Mission");
+        let (sweep, strike) = self
+            .air_draft
+            .as_ref()
+            .map(|draft| {
+                (
+                    draft.kind == Some(map::PackageKind::Sweep),
+                    draft.kind == Some(map::PackageKind::Strike),
+                )
+            })
+            .unwrap_or((false, false));
+        ui.horizontal(|ui| {
+            if ui
+                .add_sized([140.0, 28.0], egui::Button::selectable(sweep, "Fighter Sweep"))
+                .clicked()
+            {
+                if let Some(draft) = self.air_draft.as_mut() {
+                    draft.kind = Some(map::PackageKind::Sweep);
+                    draft.target = None;
+                }
+            }
+            if ui
+                .add_sized([120.0, 28.0], egui::Button::selectable(strike, "Strike"))
+                .clicked()
+            {
+                if let Some(draft) = self.air_draft.as_mut() {
+                    draft.kind = Some(map::PackageKind::Strike);
+                }
+            }
+        });
+        let Some(kind) = self.air_draft.as_ref().and_then(|d| d.kind) else {
+            shell::hint(ui, "Choose Fighter Sweep or Strike.", false);
+            return;
+        };
+        ui.add_space(8.0);
+        ui.horizontal_top(|ui| {
+            let home_w = 220.0;
+            let gap = 24.0;
+            let left_w = (ui.available_width() - home_w - gap).max(180.0);
+            ui.vertical(|ui| {
+                ui.set_width(left_w);
+                match kind {
+                    map::PackageKind::Strike => self.air_strike_parameters(ui),
+                    map::PackageKind::Sweep => self.air_sweep_parameters(ui),
+                }
+            });
+            ui.add_space(gap);
+            ui.vertical(|ui| {
+                ui.set_width(home_w);
+                self.air_home_base(ui);
+            });
+        });
+        ui.add_space(8.0);
+        let ready = self.air_draft.as_ref().is_some_and(|draft| match draft.kind {
+            Some(map::PackageKind::Strike) => draft.target.is_some(),
+            Some(map::PackageKind::Sweep) => true,
+            None => false,
+        });
+        if ui
+            .add_enabled_ui(ready, |ui| {
+                ui.add_sized([180.0, 28.0], egui::Button::new("Add to missions"))
+                    .on_disabled_hover_text("Pick a target first.")
+            })
+            .inner
+            .clicked()
+        {
+            self.commit_air_package();
+        }
+    }
+
+    fn air_strike_parameters(&mut self, ui: &mut egui::Ui) {
+        if self.provisions_loaded_for.is_empty() {
+            self.reload_map_provisions();
+        }
+        let (eastern, kind, current) = {
+            let Some(draft) = self.air_draft.as_ref() else {
+                return;
+            };
+            (draft.eastern, draft.static_kind, draft.target.clone())
+        };
+        ui.label("Target type");
+        let mut picked = kind;
+        egui::ComboBox::from_id_salt("package_target_kind")
+            .selected_text(picked.label())
+            .width(ui.available_width().min(360.0))
+            .show_ui(ui, |ui| {
+                for kind in map::StaticTargetKind::ALL {
+                    if ui.selectable_label(picked == kind, kind.label()).clicked() {
+                        picked = kind;
+                    }
+                }
+            });
+        if picked != kind {
+            if let Some(draft) = self.air_draft.as_mut() {
+                draft.static_kind = picked;
+                draft.target = None;
+            }
+        }
+        let (hits, units) = self.package_targets(eastern, picked);
+        ui.add_space(4.0);
+        ui.label("Inside the area");
+        if hits.is_empty() {
+            let note = if matches!(
+                picked,
+                map::StaticTargetKind::Encampments
+                    | map::StaticTargetKind::Ports
+                    | map::StaticTargetKind::Mines
+                    | map::StaticTargetKind::Industry
+            ) {
+                "Nothing of this type is charted inside the area."
+            } else {
+                "None of these inside the area."
+            };
+            shell::hint(ui, note, false);
+        }
+        self.pick_package_target(ui, &hits, &current);
+        ui.add_space(6.0);
+        ui.label("Imported units");
+        if units.is_empty() {
+            shell::hint(
+                ui,
+                "Place Army Generator units on the map, then pick one here.",
+                false,
+            );
+        }
+        self.pick_package_target(ui, &units, &current);
+        if current.as_ref().is_some_and(|hit| hit.may_not_spawn) {
+            shell::warning(
+                ui,
+                "This unit may not spawn. Army Generator activates only some of the copies.",
+            );
+        }
+    }
+
+    fn pick_package_target(
+        &mut self,
+        ui: &mut egui::Ui,
+        hits: &[map::StrikeObjective],
+        current: &Option<map::StrikeObjective>,
+    ) {
+        for hit in hits {
+            let on = current.as_ref() == Some(hit);
+            let label = hit.label.clone();
+            if ui
+                .add_sized(
+                    [ui.available_width().min(420.0), 28.0],
+                    egui::Button::selectable(on, label),
+                )
+                .clicked()
+            {
+                if let Some(draft) = self.air_draft.as_mut() {
+                    draft.target = Some(hit.clone());
+                }
+            }
+        }
+    }
+
+    fn air_sweep_parameters(&mut self, ui: &mut egui::Ui) {
+        let mut altitude = self
+            .air_draft
+            .as_ref()
+            .map(|d| d.altitude_m)
+            .unwrap_or(3000);
+        labeled_slider(ui, "Altitude", &mut altitude, 500..=8000);
+        if let Some(draft) = self.air_draft.as_mut() {
+            draft.altitude_m = altitude;
+        }
+        shell::hint(
+            ui,
+            "The patrol point starts at the middle of the area. Home is the column on the right. Drag the flight, the IP, and the patrol point on the map after the mission is added.",
+            false,
+        );
+    }
+
+    fn air_home_base(&mut self, ui: &mut egui::Ui) {
+        let (eastern, home) = {
+            let Some(draft) = self.air_draft.as_ref() else {
+                return;
+            };
+            (draft.eastern, draft.home.clone())
+        };
+        let mut choices = vec![map::PackageHome::Rear];
+        choices.extend(self.friendly_homes(eastern));
+        let mut next = home.clone();
+        ui.vertical(|ui| {
+            ui.set_width(220.0);
+            ui.label(RichText::new("Home base").small().color(c::NEUTRAL_700));
+            egui::ScrollArea::vertical()
+                .id_salt("package_home")
+                .max_height(220.0)
+                .show(ui, |ui| {
+                    for choice in &choices {
+                        let label = match choice {
+                            map::PackageHome::Rear => "Rear of the area".to_string(),
+                            map::PackageHome::Field { label, .. } => label.clone(),
+                        };
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), 28.0],
+                                egui::Button::selectable(&home == choice, label),
+                            )
+                            .clicked()
+                        {
+                            next = choice.clone();
+                        }
+                    }
+                });
+        });
+        if next != home {
+            if let Some(draft) = self.air_draft.as_mut() {
+                draft.home = next;
+            }
+        }
+    }
+
+    fn generate_air_file(&mut self) {
+        let (inputs, locale_paths) = self.air_task_inputs();
+        if inputs.is_empty() {
+            self.status = Status::Error(
+                "Add a sortie. It is placed on the map, and Generate writes those placements."
+                    .into(),
+            );
+            return;
+        }
+        let mut generated = match airtask::link_air_task(&inputs, &self.air_options) {
+            Ok(g) => g,
+            Err(err) => {
+                self.status = Status::Error(err);
+                return;
+            }
+        };
+        let terrain_note = self.apply_terrain(&mut generated);
+        let text = serialize_group(&generated);
+        let suggested = format!("Mission_Tasking_{}sortie.Group", inputs.len());
+        let Some(save_path) = dialog::FileDialog::new()
+            .add_filter("IL-2 Group", &["Group"])
+            .set_file_name(&suggested)
+            .save_file()
+        else {
+            return;
+        };
+        let n = inputs.len();
+        let summary = format!(
+            "Wrote {n} sortie{} from the map. The order is chosen once when the mission starts",
+            if n == 1 { "" } else { "s" }
+        );
+        self.status = save_with_sidecars(&save_path, &text, &locale_paths, &summary);
+        self.add_terrain_note(terrain_note);
     }
 
     // ── Exclusive Activation (README §5.4) ─────────────────────────────────
@@ -3001,7 +4137,7 @@ impl GroupGeneratorApp {
     }
 
     fn idle_hint(&self) -> &'static str {
-        match self.mode {
+        match self.work_mode() {
             AppMode::Template => {
                 "Add units, choose Activate or Spawn, then generate a proximity-triggered group."
             }
@@ -3021,13 +4157,16 @@ impl GroupGeneratorApp {
                 "Load a Freeflight airfield from _gen.mission, then generate the cleaned group."
             }
             AppMode::Map => "Draw a box on the Korea map, then generate icons for that area.",
+            AppMode::AirTasking => {
+                "Add a sortie or a mission. It is listed here and placed on the map."
+            }
         }
     }
 
     /// With nothing else to report, the idle status names the first thing
     /// that blocks Generate on this tab (Exclusive Activation plans).
     fn idle_problem(&self) -> Option<String> {
-        match self.mode {
+        match self.work_mode() {
             AppMode::Exclusive => exclusive_first_problem(&self.bomber_slots),
             _ => None,
         }
@@ -4074,6 +5213,106 @@ fn recon_delay_note(start_s: u32, group_ms: u32) -> String {
     } else {
         format!(", {}", parts.join(", "))
     }
+}
+
+fn air_control(
+    ui: &mut egui::Ui,
+    index: usize,
+    value: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+) {
+    let (label, hint) = AIR_CONTROLS[index];
+    ui.label(label).on_hover_text(hint);
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::Slider::new(value, range.clone())
+                .show_value(false)
+                .trailing_fill(true),
+        );
+        ui.add(egui::DragValue::new(value).range(range).speed(0.2));
+    });
+}
+
+/// One wheel notch while the pointer is on the number. Scroll up increases it.
+/// The panel does not scroll at the same time.
+fn scroll_notches(ui: &mut egui::Ui, hovered: bool) -> i32 {
+    if !hovered {
+        return 0;
+    }
+    let (raw, smooth) = ui.input(|i| (i.raw_scroll_delta.y, i.smooth_scroll_delta.y));
+    if raw.abs() < 1.0 && smooth.abs() < 1.0 {
+        return 0;
+    }
+    ui.input_mut(|i| {
+        i.raw_scroll_delta.y = 0.0;
+        i.smooth_scroll_delta.y = 0.0;
+    });
+    if raw.abs() < 1.0 {
+        return 0;
+    }
+    if raw > 0.0 { 1 } else { -1 }
+}
+
+fn step_buttons(ui: &mut egui::Ui, up: &str, down: &str) -> i32 {
+    let mut delta = 0;
+    if ui
+        .add_sized([28.0, 28.0], egui::Button::new("+"))
+        .on_hover_text(up)
+        .clicked()
+    {
+        delta += 1;
+    }
+    if ui
+        .add_sized([28.0, 28.0], egui::Button::new("-"))
+        .on_hover_text(down)
+        .clicked()
+    {
+        delta -= 1;
+    }
+    delta
+}
+
+/// Slider plus the number, with `+` / `-` and the scroll wheel beside the number.
+fn stepped_count(ui: &mut egui::Ui, label: &str, value: &mut u32, range: std::ops::RangeInclusive<u32>) {
+    ui.label(label);
+    let width = ui.available_width();
+    ui.horizontal(|ui| {
+        let slider_w = (width - 52.0 - 28.0 * 2.0 - 8.0 * 4.0).clamp(48.0, 110.0);
+        ui.spacing_mut().slider_width = slider_w;
+        ui.add(
+            egui::Slider::new(value, range.clone())
+                .show_value(false)
+                .trailing_fill(true),
+        );
+        let number = ui.add(egui::DragValue::new(value).range(range.clone()).speed(0.2));
+        let buttons = step_buttons(ui, "Up", "Down");
+        let notches = scroll_notches(ui, number.hovered());
+        let delta = buttons + notches;
+        if delta != 0 {
+            let next = *value as i32 + delta;
+            *value = next.clamp(*range.start() as i32, *range.end() as i32) as u32;
+        }
+    });
+}
+
+/// Altitude number with `+` / `-` (100 m) and the scroll wheel.
+fn stepped_altitude(ui: &mut egui::Ui, label: &str, value: &mut f32) {
+    let range = 100.0..=9000.0;
+    ui.horizontal(|ui| {
+        ui.add_sized([36.0, 28.0], egui::Label::new(label));
+        let number = ui.add(
+            egui::DragValue::new(value)
+                .range(range.clone())
+                .speed(25.0)
+                .suffix(" m"),
+        );
+        let buttons = step_buttons(ui, "Up 100 m", "Down 100 m");
+        let notches = scroll_notches(ui, number.hovered());
+        let delta = buttons + notches;
+        if delta != 0 {
+            *value = (*value + delta as f32 * 100.0).clamp(*range.start(), *range.end());
+        }
+    });
 }
 
 fn labeled_slider(

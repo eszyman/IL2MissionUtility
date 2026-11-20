@@ -57,7 +57,7 @@ impl HelpTopic {
             HelpTopic::Fighter => "Fighter Pack",
             HelpTopic::Exclusive => "Exclusive Activation",
             HelpTopic::Recon => "Army Generator",
-            HelpTopic::Airfield => "Airfield",
+            HelpTopic::Airfield => "Airfields",
             HelpTopic::Front => "Map",
             HelpTopic::Language => "Language files",
             HelpTopic::Import => "Importing into the mission editor",

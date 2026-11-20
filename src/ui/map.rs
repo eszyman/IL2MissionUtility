@@ -134,10 +134,12 @@ pub(super) struct FlightAim {
 /// One enemy object a strike can aim at.
 #[derive(Clone, Debug)]
 pub(super) struct StrikeObjective {
-    label: String,
+    pub(super) label: String,
     class: StrikeTargetClass,
     x: f64,
     z: f64,
+    /// Army Generator left a randomizer on this unit, so it may stay inactive.
+    pub(super) may_not_spawn: bool,
 }
 
 impl PartialEq for StrikeObjective {
@@ -221,6 +223,104 @@ impl StrikeFocus {
     }
 }
 
+/// Fighter sweep or strike, chosen after a package is in the center window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PackageKind {
+    Sweep,
+    Strike,
+}
+
+/// Static target types a strike can aim at. The list is always these nine.
+/// Encampments, ports, mines, and industry stay in the list when none are charted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StaticTargetKind {
+    Airfields,
+    Bridges,
+    RailStations,
+    Dams,
+    Cities,
+    Encampments,
+    Ports,
+    Mines,
+    Industry,
+}
+
+impl StaticTargetKind {
+    pub(super) const ALL: [StaticTargetKind; 9] = [
+        StaticTargetKind::Airfields,
+        StaticTargetKind::Bridges,
+        StaticTargetKind::RailStations,
+        StaticTargetKind::Dams,
+        StaticTargetKind::Cities,
+        StaticTargetKind::Encampments,
+        StaticTargetKind::Ports,
+        StaticTargetKind::Mines,
+        StaticTargetKind::Industry,
+    ];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            StaticTargetKind::Airfields => "Airfields",
+            StaticTargetKind::Bridges => "Bridges",
+            StaticTargetKind::RailStations => "Rail stations",
+            StaticTargetKind::Dams => "Dams",
+            StaticTargetKind::Cities => "Cities",
+            StaticTargetKind::Encampments => "Encampments",
+            StaticTargetKind::Ports => "Ports",
+            StaticTargetKind::Mines => "Mines",
+            StaticTargetKind::Industry => "Industry",
+        }
+    }
+
+    fn focus(self) -> Option<StrikeFocus> {
+        match self {
+            StaticTargetKind::Airfields => Some(StrikeFocus::Airbases),
+            StaticTargetKind::Bridges => Some(StrikeFocus::Bridges),
+            StaticTargetKind::RailStations => Some(StrikeFocus::Rail),
+            StaticTargetKind::Dams => Some(StrikeFocus::Dams),
+            StaticTargetKind::Cities
+            | StaticTargetKind::Encampments
+            | StaticTargetKind::Ports
+            | StaticTargetKind::Mines
+            | StaticTargetKind::Industry => None,
+        }
+    }
+}
+
+/// A library or template package waiting in the center window. It is not on
+/// the map until the mission parameters are set.
+#[derive(Clone)]
+pub(super) struct AirPackageDraft {
+    pub name: String,
+    pub eastern: bool,
+    pub library: Option<usize>,
+    pub roots: Vec<crate::ast::Il2Entity>,
+    pub path: Option<std::path::PathBuf>,
+    pub kind: Option<PackageKind>,
+    pub static_kind: StaticTargetKind,
+    pub target: Option<StrikeObjective>,
+    pub home: PackageHome,
+    pub altitude_m: u32,
+    /// Set while Edit is changing a mission that is already on the map.
+    pub editing: Option<usize>,
+}
+
+/// Where the flight starts. The rear of the area, or a friendly field inside it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum PackageHome {
+    Rear,
+    Field { label: String, x: f64, z: f64 },
+}
+
+/// Last static-target and imported-unit lists for the package builder.
+pub(super) struct PackageHitCache {
+    pub stamp: u64,
+    pub eastern: bool,
+    pub kind: StaticTargetKind,
+    pub hits: Vec<StrikeObjective>,
+    pub units: Vec<StrikeObjective>,
+}
+
 /// One scan of the Snap target type inside the AO. A second Add or Shift-drag
 /// with the same box, front, and references reuses it.
 pub(super) struct TargetScan {
@@ -259,6 +359,23 @@ pub(super) struct PlacedMission {
     /// Later flights' attack points. Empty unless the group has more than one
     /// flight and more than one AttackArea.
     pub attacks: Vec<FlightAim>,
+    /// Generate leaves every AttackArea flag as the template wrote it.
+    pub keep_template_attack: bool,
+    /// Order among flights that share a target. Lower runs first and gets the
+    /// larger Zone In. Missions that do not share a target are left alone.
+    pub sequence: u32,
+    /// Added from Mission Tasking. Drawn with the other strikes. Map Generate
+    /// leaves these out of Exclusive Activation.
+    pub air_task: bool,
+    pub air_weight: i32,
+    pub air_runs: u32,
+    /// Where this sortie's firings sit in the mission window.
+    pub air_spread: crate::airtask::AirSpread,
+    pub air_enabled: bool,
+    /// Strike file this sortie was loaded from, for the translation sidecar.
+    pub air_path: Option<std::path::PathBuf>,
+    /// Hidden layers stay in the file and are not drawn, so another layer can be moved.
+    pub hidden: bool,
 }
 
 /// Map tool palette, top to bottom; keys 1–6 pick them (README §5.6).
@@ -391,6 +508,8 @@ pub(super) struct MapArmySlot {
     copies: Vec<ArmyCopyInfo>,
     ground: Option<MapGroundLayout>,
     ships: Option<MapShipLayout>,
+    /// Hidden groups stay in the file and are not drawn.
+    shown: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -702,12 +821,31 @@ pub(super) enum KoreaMapLayer {
     Detail(ColorImage),
 }
 
+/// One close-up tile, decoded off the UI thread. `None` means the file failed.
+pub(super) struct EditorTileMsg {
+    row: i32,
+    col: i32,
+    image: Option<ColorImage>,
+}
+
 fn load_korea_jpeg(bytes: &[u8], path: &str) -> ColorImage {
     let img = image::load_from_memory(bytes)
         .unwrap_or_else(|_| panic!("{path} is not a valid JPEG"))
         .to_rgba8();
     let (w, h) = img.dimensions();
     ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw())
+}
+
+/// Shrink a close-up tile before it reaches the GPU. The worker does this,
+/// so a pan never waits on the decode.
+fn decode_editor_tile(path: &Path) -> Option<ColorImage> {
+    let img = image::open(path).ok()?;
+    let rgba = img.thumbnail(768, 768).to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        rgba.as_raw(),
+    ))
 }
 
 /// Hypsometric ramp for the relief layer (metres → color).
@@ -777,6 +915,186 @@ fn world_to_uv(x: f64, z: f64) -> Pos2 {
     let u = ((z - MAP_MIN) / span) as f32; // Clamping removed
     let v = ((MAP_MAX - x) / span) as f32; // Clamping removed
     Pos2::new(u, v)
+}
+
+/// Points within 1 m are one object, the same rule as `StrikeObjective`.
+const SAME_TARGET_M: f64 = 1.0;
+
+/// Zone In radii of flights on one target step by at least this much.
+/// An earlier flight is larger, so a player enters it first.
+const ZONE_SEQUENCE_GAP_M: f64 = 300.0;
+
+/// One note when two or more placed flights aim at the same target point.
+///
+/// A target is the point the mission stores (`target_x`/`target_z`, or a later
+/// flight's attack point). The Snap target type is not an identity: two tanks
+/// both labeled "Tanks" at different points do not share a target. The warning
+/// does not change placement. Export may enlarge Zone In when a sequence is set.
+fn shared_target_warning(missions: &[PlacedMission]) -> Option<String> {
+    let mut aims: Vec<(usize, f64, f64)> = Vec::new();
+    for (mission_i, mission) in missions.iter().enumerate() {
+        aims.push((mission_i, mission.target_x, mission.target_z));
+        for attack in &mission.attacks {
+            aims.push((mission_i, attack.x, attack.z));
+        }
+    }
+    let shares = aims
+        .iter()
+        .filter(|(mission_i, x, z)| {
+            aims.iter().any(|(other_i, ox, oz)| {
+                other_i != mission_i && (*x - ox).hypot(*z - oz) < SAME_TARGET_M
+            })
+        })
+        .count();
+    if shares < 2 {
+        return None;
+    }
+    Some(format!(
+        "{shares} flights share a target. Multiple flights going to the exact same target can produce unexpected results."
+    ))
+}
+
+fn mission_aim_points(mission: &PlacedMission) -> Vec<(f64, f64)> {
+    let mut points = vec![(mission.target_x, mission.target_z)];
+    for attack in &mission.attacks {
+        points.push((attack.x, attack.z));
+    }
+    points
+}
+
+fn missions_share_target(a: &PlacedMission, b: &PlacedMission) -> bool {
+    for (x, z) in mission_aim_points(a) {
+        for (ox, oz) in mission_aim_points(b) {
+            if (x - ox).hypot(z - oz) < SAME_TARGET_M {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Flights that share a target, each cluster ordered by [`PlacedMission::sequence`]
+/// (then by list index). 1 in that order is first and receives the largest Zone In.
+fn shared_target_clusters(missions: &[PlacedMission]) -> Vec<Vec<usize>> {
+    let n = missions.len();
+    let mut seen = vec![false; n];
+    let mut clusters = Vec::new();
+    for i in 0..n {
+        if seen[i] {
+            continue;
+        }
+        let mut stack = vec![i];
+        let mut cluster = Vec::new();
+        seen[i] = true;
+        while let Some(cur) = stack.pop() {
+            cluster.push(cur);
+            for j in 0..n {
+                if seen[j] || !missions_share_target(&missions[cur], &missions[j]) {
+                    continue;
+                }
+                seen[j] = true;
+                stack.push(j);
+            }
+        }
+        if cluster.len() < 2 {
+            continue;
+        }
+        cluster.sort_by(|&a, &b| {
+            missions[a]
+                .sequence
+                .cmp(&missions[b].sequence)
+                .then(a.cmp(&b))
+        });
+        clusters.push(cluster);
+    }
+    clusters.sort_by_key(|cluster| cluster[0]);
+    clusters
+}
+
+fn is_sequenced_zone_in(entity: &crate::ast::Il2Entity) -> bool {
+    if entity.block_type != "MCU_CheckZone" {
+        return false;
+    }
+    let name = entity.name().unwrap_or("").to_ascii_lowercase();
+    if name == "zone in" || name == "mission start" {
+        return true;
+    }
+    name.contains("zone in") && !name.contains("out") && !name.contains("reactivat")
+}
+
+fn authored_zone_in_m(group: &crate::ast::Il2Entity) -> f64 {
+    let mut max = 0.0f64;
+    group.for_each(&mut |entity| {
+        if !is_sequenced_zone_in(entity) {
+            return;
+        }
+        if let Some(radius) = entity.property("Zone").and_then(|s| s.parse::<f64>().ok()) {
+            max = max.max(radius);
+        }
+    });
+    max
+}
+
+/// Radius to write for each mission. `None` leaves the template Zone In alone.
+/// Within a shared-target cluster the last flight keeps its authored radius.
+/// Each earlier flight is `max(authored, next + 300)`.
+fn shared_target_zone_radii(missions: &[PlacedMission]) -> Vec<Option<f64>> {
+    let authored: Vec<f64> = missions
+        .iter()
+        .map(|m| authored_zone_in_m(&m.root))
+        .collect();
+    let mut out = vec![None; missions.len()];
+    for cluster in shared_target_clusters(missions) {
+        let last = cluster.len() - 1;
+        let mut assigned = vec![0.0; cluster.len()];
+        assigned[last] = authored[cluster[last]];
+        for i in (0..last).rev() {
+            assigned[i] = (assigned[i + 1] + ZONE_SEQUENCE_GAP_M).max(authored[cluster[i]]);
+        }
+        for (i, &mission_i) in cluster.iter().enumerate() {
+            let radius = assigned[i];
+            out[mission_i] = Some(
+                out[mission_i]
+                    .map(|prev: f64| prev.max(radius))
+                    .unwrap_or(radius),
+            );
+        }
+    }
+    out
+}
+
+/// Raise every start-zone checkzone by the gap between `radius` and the
+/// largest authored start zone. A zone is never shrunk.
+fn grow_zone_in(group: &mut crate::ast::Il2Entity, radius: f64) {
+    let delta = radius - authored_zone_in_m(group);
+    if delta < 0.1 {
+        return;
+    }
+    group.for_each_mut(&mut |entity| {
+        if !is_sequenced_zone_in(entity) {
+            return;
+        }
+        let authored = entity
+            .property("Zone")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        entity.set_property("Zone", format!("{:.0}", authored + delta));
+    });
+}
+
+/// `mission` sorts before `before` among flights that share its target.
+fn order_mission_before(missions: &mut [PlacedMission], mission: usize, before: usize) {
+    let moving = missions[mission].sequence;
+    let other = missions[before].sequence;
+    if moving < other {
+        return;
+    }
+    if moving > other {
+        missions[mission].sequence = other;
+        missions[before].sequence = moving;
+        return;
+    }
+    missions[before].sequence = other.saturating_add(1);
 }
 
 fn push_objective(out: &mut Vec<StrikeObjective>, obj: StrikeObjective, min_sep: f64) {
@@ -969,17 +1287,148 @@ impl EnemyHoldings {
     }
 }
 
+#[derive(Clone, Copy)]
 enum AttackAim {
     Units,
+    /// A bridge or a dam. Guns and bombs both use Attack Ground.
     Structure,
+    /// An airfield. Bombs use Attack Ground. A flight with no bombs strafes.
+    Airbase,
     Open,
 }
 
-enum StrikeArmNote {
-    None,
-    GroundTargets,
-    AttackGround,
-    Both,
+struct AttackEdit {
+    ordinal: usize,
+    name: String,
+    current: AttackFlags,
+    desired: AttackFlags,
+    why: &'static str,
+}
+
+fn stamp_sweep_altitude(root: &mut crate::ast::Il2Entity, altitude_m: u32) {
+    let y = format!("{:.3}", altitude_m);
+    root.for_each_mut(&mut |entity| {
+        if entity.block_type == "Plane" || entity.block_type == "MCU_Waypoint" {
+            entity.set_property("YPos", y.clone());
+        }
+    });
+}
+
+/// DPRK when the vehicles are a 500-series country, NATO when they are 600-series.
+fn group_is_eastern(root: &crate::ast::Il2Entity, path: &std::path::Path) -> bool {
+    let mut nato = 0i32;
+    let mut east = 0i32;
+    root.for_each(&mut |entity| {
+        if !matches!(
+            entity.block_type.as_str(),
+            "Vehicle" | "Ship" | "Train" | "Plane"
+        ) {
+            return;
+        }
+        let Some(country) = entity.property("Country").and_then(|s| s.parse::<i32>().ok()) else {
+            return;
+        };
+        match crate::aircraft::country_is_nato(country) {
+            Some(true) => nato += 1,
+            Some(false) => east += 1,
+            None => {}
+        }
+    });
+    if east != nato {
+        return east > nato;
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = stem.strip_suffix("_running").unwrap_or(stem);
+    if let Some((_, suffix)) = stem.rsplit_once('_') {
+        if let Some(nato) = suffix.parse::<i32>().ok().and_then(crate::aircraft::country_is_nato) {
+            return !nato;
+        }
+    }
+    let lower = stem.to_ascii_lowercase();
+    if lower.contains("nato") {
+        return false;
+    }
+    true
+}
+
+fn entity_may_skip(root: &crate::ast::Il2Entity) -> bool {
+    root.find_by_name(crate::recon::RANDOMIZER_NAME).is_some()
+}
+
+fn plane_altitude(root: &crate::ast::Il2Entity) -> u32 {
+    let mut y = None;
+    root.for_each(&mut |entity| {
+        if y.is_none() && entity.block_type == "Plane" {
+            y = entity
+                .property("YPos")
+                .and_then(|value| value.parse::<f64>().ok());
+        }
+    });
+    y.unwrap_or(3000.0).round().clamp(500.0, 8000.0) as u32
+}
+
+/// Title for a loaded package. The builder's default name is "Unit Template";
+/// a named group inside the file, then the file name, is used instead.
+pub(super) fn package_title(root: &crate::ast::Il2Entity, file_stem: &str) -> String {
+    fn usable(name: &str) -> bool {
+        let name = name.trim();
+        !name.is_empty()
+            && !name.eq_ignore_ascii_case("Unit Template")
+            && !name.eq_ignore_ascii_case("group")
+            && !matches!(
+                name,
+                "Logic" | "Units" | "Orders" | "Waypoints" | "Air Tasking Logic"
+            )
+    }
+    if let Some(name) = root.name().filter(|n| usable(n)) {
+        return name.to_string();
+    }
+    let mut found = None;
+    root.for_each(&mut |entity| {
+        if found.is_none() && entity.block_type == "Group" {
+            if let Some(name) = entity.name().filter(|n| usable(n)) {
+                found = Some(name.to_string());
+            }
+        }
+    });
+    found.unwrap_or_else(|| file_stem.to_string())
+}
+
+fn unit_target_class(kind: GroundKind) -> (StrikeTargetClass, &'static str) {
+    match kind {
+        GroundKind::Armor => (StrikeTargetClass::Tanks, "Armor"),
+        GroundKind::Artillery => (StrikeTargetClass::Tanks, "Artillery"),
+        GroundKind::Infantry => (StrikeTargetClass::Tanks, "Infantry"),
+        GroundKind::AntiAir => (StrikeTargetClass::Tanks, "Anti-air"),
+        GroundKind::Supply => (StrikeTargetClass::TruckRoutes, "Supply"),
+        GroundKind::Train => (StrikeTargetClass::TruckRoutes, "Train"),
+    }
+}
+
+const SORTIE_DESC: &str = "Air Tasking";
+const SORTIE_PATROL_DESC: &str = "Air Tasking Patrol";
+
+/// `Some(true)` when the group was exported as a patrol. `Some(false)` is a strike sortie.
+fn sortie_mark(group: &crate::ast::Il2Entity) -> Option<bool> {
+    let raw = group.property("Desc").unwrap_or("");
+    let text = raw.trim().trim_matches('"');
+    if text == SORTIE_PATROL_DESC {
+        Some(true)
+    } else if text == SORTIE_DESC {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn flight_group_is_nato(root: &crate::ast::Il2Entity) -> bool {
+    let mut country = None;
+    root.for_each(&mut |entity| {
+        if entity.block_type == "Plane" && country.is_none() {
+            country = entity.property("Country").and_then(|v| v.parse().ok());
+        }
+    });
+    country.unwrap_or(501) / 100 == 6
 }
 
 /// NodeGates mutex so only one of these already-placed plans can run.
@@ -1012,6 +1461,151 @@ fn exclusive_pack(groups: &[crate::ast::Il2Entity]) -> Result<crate::ast::Il2Ent
         });
     }
     link_bomber_plans_with(&plans, true)
+}
+
+/// Home, the initial point, the target, and back. Meters.
+fn route_meters(mission: &PlacedMission) -> f64 {
+    let legs = [
+        (
+            (mission.start_x, mission.start_z),
+            (mission.ip_x, mission.ip_z),
+        ),
+        (
+            (mission.ip_x, mission.ip_z),
+            (mission.target_x, mission.target_z),
+        ),
+        (
+            (mission.target_x, mission.target_z),
+            (mission.start_x, mission.start_z),
+        ),
+    ];
+    legs.iter()
+        .map(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1))
+        .sum()
+}
+
+/// "F-80C HVAR strike 2 2" is still the strike, not a new stem.
+fn sortie_name_stem(name: &str) -> &str {
+    let mut stem = name.trim();
+    while let Some((head, tail)) = stem.rsplit_once(' ') {
+        if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+            stem = head.trim_end();
+            continue;
+        }
+        break;
+    }
+    stem
+}
+
+/// The next duplicate is 2, then 3, then 4. A copied "2" does not become "2 2".
+fn next_copy_name(existing: &[&str], base: &str) -> String {
+    let stem = sortie_name_stem(base);
+    if stem.is_empty() {
+        return base.to_string();
+    }
+    let mut highest = 1u32;
+    let mut seen = false;
+    for name in existing {
+        if sortie_name_stem(name) != stem {
+            continue;
+        }
+        seen = true;
+        let number = name
+            .rsplit_once(' ')
+            .and_then(|(_, tail)| tail.parse::<u32>().ok())
+            .unwrap_or(1);
+        highest = highest.max(number);
+    }
+    if !seen {
+        stem.to_string()
+    } else {
+        format!("{stem} {}", highest + 1)
+    }
+}
+
+fn waypoint_kmh(group: &crate::ast::Il2Entity) -> f64 {
+    let mut speed = None;
+    group.for_each(&mut |entity| {
+        if speed.is_none() && entity.block_type == "MCU_Waypoint" {
+            if let Some(value) = entity.property("Speed").and_then(|s| s.parse::<f64>().ok()) {
+                if value >= 1.0 {
+                    speed = Some(value);
+                }
+            }
+        }
+    });
+    speed.unwrap_or(100.0)
+}
+
+struct StampedMission {
+    group: crate::ast::Il2Entity,
+    air: bool,
+    enabled: bool,
+    name: String,
+    weight: i32,
+    runs: u32,
+    spread: crate::airtask::AirSpread,
+    duration_s: f64,
+}
+
+/// One zone mission stays loose. Two or more share Exclusive Activation.
+/// A link failure writes the groups loose and returns nothing to rewire.
+fn pack_zone_missions(
+    notes: &mut Vec<String>,
+    root: &mut crate::ast::Il2Entity,
+    groups: Vec<crate::ast::Il2Entity>,
+) -> Option<crate::ast::Il2Entity> {
+    if groups.is_empty() {
+        return None;
+    }
+    if groups.len() == 1 {
+        return groups.into_iter().next();
+    }
+    match exclusive_pack(&groups) {
+        Ok(pack) => {
+            notes.push(format!(
+                "{} missions share Exclusive Activation, so only one runs at a time.",
+                groups.len()
+            ));
+            Some(pack)
+        }
+        Err(err) => {
+            notes.push(format!("Exclusive Activation was not applied: {err}"));
+            root.children.extend(groups);
+            None
+        }
+    }
+}
+
+fn apply_mission_window(root: &mut crate::ast::Il2Entity, seconds: f64) {
+    let text = format!("{seconds:.0}");
+    root.for_each_mut(&mut |entity| {
+        if entity.block_type != "MCU_Timer" {
+            return;
+        }
+        let name = entity.name().unwrap_or("");
+        if name.ends_with(" WINDOW") {
+            entity.set_property("Time", text.clone());
+        }
+    });
+}
+
+/// Zone IN indexes to turn off at mission start. The editor rejects `Enabled`
+/// on a checkzone, so Air Tasking deactivates these instead of writing that field.
+fn disable_zone_ins(root: &crate::ast::Il2Entity) -> Vec<i32> {
+    let mut ids = Vec::new();
+    root.for_each(&mut |entity| {
+        if entity.block_type != "MCU_CheckZone" {
+            return;
+        }
+        let name = entity.name().unwrap_or("").to_ascii_lowercase();
+        if name.contains("zone in") && !name.contains("out") && !name.contains("reactivat") {
+            if let Some(id) = entity.index {
+                ids.push(id);
+            }
+        }
+    });
+    ids
 }
 
 /// Checkzones whose name is a start zone, including "Zone In 1".
@@ -1104,22 +1698,177 @@ fn attack_flag_on(entity: &crate::ast::Il2Entity, key: &str) -> bool {
         .is_some_and(|s| s != "0" && !s.eq_ignore_ascii_case("false"))
 }
 
-/// Attack Ground on, Attack Air and Attack Ground Targets off.
-fn set_attack_ground_only(entity: &mut crate::ast::Il2Entity) -> bool {
-    let mut changed = false;
-    if !attack_flag_on(entity, "AttackGround") {
-        entity.set_property("AttackGround", "1");
-        changed = true;
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct AttackFlags {
+    ground: bool,
+    targets: bool,
+    air: bool,
+}
+
+fn read_attack_flags(entity: &crate::ast::Il2Entity) -> AttackFlags {
+    AttackFlags {
+        ground: attack_flag_on(entity, "AttackGround"),
+        targets: attack_flag_on(entity, "AttackGTargets"),
+        air: attack_flag_on(entity, "AttackAir"),
     }
-    if attack_flag_on(entity, "AttackAir") {
-        entity.set_property("AttackAir", "0");
-        changed = true;
+}
+
+/// Write a flag only when its effective value changes. A missing key that is
+/// already off stays missing.
+fn set_attack_flag(entity: &mut crate::ast::Il2Entity, key: &str, on: bool) -> bool {
+    if attack_flag_on(entity, key) == on {
+        return false;
     }
-    if attack_flag_on(entity, "AttackGTargets") {
-        entity.set_property("AttackGTargets", "0");
-        changed = true;
+    entity.set_property(key, if on { "1" } else { "0" });
+    true
+}
+
+fn set_attack_flags(entity: &mut crate::ast::Il2Entity, flags: AttackFlags) -> bool {
+    let ground = set_attack_flag(entity, "AttackGround", flags.ground);
+    let targets = set_attack_flag(entity, "AttackGTargets", flags.targets);
+    let air = set_attack_flag(entity, "AttackAir", flags.air);
+    ground || targets || air
+}
+
+fn attack_flag_phrase(flags: AttackFlags) -> &'static str {
+    match (flags.ground, flags.targets, flags.air) {
+        (false, true, false) => "Attack Ground Targets only",
+        (true, false, false) => "Attack Ground only",
+        (false, false, true) => "Attack Air only",
+        (true, true, false) => "Attack Ground and Attack Ground Targets",
+        (true, false, true) => "Attack Ground and Attack Air",
+        (false, true, true) => "Attack Ground Targets and Attack Air",
+        (true, true, true) => "Attack Ground, Attack Ground Targets, and Attack Air",
+        (false, false, false) => "no attack flags",
     }
-    changed
+}
+
+/// Attack Air, and neither ground flag. A later flight with this is an escort
+/// and is not rewritten for the map target.
+fn air_only(flags: AttackFlags) -> bool {
+    flags.air && !flags.ground && !flags.targets
+}
+
+fn attack_note(edit: &AttackEdit, kept: bool) -> String {
+    let current = attack_flag_phrase(edit.current);
+    let desired = attack_flag_phrase(edit.desired);
+    if kept {
+        format!(
+            "{}: template attack kept ({current}). Map would use {desired} for {}.",
+            edit.name, edit.why
+        )
+    } else {
+        format!(
+            "{}: map will use {desired} for {}. Template has {current}.",
+            edit.name, edit.why
+        )
+    }
+}
+
+/// One plane and the ids an AttackArea `Objects` list may use.
+struct PlanePayload {
+    ids: Vec<i32>,
+    script: String,
+    payload_id: i32,
+}
+
+/// True when every plane this AttackArea commands has no bomb loadout.
+/// An empty `Objects` list commands the whole group. No matched plane keeps
+/// Attack Ground, so a bomber is not switched to strafing by mistake.
+fn attack_area_without_bombs(planes: &[PlanePayload], objects: &[i32]) -> bool {
+    let matched: Vec<&PlanePayload> = if objects.is_empty() {
+        planes.iter().collect()
+    } else {
+        planes
+            .iter()
+            .filter(|plane| plane.ids.iter().any(|id| objects.contains(id)))
+            .collect()
+    };
+    !matched.is_empty()
+        && matched
+            .iter()
+            .all(|plane| !crate::payloads::payload_has_bombs(&plane.script, plane.payload_id))
+}
+
+fn plane_payloads(group: &crate::ast::Il2Entity) -> Vec<PlanePayload> {
+    let mut planes = Vec::new();
+    group.for_each(&mut |entity| {
+        if entity.block_type != "Plane" {
+            return;
+        }
+        let mut ids = Vec::new();
+        if let Some(index) = entity.index {
+            ids.push(index);
+        }
+        if let Some(link) = entity.property("LinkTrId").and_then(|s| s.parse().ok()) {
+            ids.push(link);
+        }
+        planes.push(PlanePayload {
+            ids,
+            script: entity.property("Script").unwrap_or("").to_string(),
+            payload_id: entity
+                .property("PayloadId")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+        });
+    });
+    planes
+}
+
+fn attack_areas_without_bombs(group: &crate::ast::Il2Entity) -> Vec<bool> {
+    let planes = plane_payloads(group);
+    let mut out = Vec::new();
+    group.for_each(&mut |entity| {
+        if entity.block_type == "MCU_CMD_AttackArea" {
+            out.push(attack_area_without_bombs(&planes, &entity.objects));
+        }
+    });
+    out
+}
+
+fn desired_attack_flags(aim: AttackAim, guns_only: bool) -> (AttackFlags, &'static str) {
+    match aim {
+        AttackAim::Airbase if guns_only => (
+            AttackFlags {
+                ground: false,
+                targets: true,
+                air: false,
+            },
+            "this airbase, and these aircraft have no bombs",
+        ),
+        AttackAim::Airbase => (
+            AttackFlags {
+                ground: true,
+                targets: false,
+                air: false,
+            },
+            "this airbase",
+        ),
+        AttackAim::Structure => (
+            AttackFlags {
+                ground: true,
+                targets: false,
+                air: false,
+            },
+            "this bridge or dam",
+        ),
+        AttackAim::Units => (
+            AttackFlags {
+                ground: false,
+                targets: true,
+                air: false,
+            },
+            "tanks, trucks, trains, or ships",
+        ),
+        AttackAim::Open => (
+            AttackFlags {
+                ground: true,
+                targets: false,
+                air: false,
+            },
+            "open ground",
+        ),
+    }
 }
 
 fn walk_fixed(
@@ -1854,6 +2603,39 @@ fn draw_map_label(painter: &egui::Painter, pos: Pos2, text: &str, color: Color32
         Color32::from_rgb(16, 16, 20),
     );
     painter.text(pos, align, text, font, color);
+}
+
+fn paint_unit_icon(
+    ui: &mut egui::Ui,
+    tex: Option<&egui::TextureHandle>,
+    size: f32,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    if let Some(tex) = tex {
+        egui::Image::from_texture(tex)
+            .fit_to_exact_size(rect.size())
+            .paint_at(ui, rect);
+    }
+    if resp.hovered() {
+        ui.painter().rect_stroke(
+            rect,
+            2.0,
+            Stroke::new(1.0_f32, c::ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    resp
+}
+
+fn majority_army_kind(copies: &[ArmyCopyInfo]) -> Option<crate::weapon_range::ArmyUnitKind> {
+    let mut best: Option<(crate::weapon_range::ArmyUnitKind, usize)> = None;
+    for copy in copies {
+        let n = copies.iter().filter(|c| c.kind == copy.kind).count();
+        if best.is_none_or(|(_, bn)| n > bn) {
+            best = Some((copy.kind, n));
+        }
+    }
+    best.map(|(kind, _)| kind)
 }
 
 fn army_mix_label(copies: &[ArmyCopyInfo]) -> String {
@@ -2700,6 +3482,39 @@ impl super::GroupGeneratorApp {
         }
     }
 
+    /// Air starts sit with the objective flags. Another click selects the next
+    /// one in the Airfield bank. The status line names the one a click places.
+    fn arm_side_air_start(&mut self, nato: bool) {
+        let placed = |field: &crate::airstart::AirStartField, placed: &[PlacedAirStart]| {
+            placed
+                .iter()
+                .any(|p| p.field.name == field.name && p.field.nato == field.nato)
+        };
+        let open = self.air_starts.iter().position(|field| {
+            field.nato == nato && !placed(field, &self.placed_air_starts)
+        });
+        let index = if let Some(index) = open {
+            index
+        } else if self.air_starts.iter().any(|field| field.nato == nato) {
+            let side = if nato { "NATO" } else { "DPRK" };
+            self.status = Status::Info(format!(
+                "Every {side} air start is already on the map. Add another on the Airfields tab."
+            ));
+            return;
+        } else {
+            let side = if nato { "NATO" } else { "DPRK" };
+            let field = crate::airstart::default_field(format!("{side} air start"), nato);
+            self.air_starts.push(field);
+            self.air_starts.len() - 1
+        };
+        let name = self.air_starts[index].name.clone();
+        self.pick_map_tool(MapDrawingMode::PlaceAirStart);
+        self.air_start_place = Some(index);
+        self.status = Status::Info(format!(
+            "{name} is ready. Click the map to place it. It is also in Airfields."
+        ));
+    }
+
     /// Anything Ctrl Z can take back as a drawing: finished marks (front
     /// strokes, salients, arrows) or one still being drawn.
     fn map_has_marks(&self) -> bool {
@@ -2753,8 +3568,8 @@ impl super::GroupGeneratorApp {
     }
 
     /// Mockup 2f: tools 1–6 with painted icons and their key in the corner,
-    /// a divider between the drawing tools and the objective tools, then
-    /// Undo / Redo at the bottom.
+    /// a divider between the drawing tools and the objective flags, the air
+    /// start tool with those flags, then Undo / Redo at the bottom.
     fn map_tool_palette(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().item_spacing.y = 4.0;
         for (i, (mode, icon, name, _)) in MAP_TOOLS.iter().enumerate() {
@@ -2777,6 +3592,43 @@ impl super::GroupGeneratorApp {
             if shell::tool_icon_button(ui, *icon, tint, name, &key, true, active).clicked() {
                 self.pick_map_tool(*mode);
             }
+        }
+        let air_active = self.map_drawing_mode == MapDrawingMode::PlaceAirStart;
+        let dprk_on = air_active
+            && self
+                .air_start_place
+                .and_then(|i| self.air_starts.get(i))
+                .is_some_and(|field| !field.nato);
+        let nato_on = air_active
+            && self
+                .air_start_place
+                .and_then(|i| self.air_starts.get(i))
+                .is_some_and(|field| field.nato);
+        if shell::tool_icon_button(
+            ui,
+            shell::ToolIcon::AirStart,
+            Some(c::DPRK),
+            "DPRK air start",
+            "click the map",
+            false,
+            dprk_on,
+        )
+        .clicked()
+        {
+            self.arm_side_air_start(false);
+        }
+        if shell::tool_icon_button(
+            ui,
+            shell::ToolIcon::AirStart,
+            Some(c::NATO),
+            "NATO air start",
+            "click the map",
+            false,
+            nato_on,
+        )
+        .clicked()
+        {
+            self.arm_side_air_start(true);
         }
         ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
@@ -3111,78 +3963,760 @@ impl super::GroupGeneratorApp {
         self.route_focus = None;
     }
 
-    fn map_forces_tab(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-        shell::section_title(ui, "Fighters", Some("from Fighter Pack"));
-        ui.horizontal(|ui| {
-            if ui
-                .button("Place DPRK")
-                .on_hover_text("Place DPRK fighters in their coalition zone")
-                .clicked()
-            {
-                self.place_map_fighters(true);
-            }
-            if ui
-                .button("Place NATO")
-                .on_hover_text("Place NATO fighters in their coalition zone")
-                .clicked()
-            {
-                self.place_map_fighters(false);
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui
-                .button("Load DPRK…")
-                .on_hover_text("Load a fighter pack .Group and place it in the DPRK zone")
-                .clicked()
-            {
-                self.load_map_fighters(true);
-            }
-            if ui
-                .button("Load NATO…")
-                .on_hover_text("Load a fighter pack .Group and place it in the NATO zone")
-                .clicked()
-            {
-                self.load_map_fighters(false);
-            }
-        });
-        labeled_slider(ui, "Groups at once", &mut self.fighter_waves, 1..=6);
-        ui.checkbox(&mut self.fighter_fill, format!("Fill AO (up to {MAX_PACKS} at once)"))
-            .on_hover_text(
-                "Cover the whole coalition zone at Zone In spacing, including narrow parts. Groups at once split the spots evenly, up to 8 packs.",
+    fn ao_covers_the_whole_map(&self) -> bool {
+        let full = WorldAabb::full_map();
+        self.front_aabb.x_min == full.x_min
+            && self.front_aabb.x_max == full.x_max
+            && self.front_aabb.z_min == full.z_min
+            && self.front_aabb.z_max == full.z_max
+    }
+
+    /// Put one library sortie on the next unused enemy target inside the AO.
+    /// NATO aims at DPRK. DPRK aims at NATO. The same list Map "Add mission" uses.
+    pub(super) fn add_air_library_sortie(&mut self, library_index: usize) -> bool {
+        let Some(def) = crate::airtask::builtin_library().get(library_index) else {
+            return false;
+        };
+        let def = def.clone();
+        let eastern = !def.nato;
+        let name = self.fresh_mission_name(def.name);
+        self.place_air_sortie(name, eastern, None, |target| {
+            crate::airtask::build_sortie(&def, (target.x, target.z))
+        })
+    }
+
+    /// Put a loaded strike group on the next unused enemy target inside the AO.
+    pub(super) fn add_air_file_sortie(
+        &mut self,
+        name: String,
+        root: crate::ast::Il2Entity,
+        path: std::path::PathBuf,
+    ) -> bool {
+        let eastern = !flight_group_is_nato(&root);
+        let name = self.fresh_mission_name(&name);
+        self.place_air_sortie(name, eastern, Some(path), move |_| Ok(root))
+    }
+
+    fn fresh_mission_name(&self, base: &str) -> String {
+        let names: Vec<&str> = self.map_missions.iter().map(|mission| mission.name.as_str()).collect();
+        next_copy_name(&names, base)
+    }
+
+    fn place_air_sortie(
+        &mut self,
+        name: String,
+        eastern: bool,
+        path: Option<std::path::PathBuf>,
+        build: impl FnOnce(&StrikeObjective) -> Result<crate::ast::Il2Entity, String>,
+    ) -> bool {
+        if self.ao_covers_the_whole_map() {
+            self.status = Status::Error(
+                "Draw an area on the Map first. A sortie is placed on the next unused enemy target inside that area."
+                    .into(),
             );
-        if let Some(layout) = &self.map_fighters {
-            ui.horizontal(|ui| {
-                let side = shell::Side::from_eastern(layout.eastern);
-                shell::side_marker(ui, side, 12.0);
-                ui.label(fighter_layout_summary(layout));
+            return false;
+        }
+        let Some(target) = self.pick_unused_target(eastern) else {
+            let side = if eastern { "NATO" } else { "DPRK" };
+            let kind = self.map_strike_focus.snap_noun();
+            self.status = Status::Error(format!(
+                "No unused {side} {kind} inside the area. Place that target in the area, or choose another Snap target on the Map, then add the sortie again."
+            ));
+            return false;
+        };
+        let label = target.label.clone();
+        let root = match build(&target) {
+            Ok(root) => root,
+            Err(err) => {
+                self.status = Status::Error(err);
+                return false;
+            }
+        };
+        let side = if eastern { "DPRK" } else { "NATO" };
+        self.place_strike_on(name.clone(), eastern, root, target);
+        if let Some(mission) = self.map_missions.last_mut() {
+            mission.air_task = true;
+            mission.air_weight = 5;
+            mission.air_runs = 1;
+            mission.air_enabled = true;
+            mission.air_path = path;
+        }
+        self.air_selected = Some(self.map_missions.len().saturating_sub(1));
+        self.status = Status::Info(format!(
+            "{name} is on the map. It is a {side} flight aimed at {label}. Open the Map tab to see it."
+        ));
+        true
+    }
+
+    /// Show a library package in the center. It is not placed yet.
+    pub(super) fn stage_library_package(&mut self, library_index: usize) {
+        let Some(def) = crate::airtask::builtin_library().get(library_index) else {
+            return;
+        };
+        self.air_selected = None;
+        self.air_draft = Some(AirPackageDraft {
+            name: def.name.to_string(),
+            eastern: !def.nato,
+            library: Some(library_index),
+            roots: Vec::new(),
+            path: None,
+            kind: None,
+            static_kind: StaticTargetKind::Airfields,
+            target: None,
+            home: PackageHome::Rear,
+            altitude_m: 3000,
+            editing: None,
+        });
+        self.status = Status::Info(format!(
+            "{} is in the middle. Choose Fighter Sweep or Strike, then set the mission.",
+            def.name
+        ));
+    }
+
+    /// Show a template package in the center. It is not placed yet.
+    pub(super) fn stage_air_group(
+        &mut self,
+        name: String,
+        root: crate::ast::Il2Entity,
+        path: std::path::PathBuf,
+    ) {
+        let eastern = !flight_group_is_nato(&root);
+        let roots = match take_strike_missions(root) {
+            Ok(imported) => imported.groups,
+            Err(entity) => vec![entity],
+        };
+        if roots.is_empty() {
+            self.status = Status::Error(format!("{name} has no flight to task."));
+            return;
+        }
+        let many = roots.len() > 1;
+        self.air_selected = None;
+        self.air_draft = Some(AirPackageDraft {
+            name: name.clone(),
+            eastern,
+            library: None,
+            roots,
+            path: Some(path),
+            kind: None,
+            static_kind: StaticTargetKind::Airfields,
+            target: None,
+            home: PackageHome::Rear,
+            altitude_m: 3000,
+            editing: None,
+        });
+        let extra = if many {
+            " The file has more than one plan. This is the first."
+        } else {
+            ""
+        };
+        self.status = Status::Info(format!(
+            "{name} is in the middle. Choose Fighter Sweep or Strike, then set the mission.{extra}"
+        ));
+    }
+
+    /// Open a placed mission in the center, on the same choices used to create it.
+    pub(super) fn edit_placed_mission(&mut self, index: usize) {
+        let Some(mission) = self.map_missions.get(index).cloned() else {
+            return;
+        };
+        let sweep = mission.target_label == "Patrol" && mission.target_class.is_none();
+        let kind = if sweep {
+            Some(PackageKind::Sweep)
+        } else {
+            Some(PackageKind::Strike)
+        };
+        let target = if sweep {
+            None
+        } else {
+            Some(StrikeObjective {
+                label: mission.target_label.clone(),
+                class: mission.target_class.unwrap_or(StrikeTargetClass::Tanks),
+                x: mission.target_x,
+                z: mission.target_z,
+                may_not_spawn: false,
+            })
+        };
+        let altitude = plane_altitude(&mission.root);
+        let home = self.home_near(mission.eastern, mission.start_x, mission.start_z);
+        self.air_selected = None;
+        self.air_draft = Some(AirPackageDraft {
+            name: mission.name,
+            eastern: mission.eastern,
+            library: None,
+            roots: vec![mission.root],
+            path: mission.air_path,
+            kind,
+            static_kind: StaticTargetKind::Airfields,
+            target,
+            home,
+            altitude_m: altitude,
+            editing: Some(index),
+        });
+    }
+
+    pub(super) fn duplicate_mission(&mut self, index: usize) {
+        let Some(mut mission) = self.map_missions.get(index).cloned() else {
+            return;
+        };
+        mission.name = self.fresh_mission_name(&mission.name);
+        mission.target_x = (mission.target_x + 2_000.0).clamp(MAP_MIN, MAP_MAX);
+        mission.target_z = (mission.target_z + 2_000.0).clamp(MAP_MIN, MAP_MAX);
+        mission.sequence = self.next_mission_sequence();
+        mission.hidden = false;
+        let name = mission.name.clone();
+        self.record_map_undo(format!("Duplicated {name}"));
+        self.map_missions.push(mission);
+        self.air_selected = Some(self.map_missions.len() - 1);
+        self.air_draft = None;
+        self.status = Status::Info(format!("{name} is a copy. Edit it to aim it somewhere else."));
+    }
+
+    fn home_near(&self, eastern: bool, x: f64, z: f64) -> PackageHome {
+        for home in self.friendly_homes(eastern) {
+            if let PackageHome::Field { x: hx, z: hz, .. } = &home {
+                if (hx - x).hypot(hz - z) < 800.0 {
+                    return home;
+                }
+            }
+        }
+        PackageHome::Rear
+    }
+
+    /// Place the package that is open in the center, using the parameters set there.
+    pub(super) fn commit_air_package(&mut self) -> bool {
+        let Some(draft) = self.air_draft.clone() else {
+            return false;
+        };
+        let Some(kind) = draft.kind else {
+            self.status = Status::Error("Choose Fighter Sweep or Strike.".into());
+            return false;
+        };
+        if self.ao_covers_the_whole_map() {
+            self.status = Status::Error(
+                "Draw an area on the Map first. The mission is placed inside that area.".into(),
+            );
+            return false;
+        }
+        let target = match kind {
+            PackageKind::Strike => match draft.target.clone() {
+                Some(target) => target,
+                None => {
+                    self.status = Status::Error(
+                        "Pick a target inside the area, or an imported unit.".into(),
+                    );
+                    return false;
+                }
+            },
+            PackageKind::Sweep => {
+                let cx = (self.front_aabb.x_min + self.front_aabb.x_max) * 0.5;
+                let cz = (self.front_aabb.z_min + self.front_aabb.z_max) * 0.5;
+                StrikeObjective {
+                    label: "Patrol".into(),
+                    class: StrikeTargetClass::Tanks,
+                    x: cx,
+                    z: cz,
+                    may_not_spawn: false,
+                }
+            }
+        };
+        let name = if draft.editing.is_some() {
+            draft.name.clone()
+        } else {
+            self.fresh_mission_name(&draft.name)
+        };
+        let root = if let Some(index) = draft.library {
+            let Some(def) = crate::airtask::builtin_library().get(index) else {
+                return false;
+            };
+            match crate::airtask::build_sortie(def, (target.x, target.z)) {
+                Ok(root) => root,
+                Err(err) => {
+                    self.status = Status::Error(err);
+                    return false;
+                }
+            }
+        } else if let Some(root) = draft.roots.first().cloned() {
+            root
+        } else {
+            self.status = Status::Error(format!("{name} has no flight to task."));
+            return false;
+        };
+        let mut root = root;
+        if kind == PackageKind::Sweep {
+            stamp_sweep_altitude(&mut root, draft.altitude_m);
+        }
+        let label = target.label.clone();
+        self.place_strike_on(name.clone(), draft.eastern, root, target);
+        let Some(index) = self.map_missions.len().checked_sub(1) else {
+            return false;
+        };
+        if let Some(mission) = self.map_missions.get_mut(index) {
+            mission.air_task = true;
+            mission.air_weight = 5;
+            mission.air_runs = 1;
+            mission.air_enabled = true;
+            mission.air_path = draft.path.clone();
+            if kind == PackageKind::Sweep {
+                mission.target_class = None;
+                mission.target_label = "Patrol".into();
+            }
+        }
+        let (hx, hz) = self.home_point(draft.eastern, &draft.home);
+        self.retarget_home(index, hx, hz);
+        if let Some(old) = draft.editing {
+            if old < index {
+                let mission = self.map_missions.pop().expect("mission");
+                self.map_missions[old] = mission;
+                self.air_selected = Some(old);
+            } else {
+                self.air_selected = Some(index);
+            }
+        } else {
+            self.air_selected = Some(index);
+        }
+        self.air_draft = None;
+        let side = if draft.eastern { "DPRK" } else { "NATO" };
+        let what = match kind {
+            PackageKind::Sweep => format!("{name} is a {side} fighter sweep. Drag the route on the map."),
+            PackageKind::Strike => format!("{name} is a {side} strike aimed at {label}."),
+        };
+        self.status = Status::Info(what);
+        true
+    }
+
+    fn retarget_home(&mut self, index: usize, home_x: f64, home_z: f64) {
+        let Some(mission) = self.map_missions.get_mut(index) else {
+            return;
+        };
+        let target_x = mission.target_x;
+        let target_z = mission.target_z;
+        mission.start_x = home_x.clamp(MAP_MIN, MAP_MAX);
+        mission.start_z = home_z.clamp(MAP_MIN, MAP_MAX);
+        let (ip_x, ip_z) = strike_ip_toward(mission.start_x, mission.start_z, target_x, target_z);
+        let (ip_x, ip_z) = keep_ip_clear(ip_x, ip_z, target_x, target_z, true);
+        mission.ip_x = ip_x;
+        mission.ip_z = ip_z;
+    }
+
+    fn army_activation_can_skip(&self) -> bool {
+        !self.recon_strip_randomizer && self.recon_percent < 100 && !self.recon_slots.is_empty()
+    }
+
+    fn home_point(&self, eastern: bool, home: &PackageHome) -> (f64, f64) {
+        if let PackageHome::Field { x, z, .. } = home {
+            return (*x, *z);
+        }
+        let cx = (self.front_aabb.x_min + self.front_aabb.x_max) * 0.5;
+        let cz = (self.front_aabb.z_min + self.front_aabb.z_max) * 0.5;
+        crate::mapfighters::rtb_ao_point(eastern, cx, cz, self.front_aabb)
+    }
+
+    /// Friendly airfields inside the area, named the way the map names them.
+    pub(super) fn friendly_homes(&self, eastern: bool) -> Vec<PackageHome> {
+        let front = self.front_for_sides();
+        let salients = self.salients_for_sides();
+        let whole = self.ao_covers_the_whole_map();
+        let mut homes = Vec::new();
+        for field in crate::korea_fields::KOREA_FIELDS {
+            let Some((x, z)) = field.x.zip(field.z) else {
+                continue;
+            };
+            if !self.front_aabb.contains(x, z) && !whole {
+                continue;
+            }
+            let dprk = crate::mapclip::on_dprk_side(&front, salients, x, z);
+            if dprk != eastern {
+                continue;
+            }
+            homes.push(PackageHome::Field {
+                label: field.name.to_string(),
+                x,
+                z,
             });
         }
-        let clear_dprk_f = self.side_has_fighters(true);
-        let clear_nato_f = self.side_has_fighters(false);
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(clear_dprk_f, |ui| {
-                if ui
-                    .button("Clear DPRK")
-                    .on_hover_text("Clear DPRK fighters. Ctrl Z brings them back.")
-                    .clicked()
-                {
-                    self.clear_side_fighters(true);
-                }
+        for start in &self.placed_air_starts {
+            if start.field.nato == eastern || start.field.name.is_empty() {
+                continue;
+            }
+            if !self.front_aabb.contains(start.x, start.z) && !whole {
+                continue;
+            }
+            let near_field = homes.iter().any(|home| {
+                let PackageHome::Field { x, z, .. } = home else {
+                    return false;
+                };
+                (x - start.x).hypot(z - start.z) < 15_000.0
             });
-            ui.add_enabled_ui(clear_nato_f, |ui| {
-                if ui
-                    .button("Clear NATO")
-                    .on_hover_text("Clear NATO fighters. Ctrl Z brings them back.")
-                    .clicked()
-                {
-                    self.clear_side_fighters(false);
-                }
+            if near_field {
+                continue;
+            }
+            homes.push(PackageHome::Field {
+                label: start.field.name.clone(),
+                x: start.x,
+                z: start.z,
             });
+        }
+        homes
+    }
+
+    /// Every block and visible unit a Shift-drag can land on.
+    fn visible_snap_targets(&self, flight_eastern: bool) -> Vec<StrikeObjective> {
+        let mut out = Vec::new();
+        for kind in [
+            StaticTargetKind::Airfields,
+            StaticTargetKind::Bridges,
+            StaticTargetKind::RailStations,
+            StaticTargetKind::Dams,
+            StaticTargetKind::Cities,
+        ] {
+            out.extend(self.static_targets(flight_eastern, kind));
+        }
+        out.extend(self.imported_unit_targets(flight_eastern));
+        out
+    }
+
+    fn friendly_airfields(&self, eastern: bool) -> Vec<StrikeObjective> {
+        let mut out = Vec::new();
+        let sources = self.map_ref_sources();
+        let airfields = self.strike_airfields();
+        for group in sources.into_iter().chain(airfields.iter()) {
+            let stem = group
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Airfield");
+            for hit in reference_fixed_targets_in(
+                &group.entity,
+                stem,
+                Some(StrikeFocus::Airbases),
+                Some(self.front_aabb),
+            ) {
+                if let Some(country) = hit.country {
+                    let field_eastern = country / 100 != 6;
+                    if field_eastern != eastern {
+                        continue;
+                    }
+                }
+                push_objective(
+                    &mut out,
+                    StrikeObjective {
+                        label: hit.label,
+                        class: hit.class,
+                        x: hit.x,
+                        z: hit.z,
+                        may_not_spawn: false,
+                    },
+                    hit.sep,
+                );
+            }
+        }
+        number_objective_labels(&mut out);
+        out
+    }
+
+    /// Static targets of one type inside the area, and enemy units placed from Army Generator.
+    pub(super) fn package_targets(
+        &self,
+        flight_eastern: bool,
+        kind: StaticTargetKind,
+    ) -> (Vec<StrikeObjective>, Vec<StrikeObjective>) {
+        let stamp = self.target_scan_stamp();
+        if let Some(cached) = self.package_target_cache.borrow().as_ref() {
+            if cached.stamp == stamp && cached.eastern == flight_eastern && cached.kind == kind {
+                return (cached.hits.clone(), cached.units.clone());
+            }
+        }
+        let hits = self.static_targets(flight_eastern, kind);
+        let units = self.imported_unit_targets(flight_eastern);
+        *self.package_target_cache.borrow_mut() = Some(PackageHitCache {
+            stamp,
+            eastern: flight_eastern,
+            kind,
+            hits: hits.clone(),
+            units: units.clone(),
         });
+        (hits, units)
+    }
+
+    fn static_targets(
+        &self,
+        flight_eastern: bool,
+        kind: StaticTargetKind,
+    ) -> Vec<StrikeObjective> {
+        if kind == StaticTargetKind::Cities {
+            let enemy_dprk = !flight_eastern;
+            let mut out = Vec::new();
+            for (city, x, z) in crate::geo::cities_on_map() {
+                if city.dprk != enemy_dprk || !self.front_aabb.contains(x, z) {
+                    continue;
+                }
+                out.push(StrikeObjective {
+                    label: city.name.to_string(),
+                    class: StrikeTargetClass::Bridges,
+                    x,
+                    z,
+                    may_not_spawn: false,
+                });
+            }
+            number_objective_labels(&mut out);
+            return out;
+        }
+        let Some(focus) = kind.focus() else {
+            return Vec::new();
+        };
+        self.collect_strike_objectives(flight_eastern, focus)
+    }
+
+    fn imported_unit_targets(&self, flight_eastern: bool) -> Vec<StrikeObjective> {
+        let enemy_eastern = !flight_eastern;
+        let mut out = Vec::new();
+        let mut push = |class: StrikeTargetClass, label: String, x: f64, z: f64, may_not_spawn: bool| {
+            if !self.front_aabb.contains(x, z) {
+                return;
+            }
+            push_objective(
+                &mut out,
+                StrikeObjective {
+                    label,
+                    class,
+                    x,
+                    z,
+                    may_not_spawn,
+                },
+                250.0,
+            );
+        };
+        let ground = if enemy_eastern {
+            self.map_ground_east.as_ref()
+        } else {
+            self.map_ground_nato.as_ref()
+        };
+        let side = if enemy_eastern { "DPRK" } else { "NATO" };
+        let ag_skip = self.army_activation_can_skip();
+        if let Some(layout) = ground {
+            for spot in &layout.spots {
+                let (class, kind) = unit_target_class(spot.kind);
+                push(class, format!("{kind} · {side}"), spot.x, spot.z, ag_skip);
+            }
+        }
+        for army in &self.map_armies {
+            if army.eastern != enemy_eastern {
+                continue;
+            }
+            let name = army
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("group");
+            let skip = ag_skip || entity_may_skip(&army.entity);
+            if let Some(layout) = &army.ground {
+                for spot in &layout.spots {
+                    let (class, kind) = unit_target_class(spot.kind);
+                    push(class, format!("{kind} · {name}"), spot.x, spot.z, skip);
+                }
+            }
+            if let Some(layout) = &army.ships {
+                for spot in &layout.spots {
+                    push(
+                        StrikeTargetClass::Ships,
+                        format!("Ship · {name}"),
+                        spot.x,
+                        spot.z,
+                        skip,
+                    );
+                }
+            }
+        }
+        if let Some(layout) = &self.map_ships {
+            if layout.eastern == enemy_eastern {
+                for spot in &layout.spots {
+                    push(
+                        StrikeTargetClass::Ships,
+                        format!("Ship · {side}"),
+                        spot.x,
+                        spot.z,
+                        ag_skip,
+                    );
+                }
+            }
+        }
+        number_objective_labels(&mut out);
+        out
+    }
+
+    /// Placed Air Tasking sorties, moved to the route left on the map.
+    pub(super) fn air_task_inputs(
+        &self,
+    ) -> (Vec<crate::airtask::AirTaskInput>, Vec<std::path::PathBuf>) {
+        let mut inputs = Vec::new();
+        let mut locales = Vec::new();
+        for mission in &self.map_missions {
+            if !mission.air_task || !mission.air_enabled {
+                continue;
+            }
+            if let Some(path) = &mission.air_path {
+                locales.push(path.clone());
+            }
+            let mut root = mission.root.clone();
+            let pose = StrikePose {
+                target_x: mission.target_x,
+                target_z: mission.target_z,
+                start_x: mission.start_x,
+                start_z: mission.start_z,
+                ip_x: mission.ip_x,
+                ip_z: mission.ip_z,
+            };
+            crate::template::place_strike_at(&mut root, pose);
+            let timer_only = self.air_options.trigger == crate::airtask::AirTrigger::Clock;
+            let weight = if timer_only {
+                (100 / mission.air_weight.max(1)).max(1)
+            } else {
+                mission.air_weight.max(1)
+            };
+            let duration_s = if timer_only {
+                crate::airtask::flight_secs(route_meters(mission), waypoint_kmh(&root))
+            } else {
+                0.0
+            };
+            if timer_only {
+                inputs.push(crate::airtask::AirTaskInput {
+                    label: mission.name.clone(),
+                    root,
+                    weight,
+                    duration_s,
+                    runs: mission.air_runs.max(1),
+                    spread: mission.air_spread,
+                });
+            } else {
+                let repeats = mission.air_runs.clamp(1, 3);
+                for r in 0..repeats {
+                    inputs.push(crate::airtask::AirTaskInput {
+                        label: if repeats == 1 {
+                            mission.name.clone()
+                        } else {
+                            format!("{} {}", mission.name, r + 1)
+                        },
+                        root: root.clone(),
+                        weight,
+                        duration_s,
+                        runs: 1,
+                        spread: crate::airtask::AirSpread::Even,
+                    });
+                }
+            }
+        }
+        (inputs, locales)
+    }
+
+    fn map_layers(&mut self, ui: &mut egui::Ui) {
+        shell::section_title(ui, "Layers", Some("from Mission Tasking"));
+        shell::hint(
+            ui,
+            "Each flight from Mission Tasking is a layer. Hide one to move the others. Hidden flights stay in the file.",
+            false,
+        );
+        if self.map_missions.is_empty() {
+            shell::hint(ui, "No flights on the map yet.", false);
+        }
+        for i in 0..self.map_missions.len() {
+            let mut show = !self.map_missions[i].hidden;
+            let side = if self.map_missions[i].eastern {
+                "DPRK"
+            } else {
+                "NATO"
+            };
+            let kind = if self.map_missions[i].air_task {
+                "sortie"
+            } else {
+                "mission"
+            };
+            let name = self.map_missions[i].name.clone();
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut show, "Show").changed() {
+                    self.map_missions[i].hidden = !show;
+                }
+                ui.add(egui::Label::new(format!("{name} · {side} · {kind}")).truncate());
+            });
+        }
+        ui.add_space(8.0);
+    }
+
+    fn ground_side_shown(&self, eastern: bool) -> bool {
+        if eastern {
+            self.ground_east_shown
+        } else {
+            self.ground_nato_shown
+        }
+    }
+
+    /// One checkbox per placed group, under the master Show fighters / Show units switches.
+    fn map_unit_toggles(&mut self, ui: &mut egui::Ui) {
+        if !self.units_shown {
+            return;
+        }
+        if self.map_ground_east.is_some() {
+            let mut show = self.ground_east_shown;
+            if ui.checkbox(&mut show, "Show DPRK ground").changed() {
+                self.ground_east_shown = show;
+            }
+        }
+        if self.map_ground_nato.is_some() {
+            let mut show = self.ground_nato_shown;
+            if ui.checkbox(&mut show, "Show NATO ground").changed() {
+                self.ground_nato_shown = show;
+            }
+        }
+        if self.map_ships.is_some() {
+            let mut show = self.ships_shown;
+            if ui.checkbox(&mut show, "Show ships").changed() {
+                self.ships_shown = show;
+            }
+        }
+        for i in 0..self.map_armies.len() {
+            let name = self.map_armies[i]
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("group")
+                .to_string();
+            let side = if self.map_armies[i].eastern {
+                "DPRK"
+            } else {
+                "NATO"
+            };
+            let mut show = self.map_armies[i].shown;
+            if ui
+                .checkbox(&mut show, format!("Show {name}"))
+                .on_hover_text(format!("{side} army group"))
+                .changed()
+            {
+                self.map_armies[i].shown = show;
+            }
+        }
+    }
+
+    fn map_forces_tab(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        self.map_layers(ui);
+        let mut show_fighters = self.fighters_shown;
+        if ui
+            .checkbox(&mut show_fighters, "Show fighters")
+            .on_hover_text("Hide the fighter layer while you place other groups.")
+            .changed()
+        {
+            self.fighters_shown = show_fighters;
+        }
+        let mut show_units = self.units_shown;
+        if ui
+            .checkbox(&mut show_units, "Show units")
+            .on_hover_text("Hide ground units and ships while you place other groups.")
+            .changed()
+        {
+            self.units_shown = show_units;
+        }
+        self.map_unit_toggles(ui);
         ui.add_space(6.0);
         ui.separator();
-        self.missions_forces(ui);
 
         shell::section_title(ui, "Objectives", Some("one click each · Shift for more"));
         ui.horizontal(|ui| {
@@ -3231,53 +4765,103 @@ impl super::GroupGeneratorApp {
             "Preview markers that aim placed units. Right-click one to remove it. Not exported.",
             false,
         );
-        ui.add_space(6.0);
-        ui.separator();
+    }
 
-        shell::section_title(ui, "Units", Some("from Army Generator"));
+    /// Fighter packs. The map parks them in the coalition zone.
+    pub(super) fn task_fighters(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().slider_width = 110.0;
+        shell::section_title(ui, "Automatic fighters", Some("from Fighter Pack"));
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(!self.recon_keep_positions, |ui| {
-                if ui
-                    .button("Place DPRK")
-                    .on_hover_text("Place Army Generator units along the front as DPRK")
-                    .on_disabled_hover_text("Keep loaded positions is on in Army Generator.")
-                    .clicked()
-                {
-                    self.place_map_units(true);
-                }
-                if ui
-                    .button("Place NATO")
-                    .on_hover_text("Place Army Generator units along the front as NATO")
-                    .on_disabled_hover_text("Keep loaded positions is on in Army Generator.")
-                    .clicked()
-                {
-                    self.place_map_units(false);
-                }
-            });
+            if ui
+                .button("Place DPRK")
+                .on_hover_text("Place DPRK fighters in their coalition zone")
+                .clicked()
+            {
+                self.place_map_fighters(true);
+            }
+            if ui
+                .button("Place NATO")
+                .on_hover_text("Place NATO fighters in their coalition zone")
+                .clicked()
+            {
+                self.place_map_fighters(false);
+            }
         });
-        if self.recon_keep_positions {
-            shell::hint(
-                ui,
-                "Place is off: Keep loaded positions is on in Army Generator.",
-                false,
-            );
-        }
         ui.horizontal(|ui| {
             if ui
                 .button("Load DPRK…")
-                .on_hover_text("Load a .Group as the DPRK army. Reposition along the front, or keep authored positions.")
+                .on_hover_text("Load a fighter pack .Group and place it in the DPRK zone")
                 .clicked()
             {
-                self.load_map_armies(true);
+                self.load_map_fighters(true);
             }
             if ui
                 .button("Load NATO…")
-                .on_hover_text("Load a .Group as the NATO army. Reposition along the front, or keep authored positions.")
+                .on_hover_text("Load a fighter pack .Group and place it in the NATO zone")
                 .clicked()
             {
-                self.load_map_armies(false);
+                self.load_map_fighters(false);
             }
         });
+        labeled_slider(ui, "Groups at once", &mut self.fighter_waves, 1..=6);
+        ui.checkbox(
+            &mut self.fighter_fill,
+            format!("Fill AO (up to {MAX_PACKS} at once)"),
+        )
+        .on_hover_text(
+            "Cover the whole coalition zone at Zone In spacing, including narrow parts. Groups at once split the spots evenly, up to 8 packs.",
+        );
+        if let Some(layout) = &self.map_fighters {
+            ui.horizontal(|ui| {
+                let side = shell::Side::from_eastern(layout.eastern);
+                shell::side_marker(ui, side, 12.0);
+                ui.label(fighter_layout_summary(layout));
+            });
+        }
+        let clear_dprk_f = self.side_has_fighters(true);
+        let clear_nato_f = self.side_has_fighters(false);
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(clear_dprk_f, |ui| {
+                if ui
+                    .button("Clear DPRK")
+                    .on_hover_text("Clear DPRK fighters. Ctrl Z brings them back.")
+                    .clicked()
+                {
+                    self.clear_side_fighters(true);
+                }
+            });
+            ui.add_enabled_ui(clear_nato_f, |ui| {
+                if ui
+                    .button("Clear NATO")
+                    .on_hover_text("Clear NATO fighters. Ctrl Z brings them back.")
+                    .clicked()
+                {
+                    self.clear_side_fighters(false);
+                }
+            });
+        });
+    }
+
+    /// Army Generator groups. Place parks every group along the front.
+    pub(super) fn task_units(&mut self, ui: &mut egui::Ui) {
+        shell::section_title(ui, "Units", Some("from Army Generator"));
+        if !self.recon_slots.is_empty() {
+            for slot in &self.recon_slots {
+                let name = slot
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("group");
+                ui.label(format!("{name} · influence {}", slot.influence));
+            }
+        }
+        if ui
+            .add_sized([ui.available_width(), 28.0], egui::Button::new("Load units"))
+            .on_hover_text("Load one or more .Group files. Each file's coalition comes from its vehicles.")
+            .clicked()
+        {
+            self.load_map_armies();
+        }
         let army_count = |eastern: bool| -> usize {
             self.map_armies
                 .iter()
@@ -3308,46 +4892,35 @@ impl super::GroupGeneratorApp {
             shell::warning(ui, "Keep loaded positions is on");
         }
 
-        let clear_nato_u = self.side_has_units(false);
-        let clear_dprk_u = self.side_has_units(true);
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(clear_dprk_u, |ui| {
-                if ui
-                    .button("Clear DPRK")
-                    .on_hover_text(
-                        "Clear DPRK ground units, armies and ships. Ctrl Z brings them back.",
-                    )
-                    .clicked()
-                {
-                    self.clear_side_units(true);
-                }
-            });
-            ui.add_enabled_ui(clear_nato_u, |ui| {
-                if ui
-                    .button("Clear NATO")
-                    .on_hover_text(
-                        "Clear NATO ground units, armies and ships. Ctrl Z brings them back.",
-                    )
-                    .clicked()
-                {
-                    self.clear_side_units(false);
-                }
-            });
-        });
         if !self.map_armies.is_empty() {
             ui.add_space(4.0);
+            self.ensure_map_assets(ui.ctx());
             let mut remove_at: Option<usize> = None;
-            let mut toggle_at: Option<usize> = None;
-            for (i, slot) in self.map_armies.iter().enumerate() {
-                let name = slot
+            let mut reload_at: Option<usize> = None;
+            let mut kind_at: Option<(usize, crate::weapon_range::ArmyUnitKind)> = None;
+            let open_icon = self.army_icon_slot;
+            for i in 0..self.map_armies.len() {
+                let name = self.map_armies[i]
                     .path
                     .file_stem()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("group");
-                let side = shell::Side::from_eastern(slot.eastern);
+                    .unwrap_or("group")
+                    .to_string();
+                let eastern = self.map_armies[i].eastern;
+                let mix = army_mix_label(&self.map_armies[i].copies);
+                let kind = majority_army_kind(&self.map_armies[i].copies);
                 shell::card(ui, false, |ui| {
                     ui.horizontal(|ui| {
-                        shell::side_marker(ui, side, 12.0);
+                        let tex = kind
+                            .map(UnitKind::from_army)
+                            .and_then(|unit| self.unit_tex(eastern, unit));
+                        let clicked = paint_unit_icon(ui, tex, 28.0);
+                        if clicked
+                            .on_hover_text("Change the unit icon")
+                            .clicked()
+                        {
+                            self.army_icon_slot = if open_icon == Some(i) { None } else { Some(i) };
+                        }
                         ui.add(
                             egui::Label::new(
                                 RichText::new(name).font(FontId::new(13.0, theme::bold_family())),
@@ -3360,24 +4933,53 @@ impl super::GroupGeneratorApp {
                             }
                         });
                     });
-                    ui.label(
-                        RichText::new(army_mix_label(&slot.copies))
-                            .small()
-                            .color(c::NEUTRAL_700),
-                    );
-                    let mut repo = slot.reposition;
+                    ui.label(RichText::new(mix).small().color(c::NEUTRAL_700));
+                    if open_icon == Some(i) {
+                        // Type textures are 128 px. Draw them at a third of that,
+                        // or smaller when seven of them have to stay on one row.
+                        ui.horizontal(|ui| {
+                            let gap = 4.0;
+                            ui.spacing_mut().item_spacing.x = gap;
+                            let fit = (ui.available_width() - gap * 6.0) / 7.0;
+                            let icon = (128.0_f32 / 3.0).min(fit.max(16.0));
+                            for kind in [
+                                crate::weapon_range::ArmyUnitKind::Armor,
+                                crate::weapon_range::ArmyUnitKind::Infantry,
+                                crate::weapon_range::ArmyUnitKind::Artillery,
+                                crate::weapon_range::ArmyUnitKind::AntiAir,
+                                crate::weapon_range::ArmyUnitKind::Supply,
+                                crate::weapon_range::ArmyUnitKind::Train,
+                                crate::weapon_range::ArmyUnitKind::Ship,
+                            ] {
+                                let tex = self.unit_tex(eastern, UnitKind::from_army(kind));
+                                if paint_unit_icon(ui, tex, icon)
+                                    .on_hover_text(kind.label())
+                                    .clicked()
+                                {
+                                    kind_at = Some((i, kind));
+                                }
+                            }
+                        });
+                    }
                     if ui
-                        .checkbox(&mut repo, "Reposition")
-                        .on_hover_text("Park along the front using detected unit types. Off keeps the group's authored X/Z.")
-                        .changed()
+                        .add_sized([ui.available_width(), 28.0], egui::Button::new("Reload position"))
+                        .on_hover_text("Park this group along the front again, using its unit type")
+                        .clicked()
                     {
-                        toggle_at = Some(i);
+                        reload_at = Some(i);
                     }
                 });
                 ui.add_space(4.0);
             }
-            if let Some(i) = toggle_at {
-                self.map_armies[i].reposition = !self.map_armies[i].reposition;
+            if let Some(i) = reload_at {
+                self.map_armies[i].reposition = true;
+                self.refresh_army_slot(i);
+            }
+            if let Some((i, kind)) = kind_at {
+                for copy in &mut self.map_armies[i].copies {
+                    copy.kind = kind;
+                }
+                self.army_icon_slot = None;
                 self.refresh_army_slot(i);
             }
             if let Some(i) = remove_at {
@@ -3398,11 +5000,9 @@ impl super::GroupGeneratorApp {
                 self.route_focus = None;
             }
         }
-        ui.add_space(8.0);
-        self.air_starts_forces(ui);
     }
 
-    fn missions_forces(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn missions_forces(&mut self, ui: &mut egui::Ui) {
         let n = self.map_missions.len();
         let summary = if n == 0 {
             "none placed".to_string()
@@ -3415,6 +5015,61 @@ impl super::GroupGeneratorApp {
                 "Add mission puts the flight on the next unused target of the Snap target type inside the AO. A file that already holds several plans is split, one plan per target. A group with more than one flight and more than one AttackArea can aim each later flight at its own target; the spawn, IP, and waypoints stay one plan. Two or more missions share Exclusive Activation on Generate, so only one runs at a time. Hold Shift and drag a target to snap it.",
                 false,
             );
+            if let Some(text) = shared_target_warning(&self.map_missions) {
+                shell::warning(ui, &text);
+            }
+            let clusters = shared_target_clusters(&self.map_missions);
+            if !clusters.is_empty() {
+                ui.label(
+                    "Set the order for flights on the same target. 1 is first: its Zone In is enlarged so it is at least 300 m larger than the next flight and triggers first.",
+                );
+                let mut move_before: Option<(usize, usize)> = None;
+                for (ci, cluster) in clusters.iter().enumerate() {
+                    if ci > 0 {
+                        ui.add_space(4.0);
+                    }
+                    for (rank, &i) in cluster.iter().enumerate() {
+                        let mission = &self.map_missions[i];
+                        let side = if mission.eastern { "DPRK" } else { "NATO" };
+                        ui.label(format!(
+                            "{}. {} · {side} · {}",
+                            rank + 1,
+                            mission.name,
+                            mission.target_label
+                        ));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled_ui(rank > 0, |ui| {
+                                    ui.add_sized([72.0, 28.0], egui::Button::new("Earlier"))
+                                        .on_hover_text(
+                                            "Run this flight sooner. Export enlarges its Zone In.",
+                                        )
+                                })
+                                .inner
+                                .clicked()
+                            {
+                                move_before = Some((i, cluster[rank - 1]));
+                            }
+                            if ui
+                                .add_enabled_ui(rank + 1 < cluster.len(), |ui| {
+                                    ui.add_sized([72.0, 28.0], egui::Button::new("Later"))
+                                        .on_hover_text(
+                                            "Run this flight later. The flight ahead keeps the larger Zone In.",
+                                        )
+                                })
+                                .inner
+                                .clicked()
+                            {
+                                move_before = Some((cluster[rank + 1], i));
+                            }
+                        });
+                    }
+                }
+                if let Some((mission, before)) = move_before {
+                    self.record_map_undo("Mission order".into());
+                    order_mission_before(&mut self.map_missions, mission, before);
+                }
+            }
             ui.label("Snap target");
             let mut focus = self.map_strike_focus;
             egui::ComboBox::from_id_salt("map_strike_focus")
@@ -3454,6 +5109,29 @@ impl super::GroupGeneratorApp {
                         .collect();
                     for (lead, label) in extras {
                         ui.label(format!("{lead} · {label}"));
+                    }
+                    let notes = self.cached_attack_notes(i);
+                    for note in &notes {
+                        shell::warning(ui, note);
+                    }
+                    if !notes.is_empty() {
+                        let kept = self.map_missions[i].keep_template_attack;
+                        let label = if kept {
+                            "Use map attack"
+                        } else {
+                            "Keep template"
+                        };
+                        if ui
+                            .add_sized([ui.available_width(), 28.0], egui::Button::new(label))
+                            .on_hover_text(
+                                "Keep the AttackArea flags from the template, or use the map target",
+                            )
+                            .clicked()
+                        {
+                            let name = self.map_missions[i].name.clone();
+                            self.record_map_undo(format!("Attack flags for {name}"));
+                            self.map_missions[i].keep_template_attack = !kept;
+                        }
                     }
                     if ui
                         .add_sized([72.0, 28.0], egui::Button::new("Remove"))
@@ -3577,6 +5255,15 @@ impl super::GroupGeneratorApp {
     }
 
     /// Park the flight on `target` (DPRK due north, NATO south-east) and center the map.
+    fn next_mission_sequence(&self) -> u32 {
+        self.map_missions
+            .iter()
+            .map(|mission| mission.sequence)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
+
     fn place_strike_on(
         &mut self,
         name: String,
@@ -3593,6 +5280,7 @@ impl super::GroupGeneratorApp {
         let (ip_x, ip_z) = keep_ip_clear(ip_x, ip_z, target_x, target_z, true);
         let attacks = self.flight_aims(&root, eastern, ip_x, ip_z, target_x, target_z);
         self.record_map_undo(format!("Added {name}"));
+        let sequence = self.next_mission_sequence();
         self.map_missions.push(PlacedMission {
             name,
             eastern,
@@ -3606,6 +5294,15 @@ impl super::GroupGeneratorApp {
             target_label: target.label,
             target_class: Some(target.class),
             attacks,
+            keep_template_attack: false,
+            sequence,
+            air_task: false,
+            air_weight: 5,
+            air_runs: 1,
+            air_spread: crate::airtask::AirSpread::Even,
+            air_enabled: true,
+            air_path: None,
+            hidden: false,
         });
         self.focus_map_on(target_x, target_z);
     }
@@ -3617,7 +5314,7 @@ impl super::GroupGeneratorApp {
 
     /// Enemy objectives of the Snap target type, inside the AO only.
     /// A second call with the same box, front, and references is the cached list.
-    fn strike_objectives(&self, flight_eastern: bool) -> Vec<StrikeObjective> {
+    pub(super) fn strike_objectives(&self, flight_eastern: bool) -> Vec<StrikeObjective> {
         let focus = self.map_strike_focus;
         let stamp = self.target_scan_stamp();
         if let Some(cached) = self.map_target_cache.borrow().as_ref() {
@@ -3663,6 +5360,9 @@ impl super::GroupGeneratorApp {
         }
         for group in self.map_ref_sources() {
             group.path.to_string_lossy().hash(&mut h);
+        }
+        for slot in &self.airbases {
+            slot.path.to_string_lossy().hash(&mut h);
         }
         fn hash_layout(h: &mut DefaultHasher, layout: Option<&MapGroundLayout>) {
             let Some(layout) = layout else {
@@ -3743,7 +5443,13 @@ impl super::GroupGeneratorApp {
         let mut out = Vec::new();
         if focus.is_fixed() {
             let holdings = self.enemy_holdings(enemy_eastern);
-            for group in self.map_ref_sources() {
+            let airfields = if matches!(focus, StrikeFocus::Airbases) {
+                self.strike_airfields()
+            } else {
+                Vec::new()
+            };
+            let sources = self.map_ref_sources();
+            for group in sources.into_iter().chain(airfields.iter()) {
                 let stem = group
                     .path
                     .file_stem()
@@ -3771,6 +5477,7 @@ impl super::GroupGeneratorApp {
                             class: hit.class,
                             x: hit.x,
                             z: hit.z,
+                            may_not_spawn: false,
                         },
                         hit.sep,
                     );
@@ -3780,7 +5487,13 @@ impl super::GroupGeneratorApp {
             return out;
         }
         let mut push_unit = |class: StrikeTargetClass, label: String, x: f64, z: f64| {
-            let obj = StrikeObjective { label, class, x, z };
+            let obj = StrikeObjective {
+                label,
+                class,
+                x,
+                z,
+                may_not_spawn: false,
+            };
             if !focus.matches(&obj) || !self.front_aabb.contains(obj.x, obj.z) {
                 return;
             }
@@ -3959,72 +5672,6 @@ impl super::GroupGeneratorApp {
         attacks
     }
 
-    fn air_starts_forces(&mut self, ui: &mut egui::Ui) {
-        shell::section_title(ui, "Air starts", Some("from the Airfield tab"));
-        shell::hint(ui, "Drag to move. Right-drag turns the arrow.", false);
-        if self.air_starts.is_empty() {
-            shell::hint(ui, "Add air starts on the Airfield tab.", false);
-        }
-        let mut place_at: Option<usize> = None;
-        for (i, field) in self.air_starts.iter().enumerate() {
-            let active = self.map_drawing_mode == MapDrawingMode::PlaceAirStart
-                && self.air_start_place == Some(i);
-            ui.horizontal(|ui| {
-                ui.label(format!("{} · {}", field.name, field.side_label()));
-                if ui
-                    .add_sized([72.0, 28.0], egui::Button::selectable(active, "Place"))
-                    .on_hover_text("Click the map to place a copy. Shift places more.")
-                    .clicked()
-                {
-                    place_at = Some(i);
-                }
-            });
-        }
-        if let Some(i) = place_at {
-            self.pick_map_tool(MapDrawingMode::PlaceAirStart);
-            self.air_start_place = Some(i);
-        }
-        if !self.placed_air_starts.is_empty() {
-            ui.add_space(4.0);
-            let mut remove_at: Option<usize> = None;
-            for (i, placed) in self.placed_air_starts.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "{} · {:.0}°",
-                        placed.field.name,
-                        placed.field.heading_deg.rem_euclid(360.0)
-                    ));
-                    if ui
-                        .add_sized([72.0, 28.0], egui::Button::new("Remove"))
-                        .clicked()
-                    {
-                        remove_at = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = remove_at {
-                let name = self.placed_air_starts[i].field.name.clone();
-                self.record_map_undo(format!("Removed {name}"));
-                self.placed_air_starts.remove(i);
-                self.air_start_drag = None;
-                self.air_start_heading_drag = None;
-            }
-            if ui
-                .add_sized(
-                    [ui.available_width(), 28.0],
-                    egui::Button::new("Clear air starts"),
-                )
-                .clicked()
-            {
-                let n = self.placed_air_starts.len();
-                self.record_map_undo(format!("Cleared {n} air starts"));
-                self.placed_air_starts.clear();
-                self.air_start_drag = None;
-                self.air_start_heading_drag = None;
-            }
-        }
-    }
-
     fn map_references_tab(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         shell::section_title(ui, "Template folder", None);
@@ -4094,7 +5741,7 @@ impl super::GroupGeneratorApp {
                     .color(c::WARN),
             );
         }
-        let area = self.front_aabb.expanded(PLACE_MARGIN);
+        let area = self.front_aabb;
         let mut in_area = 0usize;
         let mut outside_area = 0usize;
         for slot in &self.airbases {
@@ -4632,11 +6279,41 @@ impl super::GroupGeneratorApp {
         }
     }
 
-    /// Editor photographs for the close zoom. The stock image stays underneath
-    /// until a tile has been decoded. A few tiles load each frame.
+    fn ensure_editor_channel(&mut self) {
+        if self.editor_tx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        self.editor_tx = Some(tx);
+        self.editor_rx = Some(rx);
+    }
+
+    /// Editor photographs for the close zoom. Decoding happens on a worker.
+    /// This frame only draws tiles that are already uploaded, and uploads at
+    /// most one that just finished, so a pan does not wait on a picture.
     fn paint_editor_tiles(&mut self, ui: &mut egui::Ui, widget: Rect) {
         if self.map_zoom < 8.0 || !self.editor_map_on {
             return;
+        }
+        self.ensure_editor_channel();
+        if let Some(rx) = &self.editor_rx {
+            if let Ok(msg) = rx.try_recv() {
+                let key = (msg.row, msg.col);
+                self.editor_inflight.remove(&key);
+                match msg.image {
+                    Some(image) => {
+                        let tex = ui.ctx().load_texture(
+                            format!("editor_tile_{}_{}", msg.row, msg.col),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        self.editor_tex.insert(key, tex);
+                    }
+                    None => {
+                        self.editor_miss.insert(key);
+                    }
+                }
+            }
         }
         let view = self.map_view_uv();
         let (north, west) = uv_to_world(view.min);
@@ -4657,36 +6334,36 @@ impl super::GroupGeneratorApp {
         let Some(tiles) = tiles else {
             return;
         };
-        let mut decoded = 0;
-        for (row, col, path, _) in &tiles {
+        let interacting = ui.input(|i| {
+            i.pointer.any_down()
+                || i.smooth_scroll_delta.length_sq() > 0.0
+                || i.raw_scroll_delta.length_sq() > 0.0
+        });
+        if !interacting && self.editor_inflight.len() < 2 {
+            if let Some((row, col, path, _)) = tiles.iter().find(|(row, col, _, _)| {
+                let key = (*row, *col);
+                !self.editor_tex.contains_key(&key)
+                    && !self.editor_miss.contains(&key)
+                    && !self.editor_inflight.contains(&key)
+            }) {
+                let key = (*row, *col);
+                self.editor_inflight.insert(key);
+                let tx = self.editor_tx.clone().expect("editor channel");
+                let path = path.clone();
+                let row = *row;
+                let col = *col;
+                std::thread::spawn(move || {
+                    let image = decode_editor_tile(&path);
+                    let _ = tx.send(EditorTileMsg { row, col, image });
+                });
+            }
+        }
+        let waiting = tiles.iter().any(|(row, col, _, _)| {
             let key = (*row, *col);
-            if self.editor_tex.contains_key(&key) || self.editor_miss.contains(&key) {
-                continue;
-            }
-            if decoded >= 3 {
-                ui.ctx().request_repaint();
-                break;
-            }
-            decoded += 1;
-            match image::open(path) {
-                Ok(img) => {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    let color = egui::ColorImage::from_rgba_unmultiplied(
-                        [w as usize, h as usize],
-                        rgba.as_raw(),
-                    );
-                    let tex = ui.ctx().load_texture(
-                        format!("editor_tile_{row}_{col}"),
-                        color,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    self.editor_tex.insert(key, tex);
-                }
-                Err(_) => {
-                    self.editor_miss.insert(key);
-                }
-            }
+            !self.editor_tex.contains_key(&key) && !self.editor_miss.contains(&key)
+        });
+        if waiting || !self.editor_inflight.is_empty() {
+            ui.ctx().request_repaint();
         }
         if self.editor_tex.len() > 48 {
             let live: std::collections::HashSet<(i32, i32)> =
@@ -5059,6 +6736,7 @@ impl super::GroupGeneratorApp {
                                 pose.target_z,
                             );
                             self.record_map_undo(format!("Placed {name}"));
+                            let sequence = self.next_mission_sequence();
                             self.map_missions.push(PlacedMission {
                                 name,
                                 eastern: tmpl.eastern,
@@ -5072,6 +6750,15 @@ impl super::GroupGeneratorApp {
                                 target_label,
                                 target_class,
                                 attacks,
+                                keep_template_attack: false,
+                                sequence,
+                                air_task: false,
+                                air_weight: 5,
+                                air_runs: 1,
+                                air_spread: crate::airtask::AirSpread::Even,
+                                air_enabled: true,
+                                air_path: None,
+            hidden: false,
                             });
                         }
                         if !ui.input(|i| i.modifiers.shift) {
@@ -5096,8 +6783,17 @@ impl super::GroupGeneratorApp {
                             .and_then(|i| self.air_starts.get(i).cloned())
                         {
                             let name = field.name.clone();
-                            self.record_map_undo(format!("Placed {name}"));
-                            self.placed_air_starts.push(PlacedAirStart { field, x, z });
+                            let already = self.placed_air_starts.iter().any(|placed| {
+                                placed.field.name == field.name && placed.field.nato == field.nato
+                            });
+                            if already {
+                                self.status = Status::Info(format!(
+                                    "{name} is already on the map. Each air start is placed once."
+                                ));
+                            } else {
+                                self.record_map_undo(format!("Placed {name}"));
+                                self.placed_air_starts.push(PlacedAirStart { field, x, z });
+                            }
                         }
                         if !ui.input(|i| i.modifiers.shift) {
                             self.map_drawing_mode = MapDrawingMode::None;
@@ -5269,7 +6965,7 @@ impl super::GroupGeneratorApp {
                                 matches!(handle, MissionHandle::Target | MissionHandle::Attack(_));
                             if shift && aiming && self.mission_snap.is_empty() {
                                 if let Some(eastern) = self.map_missions.get(i).map(|m| m.eastern) {
-                                    self.mission_snap = self.strike_objectives(eastern);
+                                    self.mission_snap = self.visible_snap_targets(eastern);
                                 }
                             }
                             let snap = if shift && aiming {
@@ -5672,6 +7368,9 @@ impl super::GroupGeneratorApp {
     }
 
     fn hit_fighter_spot(&self, map_rect: Rect, pointer: Pos2) -> Option<usize> {
+        if !self.fighters_shown {
+            return None;
+        }
         let layout = self.map_fighters.as_ref()?;
         let mut best = None;
         let mut best_d = 18.0_f32;
@@ -5736,18 +7435,26 @@ impl super::GroupGeneratorApp {
     }
 
     fn hit_ship_spot(&self, map_rect: Rect, pointer: Pos2) -> Option<ShipHit> {
+        if !self.units_shown {
+            return None;
+        }
         let mut best = None;
         let mut best_d = 18.0_f32;
-        if let Some(layout) = &self.map_ships {
-            for (i, s) in layout.spots.iter().enumerate() {
-                let d = world_to_pos(map_rect, s.x, s.z).distance(pointer);
-                if d < best_d {
-                    best_d = d;
-                    best = Some(ShipHit::Ag(i));
+        if self.ships_shown {
+            if let Some(layout) = &self.map_ships {
+                for (i, s) in layout.spots.iter().enumerate() {
+                    let d = world_to_pos(map_rect, s.x, s.z).distance(pointer);
+                    if d < best_d {
+                        best_d = d;
+                        best = Some(ShipHit::Ag(i));
+                    }
                 }
             }
         }
         for (slot, army) in self.map_armies.iter().enumerate() {
+            if !army.shown {
+                continue;
+            }
             let Some(layout) = &army.ships else { continue };
             for (i, s) in layout.spots.iter().enumerate() {
                 let d = world_to_pos(map_rect, s.x, s.z).distance(pointer);
@@ -5761,6 +7468,9 @@ impl super::GroupGeneratorApp {
     }
 
     fn draw_map_fighters(&self, painter: &egui::Painter, map_rect: Rect) {
+        if !self.fighters_shown {
+            return;
+        }
         let Some(layout) = &self.map_fighters else {
             return;
         };
@@ -5802,10 +7512,18 @@ impl super::GroupGeneratorApp {
     }
 
     fn draw_map_ships(&self, painter: &egui::Painter, map_rect: Rect) {
-        if let Some(layout) = &self.map_ships {
-            self.paint_ship_layout(painter, map_rect, layout);
+        if !self.units_shown {
+            return;
+        }
+        if self.ships_shown {
+            if let Some(layout) = &self.map_ships {
+                self.paint_ship_layout(painter, map_rect, layout);
+            }
         }
         for army in &self.map_armies {
+            if !army.shown {
+                continue;
+            }
             if let Some(layout) = &army.ships {
                 self.paint_ship_layout(painter, map_rect, layout);
             }
@@ -5858,12 +7576,18 @@ impl super::GroupGeneratorApp {
     }
 
     fn hit_ground_spot(&self, map_rect: Rect, pointer: Pos2) -> Option<GroundHit> {
+        if !self.units_shown {
+            return None;
+        }
         let mut best = None;
         let mut best_d = 18.0_f32;
         for (eastern, layout) in [
             (true, self.map_ground_east.as_ref()),
             (false, self.map_ground_nato.as_ref()),
         ] {
+            if !self.ground_side_shown(eastern) {
+                continue;
+            }
             let Some(layout) = layout else { continue };
             for (i, s) in layout.spots.iter().enumerate() {
                 let d = world_to_pos(map_rect, s.x, s.z).distance(pointer);
@@ -5874,6 +7598,9 @@ impl super::GroupGeneratorApp {
             }
         }
         for (slot, army) in self.map_armies.iter().enumerate() {
+            if !army.shown {
+                continue;
+            }
             let Some(layout) = &army.ground else { continue };
             for (i, s) in layout.spots.iter().enumerate() {
                 let d = world_to_pos(map_rect, s.x, s.z).distance(pointer);
@@ -5909,29 +7636,36 @@ impl super::GroupGeneratorApp {
                 }
             }
         };
-        if let Some(layout) = &self.map_ground_east {
-            consider(
-                layout,
-                GroundHit::Ag {
-                    eastern: true,
-                    i: 0,
-                },
-                &mut best,
-                &mut best_d,
-            );
+        if self.ground_side_shown(true) {
+            if let Some(layout) = &self.map_ground_east {
+                consider(
+                    layout,
+                    GroundHit::Ag {
+                        eastern: true,
+                        i: 0,
+                    },
+                    &mut best,
+                    &mut best_d,
+                );
+            }
         }
-        if let Some(layout) = &self.map_ground_nato {
-            consider(
-                layout,
-                GroundHit::Ag {
-                    eastern: false,
-                    i: 0,
-                },
-                &mut best,
-                &mut best_d,
-            );
+        if self.ground_side_shown(false) {
+            if let Some(layout) = &self.map_ground_nato {
+                consider(
+                    layout,
+                    GroundHit::Ag {
+                        eastern: false,
+                        i: 0,
+                    },
+                    &mut best,
+                    &mut best_d,
+                );
+            }
         }
         for (slot, army) in self.map_armies.iter().enumerate() {
+            if !army.shown {
+                continue;
+            }
             if let Some(layout) = &army.ground {
                 consider(
                     layout,
@@ -6210,6 +7944,9 @@ impl super::GroupGeneratorApp {
             }
         };
         for (i, mission) in self.map_missions.iter().enumerate() {
+            if mission.hidden {
+                continue;
+            }
             consider(
                 &mut best,
                 i,
@@ -6250,6 +7987,9 @@ impl super::GroupGeneratorApp {
 
     fn draw_missions(&self, painter: &egui::Painter, map_rect: Rect) {
         for mission in &self.map_missions {
+            if mission.hidden {
+                continue;
+            }
             let start = world_to_pos(map_rect, mission.start_x, mission.start_z);
             let ip = world_to_pos(map_rect, mission.ip_x, mission.ip_z);
             let target = world_to_pos(map_rect, mission.target_x, mission.target_z);
@@ -6428,29 +8168,39 @@ impl super::GroupGeneratorApp {
     }
 
     fn draw_map_ground(&self, painter: &egui::Painter, map_rect: Rect) {
-        if let Some(layout) = self.map_ground_east.as_ref() {
-            self.paint_ground_layout(
-                painter,
-                map_rect,
-                layout,
-                GroundHit::Ag {
-                    eastern: true,
-                    i: 0,
-                },
-            );
+        if !self.units_shown {
+            return;
         }
-        if let Some(layout) = self.map_ground_nato.as_ref() {
-            self.paint_ground_layout(
-                painter,
-                map_rect,
-                layout,
-                GroundHit::Ag {
-                    eastern: false,
-                    i: 0,
-                },
-            );
+        if self.ground_east_shown {
+            if let Some(layout) = self.map_ground_east.as_ref() {
+                self.paint_ground_layout(
+                    painter,
+                    map_rect,
+                    layout,
+                    GroundHit::Ag {
+                        eastern: true,
+                        i: 0,
+                    },
+                );
+            }
+        }
+        if self.ground_nato_shown {
+            if let Some(layout) = self.map_ground_nato.as_ref() {
+                self.paint_ground_layout(
+                    painter,
+                    map_rect,
+                    layout,
+                    GroundHit::Ag {
+                        eastern: false,
+                        i: 0,
+                    },
+                );
+            }
         }
         for (slot, army) in self.map_armies.iter().enumerate() {
+            if !army.shown {
+                continue;
+            }
             if let Some(layout) = &army.ground {
                 self.paint_ground_layout(painter, map_rect, layout, GroundHit::Army { slot, i: 0 });
             }
@@ -6505,6 +8255,16 @@ impl super::GroupGeneratorApp {
                         UNIT_LABEL,
                         Align2::LEFT_BOTTOM,
                     );
+                }
+            }
+            if let Some(net) = &spot.network {
+                let mark = if net.rail {
+                    Color32::from_rgb(30, 30, 32)
+                } else {
+                    Color32::from_rgb(140, 28, 28)
+                };
+                for &(ux, uz) in &net.unit_xz {
+                    painter.circle_filled(world_to_pos(map_rect, ux, uz), 3.0, mark);
                 }
             }
             let pos = world_to_pos(map_rect, spot.x, spot.z);
@@ -6601,7 +8361,6 @@ impl super::GroupGeneratorApp {
             );
             return;
         }
-        self.ensure_editor_map();
         let objectives = if eastern {
             self.east_objectives.as_slice()
         } else {
@@ -6685,7 +8444,6 @@ impl super::GroupGeneratorApp {
         };
 
         if !rest.is_empty() {
-            let _cover = crate::editormap::CoverGuard::enter();
             match place_ground_jobs(
                 eastern,
                 &rest,
@@ -6909,7 +8667,6 @@ impl super::GroupGeneratorApp {
             seed,
             occupied,
         };
-        let _cover = crate::editormap::CoverGuard::enter();
         match place_ground_jobs(
             eastern,
             jobs,
@@ -6980,7 +8737,7 @@ impl super::GroupGeneratorApp {
         }
     }
 
-    fn load_map_armies(&mut self, eastern: bool) {
+    fn load_map_armies(&mut self) {
         let Some(paths) = dialog::FileDialog::new()
             .add_filter("IL-2 Group", &["Group", "group"])
             .pick_files()
@@ -6988,6 +8745,8 @@ impl super::GroupGeneratorApp {
             return;
         };
         let mut added = 0usize;
+        let mut dprk = 0usize;
+        let mut nato = 0usize;
         let mut errors = Vec::new();
         for path in paths {
             if self.map_armies.iter().any(|a| a.path == path) {
@@ -7018,6 +8777,12 @@ impl super::GroupGeneratorApp {
                             ));
                             continue;
                         }
+                        let eastern = group_is_eastern(&entity, &path);
+                        if eastern {
+                            dprk += 1;
+                        } else {
+                            nato += 1;
+                        }
                         self.map_armies.push(MapArmySlot {
                             path,
                             entity,
@@ -7026,6 +8791,7 @@ impl super::GroupGeneratorApp {
                             copies,
                             ground: None,
                             ships: None,
+                            shown: true,
                         });
                         let idx = self.map_armies.len() - 1;
                         self.refresh_army_slot(idx);
@@ -7036,12 +8802,13 @@ impl super::GroupGeneratorApp {
                 Err(err) => errors.push(format!("Could not read {}: {err}", path.display())),
             }
         }
+        let loaded = format!("Loaded {added} group(s): {dprk} DPRK, {nato} NATO.");
         if added == 0 && !errors.is_empty() {
             self.status = Status::Error(errors.join(" "));
         } else if !errors.is_empty() {
             let mut items = errors;
             if added > 0 {
-                items.insert(0, format!("Loaded {added} army group(s)."));
+                items.insert(0, loaded);
             }
             self.status = Status::Warn {
                 lead: String::new(),
@@ -7049,6 +8816,8 @@ impl super::GroupGeneratorApp {
             };
         } else if added == 0 {
             self.status = Status::Info("No new army groups added.".into());
+        } else {
+            self.status = Status::Info(loaded);
         }
     }
 
@@ -7118,7 +8887,7 @@ impl super::GroupGeneratorApp {
             };
         }
         self.status = Status::Info(format!(
-            "{n} {side} groups kept at authored positions. Tick Reposition to park along the front."
+            "{n} {side} groups kept at authored positions. Reload position parks them along the front."
         ));
     }
 
@@ -7238,8 +9007,6 @@ impl super::GroupGeneratorApp {
             .into_iter()
             .partition(|job| job.kind == GroundKind::AntiAir);
         if !rest.is_empty() {
-            self.ensure_editor_map();
-            let _cover = crate::editormap::CoverGuard::enter();
             let opts = PlaceOpts {
                 front_band: Some(FRONT_PLACE_BAND),
                 favor: &objectives,
@@ -7955,15 +9722,106 @@ impl super::GroupGeneratorApp {
         self.front_focus = Some(battle.id);
     }
 
+    /// One exported strike or sortie, back on the map so it can be edited.
+    /// `Some(true)` is a Mission Tasking sortie.
+    fn adopt_strike_group(&mut self, group: crate::ast::Il2Entity, packed: bool) -> Option<bool> {
+        let layout = strike_layout(&group, packed)?;
+        let attacks = layout
+            .attacks
+            .into_iter()
+            .map(|(ordinal, lead_name, x, z)| FlightAim {
+                ordinal,
+                lead_name,
+                x,
+                z,
+                label: "Custom".into(),
+                class: None,
+            })
+            .collect();
+        let eastern = !layout.western;
+        let patrol = sortie_mark(&group);
+        let air_task = patrol.is_some();
+        let (target_label, target_class) = if patrol == Some(true) {
+            ("Patrol".into(), None)
+        } else if air_task {
+            self.recover_sortie_target(&group, eastern, layout.target)
+        } else {
+            ("Custom".into(), None)
+        };
+        let sequence = self.next_mission_sequence();
+        self.map_missions.push(PlacedMission {
+            name: layout.name,
+            eastern,
+            root: group,
+            target_x: layout.target.0,
+            target_z: layout.target.1,
+            start_x: layout.start.0,
+            start_z: layout.start.1,
+            ip_x: layout.ip.0,
+            ip_z: layout.ip.1,
+            target_label,
+            target_class,
+            attacks,
+            keep_template_attack: false,
+            sequence,
+            air_task,
+            air_weight: 5,
+            air_runs: 1,
+            air_spread: crate::airtask::AirSpread::Even,
+            air_enabled: true,
+            air_path: None,
+            hidden: false,
+        });
+        Some(air_task)
+    }
+
+    /// A sortie flagged Attack Ground Targets keeps the unit it was aimed at.
+    /// Anything else comes back as an unknown target: the route is still there,
+    /// and the flight is just attacking ground.
+    fn recover_sortie_target(
+        &self,
+        group: &crate::ast::Il2Entity,
+        eastern: bool,
+        target: (f64, f64),
+    ) -> (String, Option<StrikeTargetClass>) {
+        let mut attacks_units = false;
+        group.for_each(&mut |entity| {
+            if !attacks_units && entity.block_type == "MCU_CMD_AttackArea" {
+                attacks_units = read_attack_flags(entity).targets;
+            }
+        });
+        if !attacks_units {
+            return ("Unknown".into(), None);
+        }
+        let mut best: Option<(f64, String, StrikeTargetClass)> = None;
+        for unit in self.imported_unit_targets(eastern) {
+            let d = (unit.x - target.0).hypot(unit.z - target.1);
+            if d > 3_000.0 {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(bd, _, _)| d < *bd) {
+                best = Some((d, unit.label, unit.class));
+            }
+        }
+        match best {
+            Some((_, label, class)) => (label, Some(class)),
+            None => ("Unknown".into(), None),
+        }
+    }
+
     /// Strike packages placed on the map, with the route the user left in place.
+    /// Mission Tasking sorties use the same placement. Their group Desc marks
+    /// them so Load base map can open them for editing again.
     fn stamp_missions(&mut self, root: &mut crate::ast::Il2Entity) -> Vec<String> {
-        if self.map_missions.is_empty() {
+        let missions: Vec<PlacedMission> = self.map_missions.clone();
+        if missions.is_empty() {
             return Vec::new();
         }
         let mut notes = Vec::new();
         let mut next = root.max_index().saturating_add(1);
-        let mut clones = Vec::new();
-        for mission in &self.map_missions {
+        let mut stamped: Vec<StampedMission> = Vec::new();
+        let zone_radii = shared_target_zone_radii(&missions);
+        for (mission_i, mission) in missions.iter().enumerate() {
             let (mut clone, _) = duplicate_template(&mission.root, &mut next);
             let pose = StrikePose {
                 target_x: mission.target_x,
@@ -7982,105 +9840,290 @@ impl super::GroupGeneratorApp {
                     .collect();
                 place_flight_attack_areas(&mut clone, &aims);
             }
-            match self.arm_strike_export(&mut clone, mission) {
-                StrikeArmNote::GroundTargets => notes.push(format!(
-                    "{}: Attack Ground Targets was turned on. The target is enemy units, not a bridge, dam, or airbase.",
-                    mission.name
-                )),
-                StrikeArmNote::AttackGround => notes.push(format!(
-                    "{}: Attack Ground was set because the target is a bridge, dam, or airbase.",
-                    mission.name
-                )),
-                StrikeArmNote::Both => {
-                    notes.push(format!(
-                        "{}: Attack Ground Targets was turned on for enemy units.",
-                        mission.name
-                    ));
-                    notes.push(format!(
-                        "{}: Attack Ground was set for a bridge, dam, or airbase.",
-                        mission.name
-                    ));
-                }
-                StrikeArmNote::None => {}
+            let flags = self.arm_strike_export(&mut clone, mission);
+            notes.extend(flags);
+            if let Some(radius) = zone_radii[mission_i] {
+                grow_zone_in(&mut clone, radius);
             }
             clone.set_name(&mission.name);
+            if mission.air_task {
+                let mark = if mission.target_label == "Patrol" {
+                    SORTIE_PATROL_DESC
+                } else {
+                    SORTIE_DESC
+                };
+                clone.set_property("Desc", format!("\"{mark}\""));
+            }
+            let air = mission.air_task;
+            let enabled = mission.air_enabled;
+            let name = mission.name.clone();
+            let timer_only = self.air_options.trigger == crate::airtask::AirTrigger::Clock;
+            let weight = if timer_only {
+                (100 / mission.air_weight.max(1)).max(1)
+            } else {
+                mission.air_weight.max(1)
+            };
+            let runs = mission.air_runs.max(1);
+            let spread = mission.air_spread;
+            let duration_s = if timer_only {
+                crate::airtask::flight_secs(route_meters(mission), waypoint_kmh(&clone))
+            } else {
+                0.0
+            };
+            let push = |stamped: &mut Vec<StampedMission>, group| {
+                stamped.push(StampedMission {
+                    group,
+                    air,
+                    enabled,
+                    name: name.clone(),
+                    weight,
+                    runs,
+                    spread,
+                    duration_s,
+                });
+            };
             match take_strike_missions(clone) {
-                Ok(imported) => clones.extend(imported.groups),
-                Err(entity) => clones.push(entity),
+                Ok(imported) => {
+                    for group in imported.groups {
+                        push(&mut stamped, group);
+                    }
+                }
+                Err(entity) => push(&mut stamped, entity),
             }
         }
-        let nudged = separate_zone_ins(&mut clones);
+        let mut groups: Vec<_> = stamped.iter().map(|item| item.group.clone()).collect();
+        let nudged = separate_zone_ins(&mut groups);
+        for (item, group) in stamped.iter_mut().zip(groups) {
+            item.group = group;
+        }
         if nudged > 0 {
             notes.push(format!(
                 "{nudged} Zone In checkzone{} moved 100 m so two strikes do not share the same point.",
                 if nudged == 1 { "" } else { "s" }
             ));
         }
-        if clones.len() > 1 {
-            match exclusive_pack(&clones) {
-                Ok(pack) => {
+        let mut zone_groups = Vec::new();
+        let mut air_inputs = Vec::new();
+        for item in stamped {
+            if item.air {
+                if !item.enabled {
+                    continue;
+                }
+                let timer_only = self.air_options.trigger == crate::airtask::AirTrigger::Clock;
+                if timer_only {
+                    air_inputs.push(crate::airtask::AirTaskInput {
+                        label: item.name.clone(),
+                        root: item.group,
+                        weight: item.weight.max(1),
+                        duration_s: item.duration_s,
+                        runs: item.runs.max(1),
+                        spread: item.spread,
+                    });
+                } else {
+                    let repeats = item.runs.clamp(1, 3);
+                    for r in 0..repeats {
+                        air_inputs.push(crate::airtask::AirTaskInput {
+                            label: if repeats == 1 {
+                                item.name.clone()
+                            } else {
+                                format!("{} {}", item.name, r + 1)
+                            },
+                            root: item.group.clone(),
+                            weight: item.weight.max(1),
+                            duration_s: item.duration_s,
+                            runs: 1,
+                            spread: crate::airtask::AirSpread::Even,
+                        });
+                    }
+                }
+            } else {
+                zone_groups.push(item.group);
+            }
+        }
+        let window_s = self.air_options.window_secs();
+        let mut exclusive = pack_zone_missions(&mut notes, root, zone_groups);
+        if let Some(pack) = exclusive.as_mut() {
+            apply_mission_window(pack, window_s);
+        }
+        let air = if air_inputs.is_empty() {
+            None
+        } else {
+            match crate::airtask::link_air_task(&air_inputs, &self.air_options) {
+                Ok(group) => {
+                    let minutes = self.air_options.window_min.clamp(5, 360);
+                    let flights: u32 = air_inputs.iter().map(|item| item.runs.max(1)).sum();
                     notes.push(format!(
-                        "{} missions share Exclusive Activation, so only one runs at a time.",
-                        clones.len()
+                        "{flights} flights launch on the timer across {minutes} minutes."
                     ));
-                    root.children.push(pack);
+                    Some(group)
                 }
                 Err(err) => {
-                    notes.push(format!("Exclusive Activation was not applied: {err}"));
-                    root.children.extend(clones);
+                    notes.push(format!("The timer was not applied: {err}"));
+                    None
                 }
             }
-        } else {
-            root.children.extend(clones);
+        };
+        match (air, exclusive) {
+            (Some(mut air_group), Some(pack)) => {
+                let mut id = air_group.max_index().saturating_add(1);
+                let (mut pack, _) = duplicate_template(&pack, &mut id);
+                let zones = disable_zone_ins(&mut pack);
+                if !zones.is_empty() {
+                    crate::airtask::bind_outside_zones(&mut air_group, &zones, &mut id);
+                    notes.push(
+                        "Zone plans can fire when a player enters, and only until the mission window ends."
+                            .into(),
+                    );
+                }
+                root.children.push(air_group);
+                root.children.push(pack);
+            }
+            (Some(air_group), None) => root.children.push(air_group),
+            (None, Some(pack)) => root.children.push(pack),
+            (None, None) => {}
         }
         notes
     }
 
-    /// AttackArea exports at high priority. A bridge, dam, or airbase is Attack
-    /// Ground only. Enemy tanks, trucks, trains, and boats turn on Attack Ground Targets.
+    /// Ground AttackAreas follow the map target. Priority stays as the template
+    /// wrote it. A later flight that is Attack Air only is an escort and is
+    /// left alone. `keep_template_attack` skips every flag write.
     fn arm_strike_export(
         &self,
         group: &mut crate::ast::Il2Entity,
         mission: &PlacedMission,
-    ) -> StrikeArmNote {
+    ) -> Vec<String> {
+        if mission.keep_template_attack {
+            return Vec::new();
+        }
+        let edits = self.attack_edits(group, mission);
+        if edits.is_empty() {
+            return Vec::new();
+        }
         let mut ordinal = 0usize;
-        let mut ground_targets = false;
-        let mut attack_ground = false;
-        let mission_attacks = mission.attacks.clone();
         group.for_each_mut(&mut |e| {
+            if e.block_type != "MCU_CMD_AttackArea" {
+                return;
+            }
+            if let Some(edit) = edits.iter().find(|edit| edit.ordinal == ordinal) {
+                set_attack_flags(e, edit.desired);
+            }
+            ordinal += 1;
+        });
+        edits.iter().map(|edit| attack_note(edit, false)).collect()
+    }
+
+    /// AttackArea flag changes Generate would make for this placed mission.
+    fn cached_attack_notes(&mut self, index: usize) -> Vec<String> {
+        let stamp = self.mission_note_stamp();
+        if stamp != self.mission_notes_stamp || self.mission_notes.len() != self.map_missions.len()
+        {
+            let notes: Vec<Vec<String>> = (0..self.map_missions.len())
+                .map(|i| self.attack_notes(i))
+                .collect();
+            self.mission_notes = notes;
+            self.mission_notes_stamp = stamp;
+        }
+        self.mission_notes
+            .get(index)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Changes when a mission, its target, or a unit it might aim at moves.
+    fn mission_note_stamp(&self) -> u64 {
+        let mut h = 0x9E37_79B1_u64.wrapping_add(self.map_missions.len() as u64);
+        for mission in &self.map_missions {
+            h = h
+                .wrapping_mul(0x9E37_79B1)
+                .wrapping_add(mission.target_x.to_bits());
+            h = h
+                .wrapping_mul(0x9E37_79B1)
+                .wrapping_add(mission.target_z.to_bits());
+            h = h
+                .wrapping_mul(0x9E37_79B1)
+                .wrapping_add(u64::from(mission.keep_template_attack));
+            h = h
+                .wrapping_mul(0x9E37_79B1)
+                .wrapping_add(mission.attacks.len() as u64);
+            h = h
+                .wrapping_mul(0x9E37_79B1)
+                .wrapping_add(mission.root.children.len() as u64);
+        }
+        for layout in [&self.map_ground_east, &self.map_ground_nato] {
+            if let Some(layout) = layout {
+                h = h
+                    .wrapping_mul(0x9E37_79B1)
+                    .wrapping_add(layout.spots.len() as u64);
+                for spot in &layout.spots {
+                    h ^= spot.x.to_bits().rotate_left(1) ^ spot.z.to_bits();
+                }
+            }
+        }
+        h = h
+            .wrapping_mul(0x9E37_79B1)
+            .wrapping_add(self.map_armies.len() as u64);
+        h = h
+            .wrapping_mul(0x9E37_79B1)
+            .wrapping_add(self.east_objectives.len() as u64);
+        h = h
+            .wrapping_mul(0x9E37_79B1)
+            .wrapping_add(self.nato_objectives.len() as u64);
+        h
+    }
+
+    fn attack_notes(&self, index: usize) -> Vec<String> {
+        let mission = &self.map_missions[index];
+        let kept = mission.keep_template_attack;
+        self.attack_edits(&mission.root, mission)
+            .into_iter()
+            .map(|edit| attack_note(&edit, kept))
+            .collect()
+    }
+
+    /// Differences between the template flags and the flags for the map target.
+    /// The first AttackArea always qualifies. A later Attack Air-only area does not.
+    fn attack_edits(
+        &self,
+        group: &crate::ast::Il2Entity,
+        mission: &PlacedMission,
+    ) -> Vec<AttackEdit> {
+        let unarmed = attack_areas_without_bombs(group);
+        let mut ordinal = 0usize;
+        let mut edits = Vec::new();
+        group.for_each(&mut |e| {
             if e.block_type != "MCU_CMD_AttackArea" {
                 return;
             }
             let (x, z, class) = if ordinal == 0 {
                 (mission.target_x, mission.target_z, mission.target_class)
-            } else if let Some(aim) = mission_attacks.iter().find(|a| a.ordinal == ordinal) {
+            } else if let Some(aim) = mission.attacks.iter().find(|a| a.ordinal == ordinal) {
                 (aim.x, aim.z, aim.class)
             } else {
                 (mission.target_x, mission.target_z, mission.target_class)
             };
+            let guns_only = unarmed.get(ordinal).copied().unwrap_or(false);
+            let current = read_attack_flags(e);
+            let this_ordinal = ordinal;
             ordinal += 1;
-            e.set_property("Priority", "2");
-            match self.attack_aim_at(mission.eastern, x, z, class) {
-                AttackAim::Structure => {
-                    if set_attack_ground_only(e) {
-                        attack_ground = true;
-                    }
-                }
-                AttackAim::Units => {
-                    if !attack_flag_on(e, "AttackGTargets") {
-                        e.set_property("AttackGTargets", "1");
-                        ground_targets = true;
-                    }
-                }
-                AttackAim::Open => {}
+            if this_ordinal > 0 && air_only(current) {
+                return;
             }
+            let aim = self.attack_aim_at(mission.eastern, x, z, class);
+            let (desired, why) = desired_attack_flags(aim, guns_only);
+            if current == desired {
+                return;
+            }
+            let name = e.name().filter(|n| !n.is_empty()).unwrap_or("AttackArea");
+            edits.push(AttackEdit {
+                ordinal: this_ordinal,
+                name: name.to_string(),
+                current,
+                desired,
+                why,
+            });
         });
-        match (ground_targets, attack_ground) {
-            (true, true) => StrikeArmNote::Both,
-            (true, false) => StrikeArmNote::GroundTargets,
-            (false, true) => StrikeArmNote::AttackGround,
-            (false, false) => StrikeArmNote::None,
-        }
+        edits
     }
 
     fn attack_aim_at(
@@ -8091,9 +10134,8 @@ impl super::GroupGeneratorApp {
         class: Option<StrikeTargetClass>,
     ) -> AttackAim {
         match class {
-            Some(
-                StrikeTargetClass::Bridges | StrikeTargetClass::Dams | StrikeTargetClass::Airbases,
-            ) => AttackAim::Structure,
+            Some(StrikeTargetClass::Airbases) => AttackAim::Airbase,
+            Some(StrikeTargetClass::Bridges | StrikeTargetClass::Dams) => AttackAim::Structure,
             Some(
                 StrikeTargetClass::Tanks
                 | StrikeTargetClass::TruckRoutes
@@ -8108,14 +10150,14 @@ impl super::GroupGeneratorApp {
     fn nearest_attack_aim(&self, flight_eastern: bool, at_x: f64, at_z: f64) -> AttackAim {
         const REACH_M: f64 = 3_000.0;
         let enemy_eastern = !flight_eastern;
-        let mut best: Option<(f64, bool)> = None;
-        let mut push = |x: f64, z: f64, units: bool| {
+        let mut best: Option<(f64, AttackAim)> = None;
+        let mut push = |x: f64, z: f64, aim: AttackAim| {
             let d = (x - at_x).hypot(z - at_z);
             if d > REACH_M {
                 return;
             }
             if best.is_none_or(|(bd, _)| d < bd) {
-                best = Some((d, units));
+                best = Some((d, aim));
             }
         };
         let ground = if enemy_eastern {
@@ -8129,7 +10171,7 @@ impl super::GroupGeneratorApp {
                     spot.kind,
                     GroundKind::Armor | GroundKind::Supply | GroundKind::Train
                 ) {
-                    push(spot.x, spot.z, true);
+                    push(spot.x, spot.z, AttackAim::Units);
                 }
             }
         }
@@ -8143,20 +10185,20 @@ impl super::GroupGeneratorApp {
                         spot.kind,
                         GroundKind::Armor | GroundKind::Supply | GroundKind::Train
                     ) {
-                        push(spot.x, spot.z, true);
+                        push(spot.x, spot.z, AttackAim::Units);
                     }
                 }
             }
             if let Some(ships) = &army.ships {
                 for spot in &ships.spots {
-                    push(spot.x, spot.z, true);
+                    push(spot.x, spot.z, AttackAim::Units);
                 }
             }
         }
         if let Some(ships) = &self.map_ships {
             if ships.eastern == enemy_eastern {
                 for spot in &ships.spots {
-                    push(spot.x, spot.z, true);
+                    push(spot.x, spot.z, AttackAim::Units);
                 }
             }
         }
@@ -8176,7 +10218,7 @@ impl super::GroupGeneratorApp {
                     || model.contains("dam_")
                     || script.contains("dam_");
                 if structure {
-                    marks.push((x, z));
+                    marks.push((x, z, AttackAim::Structure));
                     return;
                 }
                 let air = e.block_type == "Airfield"
@@ -8192,18 +10234,32 @@ impl super::GroupGeneratorApp {
                 };
                 let western = country / 100 == 6;
                 if western == flight_eastern {
-                    marks.push((x, z));
+                    marks.push((x, z, AttackAim::Airbase));
                 }
             });
-            for (x, z) in marks {
-                push(x, z, false);
+            for (x, z, aim) in marks {
+                push(x, z, aim);
             }
         }
-        match best {
-            Some((_, true)) => AttackAim::Units,
-            Some((_, false)) => AttackAim::Structure,
-            None => AttackAim::Open,
+        for group in self.strike_airfields() {
+            group.entity.for_each(&mut |e| {
+                let Some((x, z)) = e.pos_xz() else {
+                    return;
+                };
+                if e.block_type != "Airfield" {
+                    return;
+                }
+                let Some(country) = e.property("Country").and_then(|s| s.parse::<i32>().ok())
+                else {
+                    return;
+                };
+                let western = country / 100 == 6;
+                if western == flight_eastern {
+                    push(x, z, AttackAim::Airbase);
+                }
+            });
         }
+        best.map(|(_, aim)| aim).unwrap_or(AttackAim::Open)
     }
 
     /// Fake-field air starts placed on the map, at the measured ground height.
@@ -8301,6 +10357,8 @@ impl super::GroupGeneratorApp {
         self.stamp_air_starts(&mut pack.root);
         let mut strike_notes = self.stamp_missions(&mut pack.root);
         let terrain_note = self.apply_terrain(&mut pack.root);
+        // Each following group waits 0.5 s so zone arming and timers do not share a tick.
+        stagger_sibling_starts(&mut pack.root);
         let text = serialize_group(&pack.root);
         let suggested = format!("Korea_BaseMap_{}.Group", self.current_mark().date_label());
         let Some(save_path) = dialog::FileDialog::new()
@@ -8383,6 +10441,7 @@ impl super::GroupGeneratorApp {
                     .collect();
                 members.sort_by_key(|s| s.slot);
                 let mut gi = 0usize;
+                let mut moved = false;
                 for child in &mut root.children {
                     if child.block_type != "Group" {
                         continue;
@@ -8392,11 +10451,14 @@ impl super::GroupGeneratorApp {
                     }
                     if let Some(spot) = members.get(gi) {
                         let from = group_anchor_xz(child);
-                        crate::placement::move_anchor_to(child, from, (spot.x, spot.z));
+                        if (from.0 - spot.x).hypot(from.1 - spot.z) > 1.0 {
+                            moved = true;
+                            crate::placement::move_anchor_to(child, from, (spot.x, spot.z));
+                        }
                     }
                     gi += 1;
                 }
-                if gi == members.len() && !members.is_empty() {
+                if moved && gi == members.len() && !members.is_empty() {
                     let rtbs: Vec<(f64, f64)> = members
                         .iter()
                         .map(|s| rtb_ao_point(src.eastern, s.x, s.z, self.front_aabb))
@@ -8487,41 +10549,17 @@ impl super::GroupGeneratorApp {
             .and_then(|s| s.to_str())
             .unwrap_or("BaseMap");
         let mut strike_n = 0usize;
+        let mut sortie_n = 0usize;
         for army in imported.armies {
             let (eastern, name, entity) = (army.eastern, army.name, army.entity);
             let entity = match take_strike_missions(entity) {
                 Ok(taken) => {
                     for group in taken.groups {
-                        let Some(layout) = strike_layout(&group, taken.packed) else {
-                            continue;
-                        };
-                        let attacks = layout
-                            .attacks
-                            .into_iter()
-                            .map(|(ordinal, lead_name, x, z)| FlightAim {
-                                ordinal,
-                                lead_name,
-                                x,
-                                z,
-                                label: "Custom".into(),
-                                class: None,
-                            })
-                            .collect();
-                        self.map_missions.push(PlacedMission {
-                            name: layout.name,
-                            eastern: !layout.western,
-                            root: group,
-                            target_x: layout.target.0,
-                            target_z: layout.target.1,
-                            start_x: layout.start.0,
-                            start_z: layout.start.1,
-                            ip_x: layout.ip.0,
-                            ip_z: layout.ip.1,
-                            target_label: "Custom".into(),
-                            target_class: None,
-                            attacks,
-                        });
-                        strike_n += 1;
+                        match self.adopt_strike_group(group, taken.packed) {
+                            Some(true) => sortie_n += 1,
+                            Some(false) => strike_n += 1,
+                            None => {}
+                        }
                     }
                     continue;
                 }
@@ -8540,6 +10578,7 @@ impl super::GroupGeneratorApp {
                 copies,
                 ground: None,
                 ships: None,
+                shown: true,
             });
             let idx = self.map_armies.len() - 1;
             self.refresh_army_slot(idx);
@@ -8606,6 +10645,12 @@ impl super::GroupGeneratorApp {
                 if strike_n == 1 { "" } else { "s" }
             ));
         }
+        if sortie_n > 0 {
+            parts.push(format!(
+                "{sortie_n} sortie{}",
+                if sortie_n == 1 { "" } else { "s" }
+            ));
+        }
         let fighters = self
             .map_fighters
             .as_ref()
@@ -8641,6 +10686,22 @@ impl super::GroupGeneratorApp {
                 parts.join(", ")
             }
         ));
+    }
+
+    /// Airfields the Airfield tab would place: one copy per field, the country
+    /// that holds that side of the front. The other copy stays loaded and is
+    /// not a strike target.
+    fn strike_airfields(&self) -> Vec<MapRefGroup> {
+        let groups = self
+            .airbases
+            .iter()
+            .filter(|slot| self.airbase_in_play(slot))
+            .map(|slot| MapRefGroup {
+                path: slot.path.clone(),
+                entity: slot.root.clone(),
+            })
+            .collect();
+        self.place_harvested_airfields(groups).groups
     }
 
     /// Automatic provisions first, then groups added by hand. A path counts once.
@@ -8679,7 +10740,7 @@ impl super::GroupGeneratorApp {
         country
     }
 
-    fn reload_map_provisions(&mut self) {
+    pub(super) fn reload_map_provisions(&mut self) {
         let template = PathBuf::from(self.map_template_dir.trim());
         let landscape = provisions::load_named_groups(&template, provisions::LANDSCAPE_FILES);
         self.map_provision_missing = landscape.missing;
@@ -8812,6 +10873,56 @@ impl super::GroupGeneratorApp {
     }
 }
 
+/// The first group that Mission Begin starts keeps its timers. Each later
+/// group waits another 0.5 s, so zone arming and clock chains do not share a tick.
+fn stagger_sibling_starts(root: &mut crate::ast::Il2Entity) {
+    use std::collections::HashSet;
+    let step = crate::recon::WATERFALL_STEP_S;
+    let mut slot = 0u32;
+    for child in &mut root.children {
+        if child.block_type != "Group" {
+            continue;
+        }
+        let mut ids = Vec::new();
+        child.for_each(&mut |entity| {
+            if entity.block_type == "MCU_TR_MissionBegin" {
+                ids.extend(entity.targets.iter().copied());
+            }
+        });
+        if ids.is_empty() {
+            continue;
+        }
+        let add = f64::from(slot) * step;
+        slot += 1;
+        if add == 0.0 {
+            continue;
+        }
+        let wanted: HashSet<i32> = ids.into_iter().collect();
+        child.for_each_mut(&mut |entity| {
+            if entity.block_type != "MCU_Timer" {
+                return;
+            }
+            let Some(id) = entity.index else {
+                return;
+            };
+            if !wanted.contains(&id) {
+                return;
+            }
+            let Some(time) = entity.property("Time").and_then(|text| text.parse::<f64>().ok())
+            else {
+                return;
+            };
+            let next = time + add;
+            let text = if (next - next.round()).abs() < 1e-9 {
+                format!("{next:.0}")
+            } else {
+                format!("{next:.1}")
+            };
+            entity.set_property("Time", text);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -8828,6 +10939,83 @@ mod tests {
             entity.set_property(key, *value);
         }
         entity
+    }
+
+    #[test]
+    fn duplicated_sortie_names_count_up() {
+        assert_eq!(
+            super::sortie_name_stem("F-80C HVAR strike 2 2 2"),
+            "F-80C HVAR strike"
+        );
+        assert_eq!(
+            super::next_copy_name(&["F-80C HVAR strike"], "F-80C HVAR strike"),
+            "F-80C HVAR strike 2"
+        );
+        assert_eq!(
+            super::next_copy_name(
+                &["F-80C HVAR strike", "F-80C HVAR strike 2"],
+                "F-80C HVAR strike 2"
+            ),
+            "F-80C HVAR strike 3"
+        );
+        assert_eq!(
+            super::next_copy_name(
+                &[
+                    "F-80C HVAR strike",
+                    "F-80C HVAR strike 2",
+                    "F-80C HVAR strike 3"
+                ],
+                "F-80C HVAR strike 2 2"
+            ),
+            "F-80C HVAR strike 4"
+        );
+        assert_eq!(
+            super::next_copy_name(
+                &["F-80C HVAR strike", "F-80C HVAR strike 2", "F-80C HVAR strike 4"],
+                "F-80C HVAR strike"
+            ),
+            "F-80C HVAR strike 5"
+        );
+    }
+
+    #[test]
+    fn later_groups_wait_one_server_step() {
+        let mut first_timer = node("MCU_Timer", &[("Index", "2"), ("Name", "\"Start\""), ("Time", "0")]);
+        first_timer.index = Some(2);
+        let mut first_begin = node(
+            "MCU_TR_MissionBegin",
+            &[("Index", "1"), ("Name", "\"Begin\"")],
+        );
+        first_begin.index = Some(1);
+        first_begin.set_targets(vec![2]);
+        let mut first = node("Group", &[("Name", "\"One\"")]);
+        first.children = vec![first_begin, first_timer];
+
+        let mut second_timer = node("MCU_Timer", &[("Index", "4"), ("Name", "\"Start\""), ("Time", "0")]);
+        second_timer.index = Some(4);
+        let mut second_begin = node(
+            "MCU_TR_MissionBegin",
+            &[("Index", "3"), ("Name", "\"Begin\"")],
+        );
+        second_begin.index = Some(3);
+        second_begin.set_targets(vec![4]);
+        let mut second = node("Group", &[("Name", "\"Two\"")]);
+        second.children = vec![second_begin, second_timer];
+
+        let mut root = Il2Entity::new("Group");
+        root.children = vec![first, second];
+        super::stagger_sibling_starts(&mut root);
+        let time = |name: &str| {
+            root.children
+                .iter()
+                .find(|child| child.name() == Some(name))
+                .and_then(|group| group.children.iter().find(|c| c.block_type == "MCU_Timer"))
+                .and_then(|timer| timer.property("Time"))
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(time("One"), "0");
+        assert_eq!(time("Two"), "0.5");
     }
 
     #[test]
@@ -8866,6 +11054,168 @@ mod tests {
         assert!(exclusive_pack(&[plan_shell("Only", 1_000.0)]).is_err());
     }
 
+    fn placed_on(name: &str, x: f64, z: f64) -> super::PlacedMission {
+        super::PlacedMission {
+            name: name.to_string(),
+            eastern: false,
+            root: Il2Entity::new("Group"),
+            target_x: x,
+            target_z: z,
+            start_x: x,
+            start_z: z - 20_000.0,
+            ip_x: x,
+            ip_z: z - 8_000.0,
+            target_label: "Tanks".into(),
+            target_class: Some(crate::template::StrikeTargetClass::Tanks),
+            attacks: Vec::new(),
+            keep_template_attack: false,
+            sequence: 1,
+            air_task: false,
+            air_weight: 5,
+            air_runs: 1,
+            air_spread: crate::airtask::AirSpread::Even,
+            air_enabled: true,
+            air_path: None,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn shared_target_warns_only_when_flights_aim_at_the_same_point() {
+        let same = super::shared_target_warning(&[
+            placed_on("One", 100_000.0, 200_000.0),
+            placed_on("Two", 100_000.0, 200_000.0),
+        ])
+        .expect("same point");
+        assert!(
+            same.contains(
+                "Multiple flights going to the exact same target can produce unexpected results."
+            ),
+            "{same}"
+        );
+        assert!(same.starts_with("2 flights share a target."), "{same}");
+
+        // Same Snap target type, two different tanks.
+        assert!(
+            super::shared_target_warning(&[
+                placed_on("One", 100_000.0, 200_000.0),
+                placed_on("Two", 100_400.0, 200_000.0),
+            ])
+            .is_none()
+        );
+
+        assert!(super::shared_target_warning(&[placed_on("Only", 100_000.0, 200_000.0)]).is_none());
+
+        // A later flight snapped onto another mission's target counts.
+        let mut wing = placed_on("Wing", 70_000.0, 80_000.0);
+        wing.attacks.push(super::FlightAim {
+            ordinal: 1,
+            lead_name: "Two".into(),
+            x: 50_000.0,
+            z: 60_000.0,
+            label: "Bridge".into(),
+            class: Some(crate::template::StrikeTargetClass::Bridges),
+        });
+        let crossed = super::shared_target_warning(&[placed_on("Lead", 50_000.0, 60_000.0), wing])
+            .expect("attack on the lead's target");
+        assert!(
+            crossed.starts_with("2 flights share a target."),
+            "{crossed}"
+        );
+
+        // Two aims inside one mission are not two flights from separate plans.
+        let mut solo = placed_on("Solo", 50_000.0, 60_000.0);
+        solo.attacks.push(super::FlightAim {
+            ordinal: 1,
+            lead_name: "Wing".into(),
+            x: 50_000.0,
+            z: 60_000.0,
+            label: "Tanks".into(),
+            class: Some(crate::template::StrikeTargetClass::Tanks),
+        });
+        assert!(super::shared_target_warning(&[solo]).is_none());
+    }
+
+    fn zone_in_radius_of(root: &Il2Entity, plan_prefix: &str) -> f64 {
+        let plan = root
+            .children
+            .iter()
+            .find(|child| child.name() == Some("Exclusive Activation"))
+            .and_then(|pack| {
+                pack.children
+                    .iter()
+                    .find(|child| child.name().unwrap_or("").starts_with(plan_prefix))
+            })
+            .unwrap_or_else(|| panic!("missing plan {plan_prefix}"));
+        let mut found = None;
+        plan.for_each(&mut |entity| {
+            if entity.block_type == "MCU_CheckZone" && entity.name() == Some("Zone IN") {
+                found = entity.property("Zone").and_then(|raw| raw.parse().ok());
+            }
+        });
+        found.unwrap_or_else(|| panic!("{plan_prefix} has no Zone IN radius"))
+    }
+
+    fn shell_with_zone(name: &str, radius: &str) -> Il2Entity {
+        let mut root = plan_shell(name, 1_000.0);
+        root.for_each_mut(&mut |entity| {
+            if entity.block_type == "MCU_CheckZone" {
+                entity.set_property("Zone", radius);
+            }
+        });
+        root
+    }
+
+    fn sequenced(name: &str, sequence: u32, x: f64, z: f64, radius: &str) -> super::PlacedMission {
+        let mut mission = placed_on(name, x, z);
+        mission.sequence = sequence;
+        mission.root = shell_with_zone(name, radius);
+        mission
+    }
+
+    #[test]
+    fn earlier_shared_target_zone_grows_by_at_least_300m() {
+        let same = 100_000.0;
+        let other = 10_000.0;
+        let missions = vec![
+            sequenced("Fighter", 1, same, same, "16000"),
+            sequenced("Heavy", 2, same, same, "16000"),
+            sequenced("Other", 3, other, other, "16000"),
+        ];
+        let radii = super::shared_target_zone_radii(&missions);
+        assert!((radii[0].unwrap() - 16_300.0).abs() < 0.1, "{radii:?}");
+        assert!((radii[1].unwrap() - 16_000.0).abs() < 0.1, "{radii:?}");
+        assert!(radii[2].is_none(), "{radii:?}");
+
+        let mut swapped = missions.clone();
+        swapped[0].sequence = 2;
+        swapped[1].sequence = 1;
+        let radii = super::shared_target_zone_radii(&swapped);
+        assert!((radii[1].unwrap() - 16_300.0).abs() < 0.1, "{radii:?}");
+        assert!((radii[0].unwrap() - 16_000.0).abs() < 0.1, "{radii:?}");
+        assert!(radii[2].is_none(), "{radii:?}");
+
+        let mut app = super::super::GroupGeneratorApp::default();
+        app.map_missions = vec![
+            sequenced("Fighter", 1, same, same, "16000"),
+            sequenced("Heavy", 2, same, same, "16000"),
+            sequenced("Other", 3, other, other, "16000"),
+        ];
+        let mut root = Il2Entity::new("Group");
+        app.stamp_missions(&mut root);
+        assert!((zone_in_radius_of(&root, "Fighter") - 16_300.0).abs() < 0.1);
+        assert!((zone_in_radius_of(&root, "Heavy") - 16_000.0).abs() < 0.1);
+        assert!((zone_in_radius_of(&root, "Other") - 16_000.0).abs() < 0.1);
+
+        app.map_missions[0].sequence = 2;
+        app.map_missions[1].sequence = 1;
+        let mut root = Il2Entity::new("Group");
+        app.stamp_missions(&mut root);
+        assert!((zone_in_radius_of(&root, "Heavy") - 16_300.0).abs() < 0.1);
+        assert!((zone_in_radius_of(&root, "Fighter") - 16_000.0).abs() < 0.1);
+        assert!((zone_in_radius_of(&root, "Other") - 16_000.0).abs() < 0.1);
+    }
+
     #[test]
     fn strike_profiles_export_an_exclusive_activation_group() {
         let text = include_str!(
@@ -8898,6 +11248,15 @@ mod tests {
             target_label: "Tanks".into(),
             target_class: None,
             attacks: Vec::new(),
+            keep_template_attack: false,
+            sequence: 1,
+            air_task: false,
+            air_weight: 5,
+            air_runs: 1,
+            air_spread: crate::airtask::AirSpread::Even,
+            air_enabled: true,
+            air_path: None,
+            hidden: false,
         };
         let mut app = super::super::GroupGeneratorApp::default();
         app.map_missions = vec![
@@ -8912,6 +11271,169 @@ mod tests {
                 .any(|c| c.name() == Some("Exclusive Activation")),
             "{notes:?}"
         );
+    }
+
+    fn sortie_shell(name: &str) -> Il2Entity {
+        let mut root = Il2Entity::new("Group");
+        root.index = Some(1);
+        root.set_property("Index", "1");
+        root.set_name(name);
+        let mut zone = node(
+            "MCU_CheckZone",
+            &[
+                ("Index", "2"),
+                ("Name", "Zone IN"),
+                ("XPos", "0"),
+                ("ZPos", "0"),
+            ],
+        );
+        zone.index = Some(2);
+        zone.set_name("Zone IN");
+        let mut end = node(
+            "MCU_Timer",
+            &[("Index", "3"), ("Name", "Mission Complete")],
+        );
+        end.index = Some(3);
+        end.set_name("Mission Complete");
+        let mut plane = node(
+            "Plane",
+            &[
+                ("Index", "4"),
+                ("Name", "Lead"),
+                ("XPos", "0"),
+                ("ZPos", "-20000"),
+                ("Country", "601"),
+                ("NumberInFormation", "0"),
+            ],
+        );
+        plane.index = Some(4);
+        let mut area = node(
+            "MCU_CMD_AttackArea",
+            &[
+                ("Index", "5"),
+                ("Name", "Attack"),
+                ("XPos", "0"),
+                ("ZPos", "0"),
+                ("AttackGround", "0"),
+                ("AttackGTargets", "0"),
+                ("AttackAir", "0"),
+            ],
+        );
+        area.index = Some(5);
+        let mut wp = node(
+            "MCU_Waypoint",
+            &[
+                ("Index", "6"),
+                ("Name", "WP 1"),
+                ("XPos", "0"),
+                ("ZPos", "-8000"),
+            ],
+        );
+        wp.index = Some(6);
+        wp.set_name("WP 1");
+        root.children = vec![zone, end, plane, area, wp];
+        root
+    }
+
+    #[test]
+    fn exported_sortie_reloads_for_editing() {
+        use crate::mapground::{GroundKind, GroundSpot, MapGroundLayout};
+
+        let mut app = super::super::GroupGeneratorApp::default();
+        app.map_ground_east = Some(MapGroundLayout {
+            eastern: true,
+            spots: vec![GroundSpot::at(
+                150_000.0,
+                160_000.0,
+                true,
+                0.0,
+                GroundKind::Armor,
+                None,
+            )],
+            warnings: Vec::new(),
+        });
+        let mut aimed = placed_on("Package", 150_000.0, 160_000.0);
+        aimed.air_task = true;
+        aimed.root = sortie_shell("Package");
+        let mut patrol = placed_on("Sweep", 40_000.0, 50_000.0);
+        patrol.air_task = true;
+        patrol.target_label = "Patrol".into();
+        patrol.target_class = None;
+        patrol.root = sortie_shell("Sweep");
+        let mut open = placed_on("Open", 10_000.0, 12_000.0);
+        open.air_task = true;
+        open.target_label = "Bridge".into();
+        open.target_class = Some(StrikeTargetClass::Bridges);
+        open.root = sortie_shell("Open");
+        app.map_missions = vec![aimed, patrol, open];
+
+        let mut root = Il2Entity::new("Group");
+        app.stamp_missions(&mut root);
+        let packed = root
+            .children
+            .iter()
+            .any(|child| child.name() == Some("Exclusive Activation"));
+        assert!(
+            root.children
+                .iter()
+                .any(|child| child.name() == Some("Air Tasking")),
+            "sorties export on the timer"
+        );
+        assert!(!packed, "sorties stay out of Exclusive Activation");
+        let exported: Vec<Il2Entity> = root
+            .children
+            .iter()
+            .flat_map(|child| {
+                if matches!(
+                    child.name(),
+                    Some("Exclusive Activation") | Some("Air Tasking")
+                ) {
+                    child.children.clone()
+                } else {
+                    vec![child.clone()]
+                }
+            })
+            .filter(|child| super::sortie_mark(child).is_some())
+            .collect();
+        assert_eq!(
+            exported.len(),
+            3,
+            "{:?}",
+            exported.iter().map(|g| g.name()).collect::<Vec<_>>()
+        );
+
+        app.map_missions.clear();
+        for group in exported {
+            app.adopt_strike_group(group, packed).expect("sortie");
+        }
+        let aimed = app
+            .map_missions
+            .iter()
+            .find(|m| m.name == "Package")
+            .expect("Package");
+        assert!(aimed.air_task);
+        assert_eq!(aimed.target_class, Some(StrikeTargetClass::Tanks));
+        assert!(
+            aimed.target_label.starts_with("Armor"),
+            "{}",
+            aimed.target_label
+        );
+        let patrol = app
+            .map_missions
+            .iter()
+            .find(|m| m.name == "Sweep")
+            .expect("Sweep");
+        assert!(patrol.air_task);
+        assert_eq!(patrol.target_label, "Patrol");
+        assert!(patrol.target_class.is_none());
+        let open = app
+            .map_missions
+            .iter()
+            .find(|m| m.name == "Open")
+            .expect("Open");
+        assert!(open.air_task);
+        assert_eq!(open.target_label, "Unknown");
+        assert!(open.target_class.is_none());
     }
 
     fn rename_zone_and_end(root: &mut Il2Entity, zone: &str, end: &str) {
@@ -9201,5 +11723,334 @@ mod tests {
         data.set_property("RunwayEnd", "0");
         node.children.push(data);
         node
+    }
+
+    fn strike_with_payload(payload_id: i32) -> Il2Entity {
+        let mut root = node("Group", &[("Name", "Strike")]);
+        let mut plane = node(
+            "Plane",
+            &[
+                ("Name", "Lead"),
+                ("Index", "1"),
+                ("LinkTrId", "2"),
+                ("Script", r#""LuaScripts\WorldObjects\Planes\f51d.txt""#),
+                ("PayloadId", &payload_id.to_string()),
+            ],
+        );
+        plane.index = Some(1);
+        let mut entity = node("MCU_TR_Entity", &[("Index", "2")]);
+        entity.index = Some(2);
+        let mut area = node(
+            "MCU_CMD_AttackArea",
+            &[
+                ("Name", "AttackArea"),
+                ("Index", "3"),
+                ("AttackGround", "1"),
+                ("AttackGTargets", "0"),
+                ("AttackAir", "0"),
+            ],
+        );
+        area.index = Some(3);
+        area.objects = vec![2];
+        root.children.extend([plane, entity, area]);
+        root
+    }
+
+    fn placed(class: StrikeTargetClass) -> super::PlacedMission {
+        super::PlacedMission {
+            name: "Strike".into(),
+            eastern: false,
+            root: Il2Entity::new("Group"),
+            target_x: 0.0,
+            target_z: 0.0,
+            start_x: 0.0,
+            start_z: 0.0,
+            ip_x: 0.0,
+            ip_z: 0.0,
+            target_label: "Field".into(),
+            target_class: Some(class),
+            attacks: Vec::new(),
+            keep_template_attack: false,
+            sequence: 1,
+            air_task: false,
+            air_weight: 5,
+            air_runs: 1,
+            air_spread: crate::airtask::AirSpread::Even,
+            air_enabled: true,
+            air_path: None,
+            hidden: false,
+        }
+    }
+
+    #[test]
+    fn airbase_strike_without_bombs_strafes() {
+        let script = r"LuaScripts\WorldObjects\Planes\f51d.txt";
+        let bomb = crate::payloads::strike_payload_id(script).unwrap();
+        let clean = crate::payloads::catalog()
+            .for_script(script)
+            .unwrap()
+            .payloads
+            .iter()
+            .find(|p| !crate::payloads::payload_has_bombs(script, p.id))
+            .unwrap()
+            .id;
+        let app = super::super::GroupGeneratorApp::default();
+
+        let mut guns = strike_with_payload(clean);
+        guns.for_each_mut(&mut |e| {
+            if e.block_type == "MCU_CMD_AttackArea" {
+                e.set_property("Priority", "1");
+            }
+        });
+        app.arm_strike_export(&mut guns, &placed(StrikeTargetClass::Airbases));
+        let area = guns.find_by_name("AttackArea").unwrap();
+        assert_eq!(area.property("AttackGTargets"), Some("1"));
+        assert_eq!(area.property("AttackGround"), Some("0"));
+        assert_eq!(area.property("AttackAir"), Some("0"));
+        assert_eq!(area.property("Priority"), Some("1"));
+
+        let mut loaded = strike_with_payload(bomb);
+        app.arm_strike_export(&mut loaded, &placed(StrikeTargetClass::Airbases));
+        let area = loaded.find_by_name("AttackArea").unwrap();
+        assert_eq!(area.property("AttackGround"), Some("1"));
+        assert_eq!(area.property("AttackGTargets"), Some("0"));
+
+        let mut bridge = strike_with_payload(clean);
+        app.arm_strike_export(&mut bridge, &placed(StrikeTargetClass::Bridges));
+        let area = bridge.find_by_name("AttackArea").unwrap();
+        assert_eq!(area.property("AttackGround"), Some("1"));
+        assert_eq!(area.property("AttackGTargets"), Some("0"));
+    }
+
+    #[test]
+    fn unit_target_is_ground_targets_only() {
+        let app = super::super::GroupGeneratorApp::default();
+        let mut group = strike_with_payload(0);
+        let mission = placed(StrikeTargetClass::Tanks);
+        let notes = app.arm_strike_export(&mut group, &mission);
+        let area = group.find_by_name("AttackArea").unwrap();
+        assert_eq!(area.property("AttackGround"), Some("0"));
+        assert_eq!(area.property("AttackGTargets"), Some("1"));
+        assert_eq!(area.property("AttackAir"), Some("0"));
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("Attack Ground Targets only")),
+            "{notes:?}"
+        );
+
+        let mut kept = strike_with_payload(0);
+        let mut hold = placed(StrikeTargetClass::Tanks);
+        hold.keep_template_attack = true;
+        let notes = app.arm_strike_export(&mut kept, &hold);
+        assert!(notes.is_empty());
+        let area = kept.find_by_name("AttackArea").unwrap();
+        assert_eq!(area.property("AttackGround"), Some("1"));
+        assert_eq!(area.property("AttackGTargets"), Some("0"));
+    }
+
+    #[test]
+    fn open_ground_uses_attack_ground_only() {
+        let app = super::super::GroupGeneratorApp::default();
+        let mut group = strike_with_payload(0);
+        group.for_each_mut(&mut |e| {
+            if e.block_type == "MCU_CMD_AttackArea" {
+                e.set_property("AttackGround", "0");
+                e.set_property("AttackGTargets", "1");
+            }
+        });
+        let mut mission = placed(StrikeTargetClass::Tanks);
+        mission.target_class = None;
+        app.arm_strike_export(&mut group, &mission);
+        let area = group.find_by_name("AttackArea").unwrap();
+        assert_eq!(area.property("AttackGround"), Some("1"));
+        assert_eq!(area.property("AttackGTargets"), Some("0"));
+        assert_eq!(area.property("AttackAir"), Some("0"));
+    }
+
+    #[test]
+    fn escort_attack_air_is_left_alone() {
+        let app = super::super::GroupGeneratorApp::default();
+        let mut group = strike_with_payload(0);
+        let mut escort = node(
+            "MCU_CMD_AttackArea",
+            &[
+                ("Name", "Escort"),
+                ("Index", "4"),
+                ("AttackGround", "0"),
+                ("AttackGTargets", "0"),
+                ("AttackAir", "1"),
+                ("Priority", "1"),
+            ],
+        );
+        escort.index = Some(4);
+        group.children.push(escort);
+        app.arm_strike_export(&mut group, &placed(StrikeTargetClass::Tanks));
+        let strike = group.find_by_name("AttackArea").unwrap();
+        assert_eq!(strike.property("AttackGTargets"), Some("1"));
+        assert_eq!(strike.property("AttackGround"), Some("0"));
+        let escort = group.find_by_name("Escort").unwrap();
+        assert_eq!(escort.property("AttackAir"), Some("1"));
+        assert_eq!(escort.property("AttackGround"), Some("0"));
+        assert_eq!(escort.property("AttackGTargets"), Some("0"));
+        assert_eq!(escort.property("Priority"), Some("1"));
+    }
+
+    #[test]
+    fn airtask_copy_says_how_the_mission_plays() {
+        let note = super::super::air_how_it_plays();
+        for phrase in [
+            "On a timer only",
+            "no check zone",
+            "missed, not moved",
+            "Launch while a sortie is out",
+            "check zone",
+            "gold bar",
+            "180 minutes",
+            "3 hours",
+            "start immediately",
+            "one sortie is out at a time",
+            "layers on the map",
+            "Generate on the map writes them from those placements",
+        ] {
+            assert!(note.contains(phrase), "{phrase} missing from {note}");
+        }
+        let labels: Vec<&str> = super::super::AIR_CONTROLS
+            .iter()
+            .map(|(label, _)| *label)
+            .collect();
+        for need in [
+            "First wait, minutes",
+            "Minutes between tries",
+            "Skip a turn, percent",
+            "Launch chance, percent",
+            "Sorties per side",
+            "Extra minutes on target",
+            "Draw chance",
+            "Times in the order",
+            "Mission length, minutes",
+            "Zone stays open, minutes",
+            "Out at once",
+        ] {
+            assert!(labels.contains(&need), "{need} in {labels:?}");
+        }
+        for (label, hint) in super::super::AIR_CONTROLS {
+            let text = format!("{label} {hint}");
+            assert!(
+                !text.contains("Eastern") && !text.contains("Western"),
+                "{text}"
+            );
+            assert!(
+                !text.contains("Slot Ready") && !text.contains("Force Hot"),
+                "{text}"
+            );
+            assert!(
+                !text.contains("PACKAGE") && !text.contains("Stage "),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            crate::airtask::AirTrigger::Clock.label(),
+            "On a timer only"
+        );
+        assert_eq!(
+            crate::airtask::AirTrigger::Zone.label(),
+            "On a timer with check zone trigger"
+        );
+        assert!(!super::super::AIR_CONTROLS
+            .iter()
+            .any(|(label, _)| label.contains("Players")));
+    }
+
+    #[test]
+    fn airtask_sortie_is_drawn_with_the_map_missions() {
+        let mut app = super::super::GroupGeneratorApp::default();
+        assert!(!app.add_air_library_sortie(1));
+        assert!(app.map_missions.is_empty());
+        match &app.status {
+            super::super::Status::Error(text) => {
+                assert!(text.contains("Draw an area"), "{text}");
+            }
+            _ => panic!("expected a status that says to draw an area"),
+        }
+
+        app.front_aabb =
+            crate::mapclip::WorldAabb::from_corners(100_000.0, 100_000.0, 180_000.0, 180_000.0);
+        assert!(!app.add_air_library_sortie(1));
+        assert!(app.map_missions.is_empty());
+        match &app.status {
+            super::super::Status::Error(text) => {
+                assert!(text.contains("No unused DPRK"), "{text}");
+            }
+            _ => panic!("expected a status that says there is no DPRK target"),
+        }
+
+        app.map_ground_east = Some(crate::mapground::MapGroundLayout {
+            eastern: true,
+            spots: vec![crate::mapground::GroundSpot::at(
+                140_000.0,
+                140_000.0,
+                true,
+                0.0,
+                crate::mapground::GroundKind::Armor,
+                None,
+            )],
+            warnings: Vec::new(),
+        });
+        assert!(app.add_air_library_sortie(1));
+        assert_eq!(app.map_missions.len(), 1, "the map draws map_missions");
+        let mission = &app.map_missions[0];
+        assert!(mission.air_task);
+        assert!(!mission.eastern, "NATO flight");
+        assert!(
+            (mission.target_x - 140_000.0).abs() < 1.0,
+            "{}",
+            mission.target_x
+        );
+        assert!(
+            (mission.target_z - 140_000.0).abs() < 1.0,
+            "{}",
+            mission.target_z
+        );
+        assert_eq!(mission.target_label, "Tanks");
+        assert!(mission.root.find_by_name("WP 2 Prox").is_some());
+        assert!(mission.root.find_by_name("MISSION END").is_some());
+    }
+
+    #[test]
+    fn loaded_package_uses_the_group_name() {
+        let mut root = crate::ast::Il2Entity::new("Group");
+        root.set_name("Unit Template");
+        let mut inner = crate::ast::Il2Entity::new("Group");
+        inner.set_name("HVAR on the bridges");
+        root.children.push(inner);
+        assert_eq!(
+            super::package_title(&root, "file"),
+            "HVAR on the bridges"
+        );
+        root.set_name("Named package");
+        assert_eq!(super::package_title(&root, "file"), "Named package");
+    }
+
+    #[test]
+    fn strike_targets_always_list_the_generic_types() {
+        let labels: Vec<_> = super::StaticTargetKind::ALL
+            .iter()
+            .map(|kind| kind.label())
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Airfields",
+                "Bridges",
+                "Rail stations",
+                "Dams",
+                "Cities",
+                "Encampments",
+                "Ports",
+                "Mines",
+                "Industry",
+            ]
+        );
     }
 }

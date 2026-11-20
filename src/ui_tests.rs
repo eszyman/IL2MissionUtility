@@ -281,7 +281,22 @@ impl Harness {
     }
 
     fn tab(&mut self, label: &str) {
-        self.click(label);
+        match label {
+            "Fighter Pack" => {
+                self.click("Mission Tasking");
+                self.click("Fighter packs");
+            }
+            "Exclusive Activation" => {
+                self.click("Mission Tasking");
+                self.click("Exclusive plans");
+            }
+            "Air Tasking" => {
+                self.click("Mission Tasking");
+                self.click("Tasking");
+            }
+            "Airfield" => self.click("Airfields"),
+            other => self.click(other),
+        }
     }
 
     /// Step until the map textures are loaded (they decode on a thread).
@@ -355,7 +370,6 @@ fn rail_and_ctrl_numbers_switch_every_tab() {
         Key::Num3,
         Key::Num4,
         Key::Num5,
-        Key::Num6,
     ]
     .into_iter()
     .enumerate()
@@ -1058,6 +1072,44 @@ fn fighter_types_reset_confirm_and_generate() {
 }
 
 #[test]
+fn fighter_steps_change_flights_and_altitude() {
+    let mut h = Harness::new("fightersteps");
+    h.tab("Fighter Pack");
+    let flights = h.app.flight_count;
+    let in_flight = h.app.max_in_flight;
+    let low = h.app.altitude_min;
+    let high = h.app.altitude_max;
+    let between = |h: &Harness, mark: &str, above: f32, below: f32| {
+        h.all(mark)
+            .into_iter()
+            .find(|n| n.rect.top() >= above - 2.0 && n.rect.top() < below)
+            .unwrap_or_else(|| panic!("{mark} between {above} and {below}"))
+    };
+    let flights_bottom = h.find("Flights").rect.bottom();
+    let in_flight_top = h.find("Max in a flight").rect.top();
+    let in_flight_bottom = h.find("Max in a flight").rect.bottom();
+    let country_top = h.find("COUNTRY").rect.top();
+    h.click_at(between(&h, "+", flights_bottom, in_flight_top).rect.center());
+    assert_eq!(h.app.flight_count, flights + 1);
+    h.click_at(between(&h, "+", in_flight_bottom, country_top).rect.center());
+    assert_eq!(h.app.max_in_flight, in_flight + 1);
+    let on_row = |h: &Harness, mark: &str, y: f32| {
+        h.all(mark)
+            .into_iter()
+            .find(|n| (n.rect.center().y - y).abs() < 16.0)
+            .unwrap_or_else(|| panic!("{mark} on the row at {y}"))
+    };
+    let min_y = h.find("Min").rect.center().y;
+    let max_y = h.find("Max").rect.center().y;
+    h.click_at(on_row(&h, "+", min_y).rect.center());
+    h.click_at(on_row(&h, "+", max_y).rect.center());
+    assert!((h.app.altitude_min - (low + 100.0)).abs() < 0.1);
+    assert!((h.app.altitude_max - (high + 100.0)).abs() < 0.1);
+    h.click_at(between(&h, "-", flights_bottom, in_flight_top).rect.center());
+    assert_eq!(h.app.flight_count, flights);
+}
+
+#[test]
 fn fighter_preview_sentence_table_and_empty_state() {
     let mut h = Harness::new("fighter_preview");
     h.tab("Fighter Pack");
@@ -1560,6 +1612,11 @@ fn airbases_in_the_map_area_mark_missing_data() {
         tiny_named_group_at("Yonpo", "200000.000", "20000.000"),
     )
     .unwrap();
+    std::fs::write(
+        db.join("Justout_502.Group"),
+        tiny_named_group_at("Justout", "165000.000", "150000.000"),
+    )
+    .unwrap();
     let mut catalog = crate::ast::Il2Entity::new("Group");
     catalog.set_name("AirfieldDB");
     let mut missing = crate::ast::Il2Entity::new("AirfieldRecord");
@@ -1610,6 +1667,16 @@ fn airbases_in_the_map_area_mark_missing_data() {
     assert!(notice_under(&wonsan), "Wonsan has no harvested file");
     assert!(notice_under(&kimpo), "Kimpo has no runway group");
     assert!(!h.has("Yonpo"), "Yonpo is outside the map area");
+    let justout = h
+        .app
+        .airbases
+        .iter()
+        .find(|slot| slot.info.name == "Justout")
+        .expect("Justout was scanned");
+    assert!(
+        !h.app.airbase_in_play(justout),
+        "a field 5 km outside the box stays off the list"
+    );
 }
 
 #[test]
@@ -1753,6 +1820,58 @@ fn two_country_files_keep_the_side_that_holds_the_field() {
 }
 
 #[test]
+fn map_strike_uses_the_airbase_on_that_side_of_the_front() {
+    let mut h = Harness::new("map_strike_airbase");
+    let db = PathBuf::from(&h.app.harvest_db_dir);
+    std::fs::create_dir_all(&db).unwrap();
+    let write_field = |country: i32| {
+        let mut root = crate::ast::Il2Entity::new("Group");
+        root.set_name("K-23_Pyongyang_AF");
+        root.index = Some(1);
+        root.set_property("Index", "1");
+        root.set_property("Desc", "\"\"");
+        let mut field = crate::ast::Il2Entity::new("Airfield");
+        field.set_name("K-23_Pyongyang_AF");
+        field.index = Some(2);
+        field.set_property("Index", "2");
+        field.set_property("LinkTrId", "3");
+        field.set_property("XPos", "150000.000");
+        field.set_property("YPos", "0.000");
+        field.set_property("ZPos", "150000.000");
+        field.set_property("Country", country.to_string());
+        root.children.push(field);
+        std::fs::write(
+            db.join(format!("K-23_Pyongyang_AF_{country}.Group")),
+            crate::serialize::serialize_group(&root),
+        )
+        .unwrap();
+    };
+    write_field(503);
+    write_field(601);
+    h.app.front_aabb =
+        crate::mapclip::WorldAabb::from_corners(140_000.0, 140_000.0, 160_000.0, 160_000.0);
+    h.app.custom_front_xz = vec![(148_000.0, 0.0), (148_000.0, 499_200.0)];
+    h.tab("Map");
+    assert!(
+        !h.has("Airbase loaded twice"),
+        "map mode keeps the side of the front and does not ask: {:?}",
+        h.labels()
+    );
+    h.app.map_strike_focus = super::map::StrikeFocus::Airbases;
+    let nato_flight = h.app.strike_objectives(false);
+    assert_eq!(
+        nato_flight.len(),
+        1,
+        "a NATO strike sees the DPRK field north of the front: {nato_flight:?}"
+    );
+    let dprk_flight = h.app.strike_objectives(true);
+    assert!(
+        dprk_flight.is_empty(),
+        "the NATO copy is not a target: {dprk_flight:?}"
+    );
+}
+
+#[test]
 fn airfield_drops_the_coalition_on_the_wrong_side_of_the_front() {
     let mut h = Harness::new("airfield_side");
     let db = PathBuf::from(&h.app.harvest_db_dir);
@@ -1797,9 +1916,9 @@ fn airfield_drops_the_coalition_on_the_wrong_side_of_the_front() {
         "north of the 38th keeps DPRK: {listed:?}"
     );
     assert!(
-        listed.iter().all(|name| {
-            name != "Suwon_502.Group" && name != "Yonpo_601.Group" && name != "SoloSouth_502.Group"
-        }),
+        listed
+            .iter()
+            .all(|name| name != "Suwon_502.Group" && name != "Yonpo_601.Group" && name != "SoloSouth_502.Group"),
         "the wrong coalition is left out when no front is drawn: {listed:?}"
     );
 
@@ -2038,12 +2157,13 @@ fn airfield_panels_order_and_wording() {
     let mut h = Harness::new("airfield_panels");
     h.tab("Airfield");
     let get = h.find("GET THE FILE").rect.top();
-    let side = h.find("FRIENDLY PLANE COALITION").rect.top();
     let harvest = h.find("HARVEST AUTOMATICALLY").rect.top();
+    let side = h.find("FRIENDLY PLANE COALITION").rect.top();
     assert!(
-        get < side && side < harvest,
-        "Get the file, coalition, then the harvester"
+        get < harvest && harvest < side,
+        "Harvester rollup, then coalition"
     );
+    assert!(h.has("Checkzone Logic"));
     assert!(
         h.has("Load a Freeflight airfield from _gen.mission, then generate the cleaned group.")
     );
@@ -2108,9 +2228,9 @@ fn air_start_bank_reaches_the_map() {
     );
     assert_eq!(h.app.air_starts[0].country(), 502);
     h.tab("Map");
-    h.click("Forces");
-    assert!(h.has("Air start 1 · DPRK"));
-    assert!(h.has("Place"));
+    assert!(h.has("DPRK air start"), "{:?}", h.labels());
+    h.click("DPRK air start");
+    assert_eq!(h.app.air_start_place, Some(0));
 }
 
 #[test]
@@ -2198,7 +2318,7 @@ fn field_spawn_planes_are_not_the_air_start_list() {
     h.tab("Airfield");
     assert!(h.has("FIELD SPAWN"));
     assert!(h.has("AIR STARTS"));
-    assert!(h.has("Export field spawn…"));
+    assert!(!h.has("Export field spawn…"));
     h.app.field_planes[0].type_id = "mig15bis".into();
     h.app.field_planes[0].parking_snap = true;
     h.app.field_planes[0].fuel = 0.4;
@@ -2222,7 +2342,7 @@ fn each_tab_keeps_its_own_status() {
     h.tab("Airfield");
     assert_ne!(h.status(), "Fighter message", "a message stays on its tab");
     h.app.status = Status::Error("Airfield message".into());
-    h.key_with(Key::Num3, CTRL);
+    h.key_with(Key::Num4, CTRL);
     assert_eq!(h.status(), "Fighter message");
     h.tab("Airfield");
     assert_eq!(h.status(), "Airfield message");
@@ -2509,9 +2629,8 @@ fn map_load_imports_air_starts_and_field_aircraft() {
     assert_eq!(slot.planes[0].type_id, "f86a5");
     assert!(!slot.planes[0].parking_snap);
 
-    h.click("Forces");
-    assert!(h.has("CAP North · DPRK"), "{:?}", h.labels());
-    assert!(h.has("CAP North · 45°"), "{:?}", h.labels());
+    assert!(h.has("DPRK air start"), "{:?}", h.labels());
+    assert!(h.has("NATO air start"), "{:?}", h.labels());
     h.tab("Airfield");
     assert!(h.has("CAP North · 45°"), "{:?}", h.labels());
 }
@@ -2593,7 +2712,7 @@ fn map_dock_tabs_all_render() {
     let mut h = Harness::new("dock");
     h.tab("Map");
     for (tab, marker) in [
-        ("Forces", "FIGHTERS"),
+        ("Forces", "LAYERS"),
         ("References 0", "Add reference groups…"),
         ("Terrain", "HEIGHT STORE"),
         ("Period", "DRAWN MARKS"),
@@ -2733,7 +2852,7 @@ fn map_places_fighters_from_the_forces_dock() {
     let mut h = Harness::new("placefighters");
     h.tab("Map");
     h.wait_for_map();
-    h.click("Forces");
+    h.tab("Mission Tasking");
     // The Fighters section's Place DPRK (Units has one too, further down).
     let place = h
         .all("Place DPRK")
@@ -2745,7 +2864,7 @@ fn map_places_fighters_from_the_forces_dock() {
     assert!(n > 0, "no fighters placed: {}", h.status());
     assert!(h.has_prefix("DPRK: "), "count line shows: {:?}", h.labels());
     // Clear DPRK (the one in the Fighters section), then undo.
-    let fighters_top = h.find("FIGHTERS").rect.top();
+    let fighters_top = h.find("AUTOMATIC FIGHTERS").rect.top();
     let clear = h
         .all("Clear DPRK")
         .into_iter()
@@ -2759,17 +2878,45 @@ fn map_places_fighters_from_the_forces_dock() {
 }
 
 #[test]
+fn tasking_library_opens_in_the_center() {
+    let mut h = Harness::new("stagepackage");
+    h.tab("Mission Tasking");
+    let fighters = h.find("AUTOMATIC FIGHTERS").rect.top();
+    let library = h.find("AIR SUPPORT LIBRARY").rect.top();
+    let missions = h.find("MISSIONS").rect.top();
+    let units = h.find("UNITS").rect.top();
+    assert!(
+        fighters < library && library < missions && missions < units,
+        "column order fighters {fighters} library {library} missions {missions} units {units}"
+    );
+    assert!(h.has("Load package…"));
+    h.click("F-80C air alert");
+    assert!(
+        h.app.map_missions.is_empty(),
+        "a package is not placed until the mission is set"
+    );
+    assert!(h.app.air_draft.is_some());
+    assert!(h.has("Fighter Sweep"));
+    assert!(h.has("Strike"));
+    h.click("Strike");
+    assert!(h.has("Airfields"));
+    assert!(h.has("Imported units"));
+    assert!(h.has("Home base"));
+    assert!(h.has("Add to missions"));
+}
+
+#[test]
 fn map_load_fighter_pack_uses_fighter_icons() {
     let mut h = Harness::new("loadfighters");
     h.tab("Map");
     h.wait_for_map();
-    h.click("Forces");
+    h.tab("Mission Tasking");
     h.app.fighter_waves = 2;
     h.app.fighter_fill = false;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("TemplateExamples/Eastern_Fighters_Random_5pack_V6.Group");
     dialog::answer(vec![path]);
-    let fighters_top = h.find("FIGHTERS").rect.top();
+    let fighters_top = h.find("AUTOMATIC FIGHTERS").rect.top();
     let units = h.find("UNITS").rect.top();
     let load = h
         .all("Load DPRK…")
@@ -2942,7 +3089,7 @@ fn map_tool_icons_are_painted_inside_their_box() {
     // Painted line icons (mockup 2f), not font glyphs: each has strokes that
     // stay inside the 24-unit viewBox the painter scales to 18 px.
     use shell::ToolIcon::*;
-    for icon in [Select, Front, Salient, Arrow, Objective, Undo, Redo] {
+    for icon in [Select, Front, Salient, Arrow, Objective, AirStart, Undo, Redo] {
         let paths = shell::tool_icon_paths(icon);
         assert!(!paths.is_empty(), "{icon:?} has no strokes");
         for (pts, _) in paths {
@@ -3255,8 +3402,8 @@ fn help_closes_on_escape_and_shortcuts_still_work() {
     assert!(h.app.help_open);
     h.key(Key::Escape);
     assert!(!h.app.help_open, "Esc closes Help");
-    h.key_with(Key::Num6, CTRL);
-    assert!(h.app.mode == AppMode::Map, "Ctrl 6 still switches tabs");
+    h.key_with(Key::Num1, CTRL);
+    assert!(h.app.mode == AppMode::Map, "Ctrl 1 still switches to Map");
     h.key(Key::F1);
     assert!(h.app.help_open && h.app.help_topic == HelpTopic::Front);
 }
@@ -3298,13 +3445,14 @@ fn every_ui_glyph_is_in_a_loaded_font() {
 #[test]
 fn side_panel_controls_stay_inside_their_panel() {
     // (tab, left panel width, right panel width), after the 172 px rail.
-    const PANELS: [(&str, f32, f32); 6] = [
+    const PANELS: [(&str, f32, f32); 7] = [
         ("Template", 270.0, 304.0),
         ("Army Generator", 330.0, 300.0),
         ("Fighter Pack", 270.0, 304.0),
         ("Exclusive Activation", 290.0, 290.0),
-        ("Airfield", 290.0, 270.0),
+        ("Airfields", 290.0, 270.0),
         ("Map", 56.0, 304.0),
+        ("Air Tasking", 290.0, 290.0),
     ];
     let mut h = Harness::new("panelfit");
     let mut out = Vec::new();
@@ -3482,4 +3630,45 @@ fn map_ao_resize_and_reset_are_undoable() {
     assert_eq!(h.app.undo_label().as_deref(), Some("Reset AO"));
     h.key_with(Key::Z, CTRL);
     assert_eq!(h.app.front_aabb, resized, "Ctrl Z restores the resized AO");
+}
+
+fn timeline_mission(name: &str, eastern: bool, weight: i32, runs: u32) -> super::map::PlacedMission {
+    super::map::PlacedMission {
+        name: name.to_string(),
+        eastern,
+        root: crate::ast::Il2Entity::new("Group"),
+        target_x: 0.0,
+        target_z: 0.0,
+        start_x: 0.0,
+        start_z: 0.0,
+        ip_x: 0.0,
+        ip_z: 0.0,
+        target_label: "Patrol".into(),
+        target_class: None,
+        attacks: Vec::new(),
+        keep_template_attack: false,
+        sequence: 1,
+        air_task: true,
+        air_weight: weight,
+        air_runs: runs,
+        air_spread: crate::airtask::AirSpread::Even,
+        air_enabled: true,
+        air_path: None,
+        hidden: false,
+    }
+}
+
+#[test]
+fn timeline_route_uses_the_map_distance() {
+    let mut strike = timeline_mission("Strike", true, 2, 1);
+    strike.start_x = 0.0;
+    strike.start_z = 0.0;
+    strike.ip_x = 10_000.0;
+    strike.ip_z = 0.0;
+    strike.target_x = 10_000.0;
+    strike.target_z = 10_000.0;
+    let secs = super::mission_flight_secs(&strike);
+    let meters = 10_000.0 + 10_000.0 + (10_000.0_f64.hypot(10_000.0));
+    let expect = crate::airtask::flight_secs(meters, 100.0);
+    assert!((secs - expect).abs() < 1.0, "{secs} vs {expect}");
 }

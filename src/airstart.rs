@@ -52,6 +52,9 @@ pub struct AirStartPlane {
     /// Field spawn only. Air starts ignore this and still write `StartType` 0
     /// and `SnapTo` 0. `true` is engine off, snapped to parking.
     pub parking_snap: bool,
+    /// Editor `Name`. Empty means the automatic start-and-load name
+    /// (`In air - Strike 2`, `At ramp - Long range`). A typed value is kept.
+    pub name: String,
 }
 
 /// One fake field in the bank. `nato` is the coalition; `heading_deg` is `YOri`.
@@ -116,6 +119,7 @@ pub fn default_plane(type_id: &str) -> AirStartPlane {
         rtb: true,
         number: -1,
         parking_snap: false,
+        name: String::new(),
     }
 }
 
@@ -307,13 +311,13 @@ pub fn plane_entry(
     e.set_property("Spotter", "-1");
     e.set_property("Model", quoted(&model));
     e.set_property("Script", quoted(&script));
-    e.set_property("Name", "\"\"");
     e.set_property("Skin", "\"\"");
     e.set_property("BotSkin", "\"\"");
     e.set_property("AvMods", "\"\"");
     e.set_property("AvSkins", "\"\"");
     e.set_property("AvPayloads", "\"\"");
     e.set_property("AvBotSkins", "\"\"");
+    e.set_property("Name", quoted(&written_plane_name(plane, start_type, snap_to)));
     e.set_property("Callsign", callsign.to_string());
     e.set_property("Callnum", "0");
     e.set_property("TCode", "\"\"");
@@ -326,6 +330,46 @@ pub fn plane_entry(
 
 fn plane_block(plane: &AirStartPlane, callsign: i32) -> Il2Entity {
     plane_entry(plane, callsign, 0, plane.altitude_m, 0)
+}
+
+/// Fuel at or above this is a long-range load. 0.95 is 95%.
+const LONG_RANGE_FUEL: f64 = 0.95;
+
+/// Plane `Name` when the user has not typed one. Snap To wins over Start Type.
+/// Payload 0 is Clean, payload N is `Strike N`, and fuel at or above
+/// [`LONG_RANGE_FUEL`] replaces Clean or follows the strike.
+pub fn automatic_plane_name(start_type: i32, snap_to: i32, payload_id: i32, fuel: f64) -> String {
+    let condition = if snap_to == 2 {
+        "Parked"
+    } else if snap_to == 1 {
+        "On runway"
+    } else if start_type == 2 || start_type == 3 {
+        "Parked"
+    } else if start_type == 1 {
+        "At ramp"
+    } else {
+        "In air"
+    };
+    let long_range = fuel >= LONG_RANGE_FUEL;
+    let load = if payload_id > 0 && long_range {
+        format!("Strike {payload_id} - Long range")
+    } else if payload_id > 0 {
+        format!("Strike {payload_id}")
+    } else if long_range {
+        "Long range".to_string()
+    } else {
+        "Clean".to_string()
+    };
+    format!("{condition} - {load}")
+}
+
+/// The name written on the plane. A typed name wins. Otherwise the automatic one.
+pub fn written_plane_name(plane: &AirStartPlane, start_type: i32, snap_to: i32) -> String {
+    let custom = plane.name.replace('"', "").trim().to_string();
+    if !custom.is_empty() {
+        return custom;
+    }
+    automatic_plane_name(start_type, snap_to, plane.payload_id, plane.fuel)
 }
 
 fn set_pos(e: &mut Il2Entity, x: f64, y: f64, z: f64, heading: f64) {
@@ -511,6 +555,12 @@ fn plane_from_entry(entry: &Il2Entity) -> Option<AirStartPlane> {
     let start = prop_int(entry, "StartType").unwrap_or(0);
     let snap = prop_int(entry, "SnapTo").unwrap_or(0);
     plane.parking_snap = snap == 2 || start == 2 || start == 3;
+    if let Some(raw) = entry.name() {
+        let auto = automatic_plane_name(start, snap, plane.payload_id, plane.fuel);
+        if !raw.is_empty() && raw != auto {
+            plane.name = raw.to_string();
+        }
+    }
     Some(plane)
 }
 
@@ -768,7 +818,50 @@ mod tests {
         assert_eq!(plane.property("StartType"), Some("0"));
         assert_eq!(plane.property("SnapTo"), Some("0"));
         assert_eq!(plane.property("Altitude"), Some("1500"));
-        assert_eq!(plane.property("Name"), Some("\"\""));
+        assert_eq!(plane.property("Name"), Some("\"In air - Clean\""));
+    }
+
+    #[test]
+    fn air_start_name_follows_the_load_and_keeps_a_typed_name() {
+        let mut field = default_field("CAP North", true);
+        field.planes[0].payload_id = 2;
+        field.planes[0].fuel = 1.0;
+        let group = field_group(&field, 10_000.0, 10_000.0, 0.0);
+        let air = group
+            .children
+            .iter()
+            .find(|c| c.block_type == "Airfield")
+            .unwrap();
+        let plane = &air
+            .children
+            .iter()
+            .find(|c| c.block_type == "Planes")
+            .unwrap()
+            .children[0];
+        assert_eq!(
+            plane.property("Name"),
+            Some("\"In air - Strike 2 - Long range\"")
+        );
+        let read = read_mission(&group);
+        assert!(read.air_starts[0].field.planes[0].name.is_empty());
+
+        field.planes[0].name = "Dawn patrol".into();
+        let named = field_group(&field, 10_000.0, 10_000.0, 0.0);
+        let again = read_mission(&named);
+        assert_eq!(again.air_starts[0].field.planes[0].name, "Dawn patrol");
+        let rewritten = field_group(&again.air_starts[0].field, 10_000.0, 10_000.0, 0.0);
+        let kept = rewritten
+            .children
+            .iter()
+            .find(|c| c.block_type == "Airfield")
+            .unwrap()
+            .children
+            .iter()
+            .find(|c| c.block_type == "Planes")
+            .unwrap()
+            .children[0]
+            .property("Name");
+        assert_eq!(kept, Some("\"Dawn patrol\""));
     }
 
     #[test]

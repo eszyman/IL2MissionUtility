@@ -3,12 +3,20 @@
 //! File layout: `WMAP` + width:u32 LE + height:u32 LE + width×height
 //! bytes. Pixel (0,0) is the north-west corner of the mission square
 //! (`geo::MAP_MIN`/`MAP_MAX`). Each byte is a bitfield: water `& 1`,
-//! road `& 2` (reserved), open `& 4`. `WaterMap` is a historical alias
-//! for `TerrainMap`. It does not place units — ship/ground code queries
-//! `is_water_xz` / `is_open_xz` / `is_land_xz`.
+//! road `& 2` (reserved), open `& 4`, woods `& 8`. `WaterMap` is a
+//! historical alias for `TerrainMap`. It does not place units — ship and
+//! ground code query `is_water_xz` / `is_open_xz` / `is_woods_xz` /
+//! `is_land_xz`. A query is one byte. Nothing here opens an editor photograph.
+//!
+//! MapHelper writes water, road, and the coarse open bit. Woods, and the
+//! open-bit corrections that follow from them, are baked offline from
+//! `References/MapCapture` tiles:
+//! `py -3 tools/mapcapture/bake_woods.py`
+//! Run that again after MapHelper rebuilds the bin. The cell is about 111 m,
+//! so a copse smaller than the cell can still read as open.
 //!
 //! ## Public API
-//! * `FLAG_WATER` / `FLAG_ROAD` / `FLAG_OPEN`
+//! * `FLAG_WATER` / `FLAG_ROAD` / `FLAG_OPEN` / `FLAG_WOODS`
 //! * `struct TerrainMap` (`from_bytes`, `builtin`, cell / xz queries)
 //! * `type WaterMap = TerrainMap`
 //!
@@ -22,6 +30,8 @@ use crate::geo::{MAP_MAX, MAP_MIN};
 pub const FLAG_WATER: u8 = 1;
 pub const FLAG_ROAD: u8 = 2;
 pub const FLAG_OPEN: u8 = 4;
+/// Olive woods on the editor map, baked by `tools/mapcapture/bake_woods.py`.
+pub const FLAG_WOODS: u8 = 8;
 
 pub struct TerrainMap {
     pub width: u32,
@@ -84,7 +94,14 @@ impl TerrainMap {
     #[inline]
     pub fn is_open_cell(&self, x: u32, y: u32) -> bool {
         let b = self.cell(x, y);
-        b & FLAG_OPEN != 0 && b & FLAG_WATER == 0
+        b & FLAG_OPEN != 0 && b & FLAG_WATER == 0 && b & FLAG_WOODS == 0
+    }
+
+    /// Photographed woods. Water wins, so a wet cell is never woods.
+    #[inline]
+    pub fn is_woods_cell(&self, x: u32, y: u32) -> bool {
+        let b = self.cell(x, y);
+        b & FLAG_WOODS != 0 && b & FLAG_WATER == 0
     }
 
     /// Dry cell (not water). Forests, hills, and clearings all count.
@@ -123,6 +140,11 @@ impl TerrainMap {
             .is_some_and(|(gx, gy)| self.is_open_cell(gx, gy))
     }
 
+    pub fn is_woods_xz(&self, x: f64, z: f64) -> bool {
+        self.world_to_cell(x, z)
+            .is_some_and(|(gx, gy)| self.is_woods_cell(gx, gy))
+    }
+
     pub fn is_land_xz(&self, x: f64, z: f64) -> bool {
         self.world_to_cell(x, z)
             .is_some_and(|(gx, gy)| self.is_land_cell(gx, gy))
@@ -149,6 +171,7 @@ mod tests {
         assert!(!map.is_water_cell(0, 0));
         assert!(map.is_water_cell(1, 0));
         assert!(map.is_open_cell(0, 1));
+        assert!(!map.is_woods_cell(0, 1));
         assert!(!map.is_open_cell(1, 1), "water+open should not host ground");
         assert!(map.is_water_cell(1, 1));
         assert!(map.is_land_cell(0, 0), "unmarked dry cell is land");
@@ -156,6 +179,23 @@ mod tests {
         assert!(!map.is_land_cell(1, 0));
         assert!(!map.is_land_cell(1, 1));
         assert!(!map.is_water_cell(2, 0));
+    }
+
+    #[test]
+    fn woods_bit_closes_open_ground() {
+        // open, woods, open+woods, water+woods
+        let map = TerrainMap::from_bytes(&packed(2, 2, &[4, 8, 12, 9])).unwrap();
+        assert!(map.is_open_cell(0, 0));
+        assert!(!map.is_woods_cell(0, 0));
+        assert!(map.is_woods_cell(1, 0));
+        assert!(!map.is_open_cell(1, 0));
+        assert!(
+            map.is_woods_cell(0, 1) && !map.is_open_cell(0, 1),
+            "woods closes a cell even when the open bit is still set"
+        );
+        assert!(!map.is_woods_cell(1, 1), "water is not woods");
+        assert!(!map.is_open_cell(1, 1));
+        assert!(map.is_water_cell(1, 1));
     }
 
     #[test]
@@ -179,8 +219,43 @@ mod tests {
         assert!(
             map.grid
                 .iter()
-                .any(|b| b & FLAG_OPEN != 0 && b & FLAG_WATER == 0),
+                .any(|b| b & FLAG_OPEN != 0 && b & FLAG_WATER == 0 && b & FLAG_WOODS == 0),
             "terrain mask should include dry open ground"
         );
+        assert!(
+            map.grid.iter().any(|b| b & FLAG_WOODS != 0),
+            "terrain mask should include baked woods"
+        );
+        assert!(
+            map.grid
+                .iter()
+                .all(|b| b & FLAG_WOODS == 0 || b & FLAG_WATER == 0),
+            "water stays water, not woods"
+        );
+        assert!(
+            map.grid
+                .iter()
+                .all(|b| b & FLAG_WOODS == 0 || b & FLAG_OPEN == 0),
+            "a woods cell is not open"
+        );
+        let woods_at = map
+            .grid
+            .iter()
+            .position(|b| b & FLAG_WOODS != 0)
+            .expect("woods cell");
+        let gx = (woods_at as u32) % map.width;
+        let gy = (woods_at as u32) / map.width;
+        let span = MAP_MAX - MAP_MIN;
+        let z = (f64::from(gx) + 0.5) / f64::from(map.width) * span;
+        let x = MAP_MAX - (f64::from(gy) + 0.5) / f64::from(map.height) * span;
+        assert!(map.is_woods_xz(x, z));
+        assert!(!map.is_open_xz(x, z));
+        assert!(map.is_land_xz(x, z));
+        // Cell centers from the baked editor tiles: an olive hill, and a beige valley.
+        assert!(map.is_woods_xz(410_673.28, 136_372.52));
+        assert!(!map.is_open_xz(410_673.28, 136_372.52));
+        assert!(map.is_open_xz(398_066.11, 226_843.50));
+        assert!(!map.is_woods_xz(398_066.11, 226_843.50));
+        assert!(!map.is_water_xz(398_066.11, 226_843.50));
     }
 }

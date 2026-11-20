@@ -169,6 +169,21 @@ impl AircraftLoadout {
     }
 }
 
+/// True when this loadout carries a bomb. Rockets, fuel, and a clean jet are not bombs.
+pub fn payload_has_bombs(script: &str, payload_id: i32) -> bool {
+    let cat = catalog();
+    let Some(ac) = cat.for_script(script) else {
+        return false;
+    };
+    let Some(payload) = ac.payload(payload_id) else {
+        return false;
+    };
+    payload
+        .columns
+        .iter()
+        .any(|(_, value)| cell_ordnance(cat, value) == Some("bomb"))
+}
+
 /// First payload that carries a bomb, or a rocket when the aircraft has no bombs.
 /// Fuel tanks, flares, and a clean jet are skipped.
 pub fn strike_payload_id(script: &str) -> Option<i32> {
@@ -784,7 +799,14 @@ mod tests {
     fn parses_western_and_soviet_payloads() {
         let cat = catalog();
         let f80 = cat.for_script("f80c10.txt").expect("F-80C-10");
-        assert!(f80.payloads.len() >= 50);
+        assert!(f80.payloads.len() >= 73);
+        assert!(
+            f80.payload(72)
+                .unwrap()
+                .summary()
+                .contains("AN-M26A1"),
+            "payload 72 is the tip-tank flare load"
+        );
         let p5 = f80.payload(5).expect("payload 5");
         let summary = p5.summary();
         assert!(summary.contains("Drop Tank 165"), "{summary}");
@@ -816,6 +838,22 @@ mod tests {
     fn unknown_aircraft_has_no_table() {
         assert!(catalog().for_script("t34-85.txt").is_none());
         assert!(catalog().for_script("la11.txt").is_none());
+    }
+
+    #[test]
+    fn payload_has_bombs_reads_the_selected_loadout() {
+        let script = r"LuaScripts\WorldObjects\Planes\f51d.txt";
+        let bomb = strike_payload_id(script).expect("F-51D has a bomb loadout");
+        assert!(payload_has_bombs(script, bomb));
+        let clean = catalog()
+            .for_script(script)
+            .unwrap()
+            .payloads
+            .iter()
+            .find(|p| !payload_has_bombs(script, p.id))
+            .expect("F-51D has a loadout with no bombs");
+        assert!(!payload_has_bombs(script, clean.id));
+        assert!(!payload_has_bombs("no-such-plane", 0));
     }
 
     #[test]

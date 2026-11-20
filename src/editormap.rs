@@ -3,46 +3,16 @@
 //! The stitched TIFF is the same picture at full resolution and is too large
 //! to keep open. This module reads `References/MapCapture`: one PNG per view,
 //! plus the calibration that places it on the Korea square. The Map tab draws
-//! the tiles that intersect the current zoom. Ground placement uses the same
-//! pixels to tell a beige field from marked woods.
-//!
-//! The coarse terrain mask stays in charge of water. A wood reading removes
-//! open ground. A field reading adds dry land the coarse mask left closed.
-//! Anything else (a contour, the grid, no tile) keeps the coarse answer.
-//! Placement only consults the tiles inside [`CoverGuard`].
+//! the tiles that intersect the current zoom. Ground placement does not read
+//! them. Open ground and woods come from the packed terrain mask. Woods are
+//! baked into that mask offline (`py -3 tools/mapcapture/bake_woods.py`),
+//! using the same olive and beige test as `classify_rgb`.
 
-use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use image::RgbaImage;
-
-use crate::geo::{MAP_MAX, MAP_MIN};
-
-const CACHE_TILES: usize = 6;
-
-thread_local! {
-    static COVER_ON: Cell<bool> = const { Cell::new(false) };
-}
-
 static INSTALLED: OnceLock<EditorMap> = OnceLock::new();
-
-/// Turns tile reads on for the current thread and off again when dropped.
-pub struct CoverGuard;
-
-impl CoverGuard {
-    pub fn enter() -> Self {
-        COVER_ON.set(true);
-        Self
-    }
-}
-
-impl Drop for CoverGuard {
-    fn drop(&mut self) {
-        COVER_ON.set(false);
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cover {
@@ -68,7 +38,6 @@ pub struct EditorMap {
     pub tile_h: u32,
     tiles: Vec<TileRef>,
     buckets: HashMap<(i32, i32), Vec<usize>>,
-    cache: std::sync::Mutex<VecDeque<(i32, i32, RgbaImage)>>,
 }
 
 pub fn install(map: EditorMap) {
@@ -81,14 +50,6 @@ pub fn with_installed<R>(f: impl FnOnce(&EditorMap) -> R) -> Option<R> {
 
 fn bucket_key(m: f64) -> i32 {
     (m / 20_000.0).floor() as i32
-}
-
-/// Woods and fields for one ground sample. `None` keeps the coarse mask.
-pub fn placement_cover(x: f64, z: f64) -> Option<Cover> {
-    if !COVER_ON.get() {
-        return None;
-    }
-    INSTALLED.get()?.cover_at(x, z)
 }
 
 impl EditorMap {
@@ -158,7 +119,6 @@ impl EditorMap {
             tile_h,
             tiles,
             buckets: HashMap::new(),
-            cache: std::sync::Mutex::new(VecDeque::new()),
         };
         let mut buckets: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for (i, tile) in map.tiles.iter().enumerate() {
@@ -182,63 +142,38 @@ impl EditorMap {
         (x0, tile.x_top, tile.z_left, z1)
     }
 
-    /// Tiles that meet the world box `(x0, x1, z0, z1)`, south-west first.
+    /// Tiles that meet the world box `(x0, x1, z0, z1)`. The bucket index
+    /// keeps a pan from walking every tile on the map.
     pub fn tiles_touching(&self, x0: f64, x1: f64, z0: f64, z1: f64) -> Vec<&TileRef> {
-        self.tiles
-            .iter()
-            .filter(|tile| {
-                let (sx, nx, wz, ez) = self.tile_bounds(tile);
-                nx > x0 && sx < x1 && ez > z0 && wz < z1
-            })
-            .collect()
-    }
-
-    fn tile_at(&self, x: f64, z: f64) -> Option<&TileRef> {
-        let indexes: Vec<usize> =
-            if let Some(hits) = self.buckets.get(&(bucket_key(x), bucket_key(z))) {
-                hits.clone()
-            } else if self.buckets.is_empty() {
-                (0..self.tiles.len()).collect()
-            } else {
-                return None;
-            };
-        indexes.into_iter().find_map(|i| {
-            let tile = &self.tiles[i];
+        let hits = |tile: &TileRef| {
             let (sx, nx, wz, ez) = self.tile_bounds(tile);
-            (x >= sx && x <= nx && z >= wz && z <= ez).then_some(tile)
-        })
+            nx > x0 && sx < x1 && ez > z0 && wz < z1
+        };
+        if self.buckets.is_empty() {
+            return self.tiles.iter().filter(|tile| hits(tile)).collect();
+        }
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        let mut ix = bucket_key(x0);
+        let ix1 = bucket_key(x1);
+        let iz1 = bucket_key(z1);
+        while ix <= ix1 {
+            let mut iz = bucket_key(z0);
+            while iz <= iz1 {
+                if let Some(indexes) = self.buckets.get(&(ix, iz)) {
+                    for &i in indexes {
+                        if seen.insert(i) && hits(&self.tiles[i]) {
+                            out.push(&self.tiles[i]);
+                        }
+                    }
+                }
+                iz += 1;
+            }
+            ix += 1;
+        }
+        out
     }
 
-    pub fn cover_at(&self, x: f64, z: f64) -> Option<Cover> {
-        if !(MAP_MIN..=MAP_MAX).contains(&x) || !(MAP_MIN..=MAP_MAX).contains(&z) {
-            return None;
-        }
-        let tile = self.tile_at(x, z)?;
-        let col = ((z - tile.z_left) / self.mpp_z).floor() as i32;
-        let row = ((tile.x_top - x) / self.mpp_x).floor() as i32;
-        self.with_image(tile, |image| vote_cover(image, col, row))?
-    }
-
-    fn with_image<T>(&self, tile: &TileRef, f: impl FnOnce(&RgbaImage) -> T) -> Option<T> {
-        {
-            let cache = self.cache.lock().ok()?;
-            if let Some((_, _, image)) = cache
-                .iter()
-                .find(|(r, c, _)| *r == tile.row && *c == tile.col)
-            {
-                return Some(f(image));
-            }
-        }
-        let img = image::open(&tile.path).ok()?.to_rgba8();
-        let result = f(&img);
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.push_front((tile.row, tile.col, img));
-            while cache.len() > CACHE_TILES {
-                cache.pop_back();
-            }
-        }
-        Some(result)
-    }
 }
 
 /// One editor-map pixel. Contours, the grid, and type are left unclassified.
@@ -250,37 +185,6 @@ pub fn classify_rgb(r: u8, g: u8, b: u8) -> Option<Cover> {
         return Some(Cover::Wood);
     }
     None
-}
-
-fn vote_cover(image: &RgbaImage, col: i32, row: i32) -> Option<Cover> {
-    let (w, h) = image.dimensions();
-    let mut wood = 0;
-    let mut field = 0;
-    for dy in [-4, -2, 0, 2, 4] {
-        for dx in [-4, -2, 0, 2, 4] {
-            let x = col + dx;
-            let y = row + dy;
-            if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-                continue;
-            }
-            let p = image.get_pixel(x as u32, y as u32);
-            match classify_rgb(p[0], p[1], p[2]) {
-                Some(Cover::Wood) => wood += 1,
-                Some(Cover::Field) => field += 1,
-                None => {}
-            }
-        }
-    }
-    if wood == 0 && field == 0 {
-        return None;
-    }
-    if wood > field {
-        Some(Cover::Wood)
-    } else if field > wood {
-        Some(Cover::Field)
-    } else {
-        None
-    }
 }
 
 fn json_number(text: &str, key: &str) -> Option<f64> {
@@ -347,7 +251,6 @@ mod tests {
                 path: PathBuf::new(),
             }],
             buckets: HashMap::new(),
-            cache: std::sync::Mutex::new(VecDeque::new()),
         };
         let (x0, x1, z0, z1) = map.tile_bounds(&map.tiles[0]);
         assert_eq!((x0, x1, z0, z1), (4_500.0, 5_000.0, 1_000.0, 2_000.0));

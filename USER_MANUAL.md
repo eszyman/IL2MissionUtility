@@ -18,14 +18,14 @@ You author small, well-named templates in the IL-2 editor, then use this app to 
 - **Army Generator** — many ground (or ship) copies; a waterfall picks an activate count, or **Spawn all** so every copy starts.
 - **Fighter Pack** — linked random CAP / intercept flights (N copies of one flight group, mutex through NodeGates).
 - **Exclusive Activation** — several preplanned groups (bombers, recon, artillery) where only one plan can start at a time.
-- **Airfield** — strip Freeflight / single-player logic from an airfield exported from `_gen.mission` so it works in multiplayer.
+- **Airfields** — strip Freeflight / single-player logic from an airfield exported from `_gen.mission` so it works in multiplayer.
 - **Map** — Korean War 1950–1953 map icons. Draw a box on the peninsula to clip the front, areas of influence, airfields, and towns.
 
 ### Typical workflow
 
 1. Pick a mode.
 2. Load templates or set options (Map needs no extra template beyond `References/`).
-3. Click **Generate File** / **Generate Base Map** (or **Ctrl G**; **Ctrl O** is the tab's Load… / Add…, **Ctrl 1–6** switches tabs, **F1** opens this help) (Airfield: **Generate File**) and choose a save path.
+3. Click **Generate File** / **Generate Base Map** (or **Ctrl G**; **Ctrl O** is the tab's Load… / Add…, **Ctrl 1–5** switches tabs, **F1** opens this help) (Airfields: **Generate File**) and choose a save path.
 4. In the IL-2 mission editor, import the `.Group`. Keep the sidecar files next to it.
 5. Move groups from the parking grid onto the map. Do not break the MCU names this app relies on.
 
@@ -375,7 +375,7 @@ Import, then **move copies off the parking grid** onto the map. Keep each copy�
 
 ---
 
-## Airfield
+## Airfields
 
 ### Intended use
 
@@ -406,7 +406,7 @@ Harvesting the same airfield and country again replaces its group and catalog en
 
 ### Several airbases
 
-The right panel lists every airfield group in the database folder. **In the area** are the ones the map box covers, plus 10 km, the same margin a base map uses when it keeps scenery. Those airbases are split by the front on the Map tab: **DPRK** is north of the line, **NATO** is south of it, and a pocket is listed with the side that holds it. A harvested file whose country is on the other side of that line is left out, and it is not written into the base map. If no front is drawn, the 38th parallel is that line. **Data required** means that airbase has no harvested runway group, so aircraft cannot be placed on it. Select one to set its friendly coalition and its **Field spawn** aircraft. Each airbase keeps its own list. **Generate File** still cleans the airbase that is selected. When a base map is generated, an airbase that has aircraft in its list is written with that field spawn; an empty list imports the harvested group as it is. **Refresh airbases** reads the folder again after a harvest.
+The right panel lists every airfield group in the database folder. **In the area** are the ones inside the map box. A field just outside that box is left off the list and is not written into the base map. Scenery still uses the extra 10 km. Those airbases are split by the front on the Map tab: **DPRK** is north of the line, **NATO** is south of it, and a pocket is listed with the side that holds it. A harvested file whose country is on the other side of that line is left out, and it is not written into the base map. If no front is drawn, the 38th parallel is that line. **Data required** means that airbase has no harvested runway group, so aircraft cannot be placed on it. Select one to set its friendly coalition and its **Field spawn** aircraft. Each aircraft has a **Name**. It is filled in from the start and the load (`At ramp - Strike 2`, `In air - Long range`). Type over it to keep your own words. Clear the box to go back to the automatic name. A name you typed is read back when a map or mission is loaded. Each airbase keeps its own list. **Generate File** still cleans the airbase that is selected. When a base map is generated, an airbase that has aircraft in its list is written with that field spawn; an empty list imports the harvested group as it is. **Refresh airbases** reads the folder again after a harvest.
 
 ### Source file (manual, one airfield)
 

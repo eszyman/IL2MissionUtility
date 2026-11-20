@@ -634,18 +634,21 @@ roughly 78 km by 499 km, and is not either of those files.
 The mission-editor photographs in `References/MapCapture` (one PNG per
 view, not the stitched TIFF). `EditorMap` places each tile on the Korea
 square. The Map tab draws the tiles that cross the current view once zoom
-passes 8×, up to 48×. `classify_rgb` reads beige as a field and olive as
-woods. Ground placement uses that only inside `CoverGuard`: woods are not
-open, a field is dry land, and water stays on the coarse mask.
+passes 8×, up to 48×. Those pictures decode on a worker. Ground placement
+does not read them. Open ground and woods are the packed mask.
+`classify_rgb` is the olive and beige test used when that mask is baked.
 **Map mode.**
 
 ### `watermap.rs` — water/terrain queries
 Packed Korea terrain mask from `assets/combined_terrain.bin`
 (`WMAP` + width/height + cells). Pixel (0,0) is the north-west corner
 of the mission square. Bitfield: water `& 1`, road `& 2` (reserved),
-open `& 4`. `TerrainMap` (`WaterMap` is a historical alias):
-`builtin()`, `is_water_xz` / `is_open_xz`. Used by ship placement
-(stay in water) and ground placement (stay on dry open land).
+open `& 4`, woods `& 8`. Woods are baked offline from editor tiles
+(`py -3 tools/mapcapture/bake_woods.py`); placement does not open those
+pictures. `TerrainMap` (`WaterMap` is a historical alias):
+`builtin()`, `is_water_xz` / `is_open_xz` / `is_woods_xz`. Used by ship
+placement (stay in water) and ground placement (stay on dry open land,
+out of the woods).
 **Map mode, Army Generator.**
 
 ### `main.rs`

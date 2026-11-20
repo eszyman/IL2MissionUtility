@@ -627,13 +627,6 @@ const START_ENGINE_OFF: i32 = 2;
 /// 0 None, 1 Runway, 2 Parking. Parking is 2. Shipped missions that write
 /// `SnapTo = 1` are snapping to the runway, not to a parking spot.
 const SNAP_PARKING: i32 = 2;
-const SNAP_RUNWAY: i32 = 1;
-/// Engine Cold. The editor's fourth Start Type. Not written by the default
-/// field-spawn choices; the plane name still recognizes it.
-const START_ENGINE_COLD: i32 = 3;
-/// Fuel at or above this is a long-range load. The field-spawn fuel slider
-/// stores a percent, so 0.95 is 95% and 1.0 is full.
-const LONG_RANGE_FUEL: f64 = 0.95;
 
 /// Where `place_field_spawn` put the fakefield.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -987,9 +980,7 @@ fn write_spawn(
                 } else {
                     (START_ENGINE_ON, 0)
                 };
-                let mut entry = airstart::plane_entry(plane, 36 + i as i32, start_type, 0, snap);
-                let name = field_spawn_name(start_type, snap, plane.payload_id, plane.fuel);
-                entry.set_property("Name", format!("\"{name}\""));
+                let entry = airstart::plane_entry(plane, 36 + i as i32, start_type, 0, snap);
                 list.children.push(entry);
             }
             e.children.push(list);
@@ -1006,30 +997,9 @@ fn write_spawn(
 
 /// Plane `Name` Erik reads in the editor. Snap To wins over Start Type.
 /// Load follows: payload 0 is Clean, payload N is `Strike N`, and fuel at or
-/// above [`LONG_RANGE_FUEL`] replaces Clean or is appended after the strike.
+/// above 95% replaces Clean or is appended after the strike.
 fn field_spawn_name(start_type: i32, snap_to: i32, payload_id: i32, fuel: f64) -> String {
-    let condition = if snap_to == SNAP_PARKING {
-        "Parked"
-    } else if snap_to == SNAP_RUNWAY {
-        "On runway"
-    } else if start_type == START_ENGINE_OFF || start_type == START_ENGINE_COLD {
-        "Parked"
-    } else if start_type == START_ENGINE_ON {
-        "At ramp"
-    } else {
-        "In air"
-    };
-    let long_range = fuel >= LONG_RANGE_FUEL;
-    let load = if payload_id > 0 && long_range {
-        format!("Strike {payload_id} - Long range")
-    } else if payload_id > 0 {
-        format!("Strike {payload_id}")
-    } else if long_range {
-        "Long range".to_string()
-    } else {
-        "Clean".to_string()
-    };
-    format!("{condition} - {load}")
+    airstart::automatic_plane_name(start_type, snap_to, payload_id, fuel)
 }
 
 /// Archive `source`, harvest it, and write groups, catalog and model list into `db`.
