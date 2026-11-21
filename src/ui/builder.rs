@@ -44,6 +44,7 @@ use crate::template::{
     attack_area_range_limit, bundled_catalog, carriage_label, catalog_carriage_scripts,
     copy_seat_attributes, event_triggers_order, flight_lead_of, formation_label, formations_for,
     generate_template, goto_timer_name, has_linked_wingmen, insert_goto_waypoint_after,
+    zone_watching_the_other_side,
     is_follower, lead_indexes, load_catalog, load_catalog_as_user_added, load_template,
     merge_catalog, mission_path_segments, move_seat, near_visual_range, next_waypoint_number,
     normalize_order_chain, offset_label, order_chip_detail, order_seat_indexes, order_tree_columns,
@@ -203,7 +204,7 @@ fn tree_mission_menu(ui: &mut egui::Ui, si: usize, add: &mut Option<AddTreeItem>
         ui.label(RichText::new("Aircraft").small().color(c::NEUTRAL_700));
         if ui
             .button("CAP")
-            .on_hover_text("Diamond patrol at low priority until bingo guns, critical damage, or wounded, then RTB. Replaces this lead's orders.")
+            .on_hover_text("Diamond patrol at low priority until bingo guns, bingo fuel, critical damage, or wounded, then RTB. Replaces this lead's orders.")
             .clicked()
         {
             *add = Some(AddTreeItem::Mission {
@@ -1843,6 +1844,10 @@ impl super::GroupGeneratorApp {
                         if applied.disable_zone_out {
                             self.tpl_zone_out_enabled = false;
                         }
+                        self.tpl_zone_coalition = zone_watching_the_other_side(
+                            &self.tpl_seats,
+                            self.tpl_zone_coalition,
+                        );
                         self.tpl_select = Some(TplSelect::Order { seat: si, order: 0 });
                         self.status = Status::Info(format!(
                             "{} on unit {}: {}",
@@ -4225,6 +4230,8 @@ impl super::GroupGeneratorApp {
         if self.tpl_zone_out < self.tpl_zone_in + 200.0 {
             self.tpl_zone_out = self.tpl_zone_in + 200.0;
         }
+        self.tpl_zone_coalition =
+            zone_watching_the_other_side(&self.tpl_seats, self.tpl_zone_coalition);
         let opts = TemplateOptions {
             name: self
                 .tpl_loaded_path

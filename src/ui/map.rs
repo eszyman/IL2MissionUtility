@@ -79,9 +79,11 @@ use crate::recon::{
 use crate::serialize::serialize_group;
 use crate::shell;
 use crate::template::{
-    STRIKE_IP_M, STRIKE_START_M, StrikePose, StrikeTargetClass, TRAIN_ZONE_IN_M,
-    place_flight_attack_areas, place_strike_at, separable_flight_attacks, strike_geometry,
-    strike_ip_toward, strike_layout, strike_pose_from_start, strike_side, take_strike_missions,
+    STRIKE_IP_M, STRIKE_START_M, StrikePose, StrikeTargetClass, TRAIN_ZONE_IN_M, cap_circuit_m,
+    center_cap_on, cover_attack_area, flight_anchor, is_cap_group, place_flight_attack_areas,
+    place_strike_at,
+    separable_flight_attacks, set_waypoint_xz, shift_flight, strike_geometry, strike_ip_toward,
+    strike_layout, strike_pose_from_start, strike_side, take_strike_missions, waypoint_xz,
 };
 use crate::terrain::HeightStore;
 use crate::theme::{self, c};
@@ -117,6 +119,8 @@ pub(super) enum MissionHandle {
     Ip,
     /// A later flight's AttackArea. The spawn, IP, and waypoints stay put.
     Attack(usize),
+    /// A CAP patrol corner, or 5 for the RTB waypoint. The point lives on the group.
+    Cap(u32),
 }
 
 /// One flight's AttackArea, when the group has several flights and several areas.
@@ -297,10 +301,16 @@ pub(super) struct AirPackageDraft {
     pub roots: Vec<crate::ast::Il2Entity>,
     pub path: Option<std::path::PathBuf>,
     pub kind: Option<PackageKind>,
+    /// Charted target type. The picker no longer lists those targets.
+    #[allow(dead_code)]
     pub static_kind: StaticTargetKind,
     pub target: Option<StrikeObjective>,
     pub home: PackageHome,
     pub altitude_m: u32,
+    /// Patrol length. The gold bar on the timeline uses this.
+    pub duration_min: u32,
+    /// One or more points the CAP is centered on. Empty while editing keeps the map points.
+    pub targets: Vec<StrikeObjective>,
     /// Set while Edit is changing a mission that is already on the map.
     pub editing: Option<usize>,
 }
@@ -376,6 +386,10 @@ pub(super) struct PlacedMission {
     pub air_path: Option<std::path::PathBuf>,
     /// Hidden layers stay in the file and are not drawn, so another layer can be moved.
     pub hidden: bool,
+    /// CAP shift in minutes. 0 is a strike, whose gold bar is the route.
+    pub cap_minutes: u32,
+    /// Units the strike circle must cover. Empty keeps the template area.
+    pub strike_cover: Vec<(f64, f64)>,
 }
 
 /// Map tool palette, top to bottom; keys 1–6 pick them (README §5.6).
@@ -510,6 +524,19 @@ pub(super) struct MapArmySlot {
     ships: Option<MapShipLayout>,
     /// Hidden groups stay in the file and are not drawn.
     shown: bool,
+}
+
+/// A Mission Tasking target pick. The map shows the front and the ground
+/// forces, then one click returns to tasking. Layer flags are put back.
+pub(super) struct TargetPick {
+    sweep: bool,
+    fighters_shown: bool,
+    units_shown: bool,
+    ground_east_shown: bool,
+    ground_nato_shown: bool,
+    ships_shown: bool,
+    army_shown: Vec<bool>,
+    mission_hidden: Vec<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1305,7 +1332,31 @@ struct AttackEdit {
     why: &'static str,
 }
 
-fn stamp_sweep_altitude(root: &mut crate::ast::Il2Entity, altitude_m: u32) {
+/// Zone IN sits on the middle of the picked targets. The diamond reaches the
+/// farthest of them, and never shrinks inside the 8 km profile.
+fn center_cap_on_targets(root: &mut crate::ast::Il2Entity, targets: &[StrikeObjective]) -> bool {
+    if targets.is_empty() {
+        return false;
+    }
+    let n = targets.len() as f64;
+    let cx = targets.iter().map(|hit| hit.x).sum::<f64>() / n;
+    let cz = targets.iter().map(|hit| hit.z).sum::<f64>() / n;
+    if !center_cap_on(root, cx, cz) {
+        return false;
+    }
+    let reach = targets
+        .iter()
+        .map(|hit| (hit.x - cx).hypot(hit.z - cz))
+        .fold(8_000.0, f64::max)
+        .clamp(8_000.0, 40_000.0);
+    set_waypoint_xz(root, 1, cx + reach, cz);
+    set_waypoint_xz(root, 2, cx, cz + reach);
+    set_waypoint_xz(root, 3, cx - reach, cz);
+    set_waypoint_xz(root, 4, cx, cz - reach);
+    true
+}
+
+pub(super) fn stamp_sweep_altitude(root: &mut crate::ast::Il2Entity, altitude_m: u32) {
     let y = format!("{:.3}", altitude_m);
     root.for_each_mut(&mut |entity| {
         if entity.block_type == "Plane" || entity.block_type == "MCU_Waypoint" {
@@ -1355,7 +1406,7 @@ fn entity_may_skip(root: &crate::ast::Il2Entity) -> bool {
     root.find_by_name(crate::recon::RANDOMIZER_NAME).is_some()
 }
 
-fn plane_altitude(root: &crate::ast::Il2Entity) -> u32 {
+pub(super) fn plane_altitude(root: &crate::ast::Il2Entity) -> u32 {
     let mut y = None;
     root.for_each(&mut |entity| {
         if y.is_none() && entity.block_type == "Plane" {
@@ -1407,6 +1458,156 @@ fn unit_target_class(kind: GroundKind) -> (StrikeTargetClass, &'static str) {
 
 const SORTIE_DESC: &str = "Air Tasking";
 const SORTIE_PATROL_DESC: &str = "Air Tasking Patrol";
+
+fn arm_cap_shift(mission: &PlacedMission, root: &mut crate::ast::Il2Entity) {
+    if !is_cap_group(root) {
+        return;
+    }
+    let minutes = if mission.cap_minutes > 0 {
+        mission.cap_minutes
+    } else {
+        crate::template::cap_shift_minutes(root).unwrap_or(20)
+    };
+    crate::template::ensure_cap_shift(root, minutes);
+}
+
+/// Gold-bar length. A CAP uses its shift. A strike uses the route.
+fn sortie_clock_secs(mission: &PlacedMission, root: &crate::ast::Il2Entity) -> f64 {
+    if is_cap_group(root) {
+        let minutes = if mission.cap_minutes > 0 {
+            mission.cap_minutes
+        } else {
+            crate::template::cap_shift_minutes(root).unwrap_or(20)
+        };
+        return f64::from(minutes.clamp(1, 180)) * 60.0;
+    }
+    crate::airtask::flight_secs(mission_route_m(mission, root), waypoint_kmh(root))
+}
+
+fn strip_pack_index(name: &str, packed: bool) -> String {
+    let name = name.trim();
+    if !packed {
+        return name.to_string();
+    }
+    let Some(open) = name.rfind(" [") else {
+        return name.to_string();
+    };
+    let digits = &name[open + 2..];
+    if digits.ends_with(']')
+        && digits.len() > 1
+        && digits[..digits.len() - 1]
+            .chars()
+            .all(|c| c.is_ascii_digit())
+    {
+        let bare = name[..open].trim();
+        if bare.is_empty() {
+            "Sortie".to_string()
+        } else {
+            bare.to_string()
+        }
+    } else {
+        name.to_string()
+    }
+}
+
+/// "Name 2" through "Name 9" are magazine copies. "MiG 15" stays.
+fn sortie_base_name(name: &str) -> String {
+    let name = strip_pack_index(name, true);
+    if let Some((head, tail)) = name.rsplit_once(' ') {
+        if !head.is_empty() && tail.parse::<u32>().ok().is_some_and(|n| (2..=9).contains(&n)) {
+            return head.to_string();
+        }
+    }
+    name
+}
+
+fn round_metre(text: &str) -> String {
+    text.parse::<f64>()
+        .map(|value| format!("{value:.0}"))
+        .unwrap_or_else(|_| text.to_string())
+}
+
+/// Unit settings plus plane and waypoint XZ. Magazine copies match. A different
+/// route or aircraft does not.
+fn sortie_fingerprint(root: &crate::ast::Il2Entity) -> Vec<String> {
+    let mut rows = Vec::new();
+    root.for_each(&mut |entity| {
+        let keep = match entity.block_type.as_str() {
+            "Plane" => true,
+            "MCU_Waypoint" => true,
+            "MCU_Timer" => entity.name() == Some("CAP Shift"),
+            "MCU_CheckZone" => {
+                matches!(entity.name(), Some("Zone IN") | Some("Zone Out"))
+            }
+            _ => entity.property("Script").is_some(),
+        };
+        if !keep {
+            return;
+        }
+        rows.push(format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            entity.block_type,
+            entity.name().unwrap_or(""),
+            entity.property("Script").unwrap_or(""),
+            entity.property("Country").unwrap_or(""),
+            entity.property("AILevel").unwrap_or(""),
+            entity.property("PayloadId").unwrap_or(""),
+            entity.property("Fuel").unwrap_or(""),
+            entity.property("NumberInFormation").unwrap_or(""),
+            entity.property("Time").unwrap_or(""),
+            round_metre(entity.property("XPos").unwrap_or("0")),
+            round_metre(entity.property("YPos").unwrap_or("0")),
+            round_metre(entity.property("ZPos").unwrap_or("0")),
+        ));
+    });
+    rows.sort();
+    rows
+}
+
+fn prefer_sortie_name(current: &str, other: &str) -> String {
+    let current = sortie_base_name(current);
+    let other = sortie_base_name(other);
+    if current == other || other.starts_with(&current) {
+        current
+    } else if current.starts_with(&other) {
+        other
+    } else {
+        current
+    }
+}
+
+/// Copies of one exported sortie share settings and XZ. They become one row,
+/// and the count is how many were in the file.
+fn merge_matching_sorties(missions: &mut Vec<PlacedMission>) {
+    let mut kept: Vec<PlacedMission> = Vec::new();
+    for mission in std::mem::take(missions) {
+        if !mission.air_task {
+            kept.push(mission);
+            continue;
+        }
+        let key = sortie_fingerprint(&mission.root);
+        let has_plane = key.iter().any(|row| row.starts_with("Plane|"));
+        let twin = if has_plane {
+            kept.iter_mut().find(|other| {
+                other.air_task && sortie_fingerprint(&other.root) == key
+            })
+        } else {
+            None
+        };
+        if let Some(existing) = twin {
+            existing.air_runs = existing
+                .air_runs
+                .saturating_add(mission.air_runs.max(1));
+            existing.name = prefer_sortie_name(&existing.name, &mission.name);
+            if existing.cap_minutes == 0 {
+                existing.cap_minutes = mission.cap_minutes;
+            }
+        } else {
+            kept.push(mission);
+        }
+    }
+    *missions = kept;
+}
 
 /// `Some(true)` when the group was exported as a patrol. `Some(false)` is a strike sortie.
 fn sortie_mark(group: &crate::ast::Il2Entity) -> Option<bool> {
@@ -1464,6 +1665,10 @@ fn exclusive_pack(groups: &[crate::ast::Il2Entity]) -> Result<crate::ast::Il2Ent
 }
 
 /// Home, the initial point, the target, and back. Meters.
+fn mission_route_m(mission: &PlacedMission, group: &crate::ast::Il2Entity) -> f64 {
+    cap_circuit_m(group).unwrap_or_else(|| route_meters(mission))
+}
+
 fn route_meters(mission: &PlacedMission) -> f64 {
     let legs = [
         (
@@ -2381,6 +2586,10 @@ fn draw_reference_overlays(painter: &egui::Painter, rect: Rect) {
         );
     }
 
+    draw_map_cities(painter, rect);
+}
+
+fn draw_map_cities(painter: &egui::Painter, rect: Rect) {
     for (city, x, z) in geo::cities_on_map() {
         let pos = world_to_pos(rect, x, z);
         let color = if city.dprk {
@@ -4065,6 +4274,8 @@ impl super::GroupGeneratorApp {
             target: None,
             home: PackageHome::Rear,
             altitude_m: 3000,
+            duration_min: 20,
+            targets: Vec::new(),
             editing: None,
         });
         self.status = Status::Info(format!(
@@ -4102,6 +4313,8 @@ impl super::GroupGeneratorApp {
             target: None,
             home: PackageHome::Rear,
             altitude_m: 3000,
+            duration_min: 20,
+            targets: Vec::new(),
             editing: None,
         });
         let extra = if many {
@@ -4150,6 +4363,12 @@ impl super::GroupGeneratorApp {
             target,
             home,
             altitude_m: altitude,
+            duration_min: if sweep {
+                mission.cap_minutes.clamp(1, 180)
+            } else {
+                20
+            },
+            targets: Vec::new(),
             editing: Some(index),
         });
     }
@@ -4182,6 +4401,243 @@ impl super::GroupGeneratorApp {
         PackageHome::Rear
     }
 
+    /// Open the map with only the front and the ground forces, and wait for a click.
+    pub(super) fn begin_target_pick(&mut self, sweep: bool) {
+        if self.air_draft.is_none() {
+            return;
+        }
+        if self.target_pick.is_some() {
+            self.drop_target_pick();
+        }
+        let pick = TargetPick {
+            sweep,
+            fighters_shown: self.fighters_shown,
+            units_shown: self.units_shown,
+            ground_east_shown: self.ground_east_shown,
+            ground_nato_shown: self.ground_nato_shown,
+            ships_shown: self.ships_shown,
+            army_shown: self.map_armies.iter().map(|army| army.shown).collect(),
+            mission_hidden: self.map_missions.iter().map(|mission| mission.hidden).collect(),
+        };
+        self.fighters_shown = false;
+        self.ships_shown = false;
+        self.units_shown = true;
+        self.ground_east_shown = true;
+        self.ground_nato_shown = true;
+        for army in &mut self.map_armies {
+            army.shown = true;
+        }
+        for mission in &mut self.map_missions {
+            mission.hidden = true;
+        }
+        self.map_drawing_mode = MapDrawingMode::None;
+        self.target_pick = Some(pick);
+        self.set_mode(super::AppMode::Map);
+        self.status = Status::Info(if sweep {
+            "Click friendly ground for the CAP. Esc returns to tasking.".into()
+        } else {
+            "Click enemy ground to attack ground. Hold Shift to snap to a target. Esc returns to tasking.".into()
+        });
+    }
+
+    /// Put the map layers back and leave the pick. The mode is unchanged.
+    pub(super) fn drop_target_pick(&mut self) {
+        let Some(pick) = self.target_pick.take() else {
+            return;
+        };
+        self.fighters_shown = pick.fighters_shown;
+        self.units_shown = pick.units_shown;
+        self.ground_east_shown = pick.ground_east_shown;
+        self.ground_nato_shown = pick.ground_nato_shown;
+        self.ships_shown = pick.ships_shown;
+        for (army, shown) in self.map_armies.iter_mut().zip(pick.army_shown) {
+            army.shown = shown;
+        }
+        for (mission, hidden) in self.map_missions.iter_mut().zip(pick.mission_hidden) {
+            mission.hidden = hidden;
+        }
+    }
+
+    /// Esc, or leaving the map: restore the layers and go back to tasking.
+    pub(super) fn cancel_target_pick(&mut self) {
+        self.drop_target_pick();
+        self.set_mode(super::AppMode::AirTasking);
+        self.status = Status::Info("Target pick cancelled.".into());
+    }
+
+    fn point_is_friendly(&self, eastern: bool, x: f64, z: f64) -> bool {
+        let front = self.front_for_sides();
+        let salients = self.salients_for_sides();
+        crate::mapclip::on_dprk_side(&front, salients, x, z) == eastern
+    }
+
+    fn ground_spot(&self, hit: GroundHit) -> Option<&crate::mapground::GroundSpot> {
+        match hit {
+            GroundHit::Ag { eastern, i } => {
+                let layout = if eastern {
+                    self.map_ground_east.as_ref()
+                } else {
+                    self.map_ground_nato.as_ref()
+                };
+                layout?.spots.get(i)
+            }
+            GroundHit::Army { slot, i } => self
+                .map_armies
+                .get(slot)?
+                .ground
+                .as_ref()?
+                .spots
+                .get(i),
+        }
+    }
+
+    fn hit_eastern(&self, hit: GroundHit) -> Option<bool> {
+        match hit {
+            GroundHit::Ag { eastern, .. } => Some(eastern),
+            GroundHit::Army { slot, .. } => self.map_armies.get(slot).map(|army| army.eastern),
+        }
+    }
+
+    fn objective_from_hit(&self, hit: GroundHit) -> Option<StrikeObjective> {
+        let spot = self.ground_spot(hit)?;
+        let (class, kind) = unit_target_class(spot.kind);
+        Some(StrikeObjective {
+            label: kind.to_string(),
+            class,
+            x: spot.x,
+            z: spot.z,
+            may_not_spawn: false,
+        })
+    }
+
+    /// Nearest fixed target or unit within the same 72 px the map uses for Shift.
+    fn nearest_listed_target(
+        &self,
+        map_rect: Rect,
+        pointer: Pos2,
+        objs: &[StrikeObjective],
+    ) -> Option<StrikeObjective> {
+        let mut best: Option<StrikeObjective> = None;
+        let mut best_d = 72.0_f32;
+        for obj in objs {
+            if !self.front_aabb.contains(obj.x, obj.z) {
+                continue;
+            }
+            let d = world_to_pos(map_rect, obj.x, obj.z).distance(pointer);
+            if d < best_d {
+                best_d = d;
+                best = Some(obj.clone());
+            }
+        }
+        best
+    }
+
+    /// One click while a target pick is open. Shift snaps a strike the same way
+    /// a Shift-drag snaps a target already on the map. A plain click attacks ground.
+    fn take_map_target(&mut self, map_rect: Rect, pos: Pos2, x: f64, z: f64, shift: bool) {
+        let Some(sweep) = self.target_pick.as_ref().map(|pick| pick.sweep) else {
+            return;
+        };
+        let eastern = self
+            .air_draft
+            .as_ref()
+            .map(|draft| draft.eastern)
+            .unwrap_or(false);
+        if sweep {
+            let friendly = self
+                .hit_ground_spot(map_rect, pos)
+                .filter(|hit| self.hit_eastern(*hit) == Some(eastern));
+            if friendly.is_none() && !self.point_is_friendly(eastern, x, z) {
+                self.status = Status::Error(
+                    "A CAP sits over friendly ground. Click this side of the front.".into(),
+                );
+                return;
+            }
+            let objective = if let Some(hit) = friendly {
+                self.objective_from_hit(hit)
+            } else {
+                Some(StrikeObjective {
+                    label: "Friendly ground".into(),
+                    class: StrikeTargetClass::Tanks,
+                    x,
+                    z,
+                    may_not_spawn: false,
+                })
+            };
+            let Some(objective) = objective else {
+                return;
+            };
+            if let Some(draft) = self.air_draft.as_mut() {
+                draft.targets = vec![objective];
+                draft.target = None;
+            }
+        } else {
+            let snapped = if shift {
+                let listed = self.visible_snap_targets(eastern);
+                self.nearest_listed_target(map_rect, pos, &listed)
+            } else {
+                None
+            };
+            let objective = if let Some(objective) = snapped {
+                objective
+            } else if let Some(hit) = self.hit_ground_spot(map_rect, pos) {
+                if self.hit_eastern(hit) == Some(eastern) {
+                    self.status = Status::Error(
+                        "That unit is friendly. Click one on the other side of the front.".into(),
+                    );
+                    return;
+                }
+                let spot = self.ground_spot(hit).map(|spot| (spot.x, spot.z));
+                let Some((sx, sz)) = spot else {
+                    return;
+                };
+                let Some(objective) = self
+                    .imported_unit_targets(eastern)
+                    .into_iter()
+                    .find(|unit| (unit.x - sx).abs() < 1.0 && (unit.z - sz).abs() < 1.0)
+                    .or_else(|| self.objective_from_hit(hit))
+                else {
+                    return;
+                };
+                objective
+            } else if !self.point_is_friendly(eastern, x, z)
+                && (self.ao_covers_the_whole_map() || self.front_aabb.contains(x, z))
+            {
+                StrikeObjective {
+                    label: "Attack ground".into(),
+                    class: StrikeTargetClass::Bridges,
+                    x,
+                    z,
+                    may_not_spawn: false,
+                }
+            } else {
+                self.status = Status::Error(
+                    "Click enemy ground inside the area, or hold Shift to snap to a target."
+                        .into(),
+                );
+                return;
+            };
+            if let Some(draft) = self.air_draft.as_mut() {
+                if !draft
+                    .targets
+                    .iter()
+                    .any(|picked| (picked.x - objective.x).abs() < 1.0 && (picked.z - objective.z).abs() < 1.0)
+                {
+                    draft.targets.push(objective);
+                }
+                draft.target = None;
+            }
+        }
+        self.drop_target_pick();
+        self.set_mode(super::AppMode::AirTasking);
+        self.status = Status::Info(if sweep {
+            "CAP point set over friendly ground.".into()
+        } else {
+            "Target added. Select more units here if the attack circle should cover them."
+                .into()
+        });
+    }
+
     /// Place the package that is open in the center, using the parameters set there.
     pub(super) fn commit_air_package(&mut self) -> bool {
         let Some(draft) = self.air_draft.clone() else {
@@ -4197,26 +4653,59 @@ impl super::GroupGeneratorApp {
             );
             return false;
         }
-        let target = match kind {
-            PackageKind::Strike => match draft.target.clone() {
-                Some(target) => target,
-                None => {
+        let (target, strike_cover) = match kind {
+            PackageKind::Strike => {
+                let picks = if !draft.targets.is_empty() {
+                    draft.targets.clone()
+                } else if let Some(target) = draft.target.clone() {
+                    vec![target]
+                } else {
                     self.status = Status::Error(
-                        "Pick a target inside the area, or an imported unit.".into(),
+                        "Pick a target on the map, or select imported units.".into(),
+                    );
+                    return false;
+                };
+                let points: Vec<(f64, f64)> = picks.iter().map(|hit| (hit.x, hit.z)).collect();
+                let Some((x, z, _)) = crate::template::attack_cover(&points) else {
+                    return false;
+                };
+                let label = if picks.len() == 1 {
+                    picks[0].label.clone()
+                } else {
+                    picks
+                        .iter()
+                        .map(|hit| hit.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                (
+                    StrikeObjective {
+                        label,
+                        class: picks[0].class,
+                        x,
+                        z,
+                        may_not_spawn: picks.iter().any(|hit| hit.may_not_spawn),
+                    },
+                    points,
+                )
+            }
+            PackageKind::Sweep => {
+                if draft.targets.is_empty() && draft.editing.is_none() {
+                    self.status = Status::Error(
+                        "Pick the CAP on the map. It has to sit over friendly ground.".into(),
                     );
                     return false;
                 }
-            },
-            PackageKind::Sweep => {
-                let cx = (self.front_aabb.x_min + self.front_aabb.x_max) * 0.5;
-                let cz = (self.front_aabb.z_min + self.front_aabb.z_max) * 0.5;
-                StrikeObjective {
-                    label: "Patrol".into(),
-                    class: StrikeTargetClass::Tanks,
-                    x: cx,
-                    z: cz,
-                    may_not_spawn: false,
-                }
+                (
+                    draft.targets.first().cloned().unwrap_or(StrikeObjective {
+                        label: "Patrol".into(),
+                        class: StrikeTargetClass::Tanks,
+                        x: 0.0,
+                        z: 0.0,
+                        may_not_spawn: false,
+                    }),
+                    Vec::new(),
+                )
             }
         };
         let name = if draft.editing.is_some() {
@@ -4228,7 +4717,12 @@ impl super::GroupGeneratorApp {
             let Some(def) = crate::airtask::builtin_library().get(index) else {
                 return false;
             };
-            match crate::airtask::build_sortie(def, (target.x, target.z)) {
+            let built = if kind == PackageKind::Sweep {
+                crate::airtask::build_cap(def, (target.x, target.z))
+            } else {
+                crate::airtask::build_sortie(def, (target.x, target.z))
+            };
+            match built {
                 Ok(root) => root,
                 Err(err) => {
                     self.status = Status::Error(err);
@@ -4242,11 +4736,26 @@ impl super::GroupGeneratorApp {
             return false;
         };
         let mut root = root;
-        if kind == PackageKind::Sweep {
+        let cap = kind == PackageKind::Sweep;
+        if cap {
+            if draft.library.is_none() && !is_cap_group(&root) {
+                self.status = Status::Error(
+                    "This file is not a CAP patrol. Choose Strike, or load a CAP group.".into(),
+                );
+                return false;
+            }
             stamp_sweep_altitude(&mut root, draft.altitude_m);
+            if !draft.targets.is_empty() && !center_cap_on_targets(&mut root, &draft.targets) {
+                self.status = Status::Error("This CAP has no Zone IN to place.".into());
+                return false;
+            }
         }
         let label = target.label.clone();
-        self.place_strike_on(name.clone(), draft.eastern, root, target);
+        if cap {
+            self.place_cap_on(name.clone(), draft.eastern, root);
+        } else {
+            self.place_strike_on(name.clone(), draft.eastern, root, target);
+        }
         let Some(index) = self.map_missions.len().checked_sub(1) else {
             return false;
         };
@@ -4259,10 +4768,25 @@ impl super::GroupGeneratorApp {
             if kind == PackageKind::Sweep {
                 mission.target_class = None;
                 mission.target_label = "Patrol".into();
+                mission.cap_minutes = draft.duration_min.clamp(1, 180);
+            } else {
+                mission.strike_cover = strike_cover.clone();
+                let open = !draft.targets.is_empty()
+                    && draft.targets.iter().all(|hit| hit.label == "Attack ground");
+                if open {
+                    mission.target_class = None;
+                    mission.target_label = "Attack ground".into();
+                }
             }
         }
         let (hx, hz) = self.home_point(draft.eastern, &draft.home);
-        self.retarget_home(index, hx, hz);
+        if cap && draft.editing.is_none() {
+            if let Some(mission) = self.map_missions.get_mut(index) {
+                set_waypoint_xz(&mut mission.root, 5, hx, hz);
+            }
+        } else if !cap {
+            self.retarget_home(index, hx, hz);
+        }
         if let Some(old) = draft.editing {
             if old < index {
                 let mission = self.map_missions.pop().expect("mission");
@@ -4277,8 +4801,26 @@ impl super::GroupGeneratorApp {
         self.air_draft = None;
         let side = if draft.eastern { "DPRK" } else { "NATO" };
         let what = match kind {
-            PackageKind::Sweep => format!("{name} is a {side} fighter sweep. Drag the route on the map."),
-            PackageKind::Strike => format!("{name} is a {side} strike aimed at {label}."),
+            PackageKind::Sweep => {
+                let names: Vec<&str> = draft.targets.iter().map(|hit| hit.label.as_str()).collect();
+                let over = if names.is_empty() {
+                    "the points already on the map".to_string()
+                } else {
+                    names.join(", ")
+                };
+                format!(
+                    "{name} is a {side} CAP over {over}. Set the shift on the sortie. Drag the four patrol points and the RTB point on the map."
+                )
+            },
+            PackageKind::Strike => {
+                if strike_cover.len() > 1 {
+                    format!(
+                        "{name} is a {side} strike. The attack circle covers {label}."
+                    )
+                } else {
+                    format!("{name} is a {side} strike aimed at {label}.")
+                }
+            }
         };
         self.status = Status::Info(what);
         true
@@ -4558,15 +5100,21 @@ impl super::GroupGeneratorApp {
                 locales.push(path.clone());
             }
             let mut root = mission.root.clone();
-            let pose = StrikePose {
-                target_x: mission.target_x,
-                target_z: mission.target_z,
-                start_x: mission.start_x,
-                start_z: mission.start_z,
-                ip_x: mission.ip_x,
-                ip_z: mission.ip_z,
-            };
-            crate::template::place_strike_at(&mut root, pose);
+            arm_cap_shift(mission, &mut root);
+            if !is_cap_group(&root) {
+                let pose = StrikePose {
+                    target_x: mission.target_x,
+                    target_z: mission.target_z,
+                    start_x: mission.start_x,
+                    start_z: mission.start_z,
+                    ip_x: mission.ip_x,
+                    ip_z: mission.ip_z,
+                };
+                crate::template::place_strike_at(&mut root, pose);
+                if !mission.strike_cover.is_empty() {
+                    crate::template::cover_attack_area(&mut root, &mission.strike_cover);
+                }
+            }
             let timer_only = self.air_options.trigger == crate::airtask::AirTrigger::Clock;
             let weight = if timer_only {
                 (100 / mission.air_weight.max(1)).max(1)
@@ -4574,7 +5122,7 @@ impl super::GroupGeneratorApp {
                 mission.air_weight.max(1)
             };
             let duration_s = if timer_only {
-                crate::airtask::flight_secs(route_meters(mission), waypoint_kmh(&root))
+                sortie_clock_secs(mission, &root)
             } else {
                 0.0
             };
@@ -5303,6 +5851,52 @@ impl super::GroupGeneratorApp {
             air_enabled: true,
             air_path: None,
             hidden: false,
+            cap_minutes: 0,
+            strike_cover: Vec::new(),
+        });
+        self.focus_map_on(target_x, target_z);
+    }
+
+    /// Park a CAP as the template built it. Zone IN is already on the patrol
+    /// center. The flight icon sits on the lead. WP 5 is moved to home later.
+    fn place_cap_on(
+        &mut self,
+        name: String,
+        eastern: bool,
+        root: crate::ast::Il2Entity,
+    ) {
+        let (start_x, start_z) = flight_anchor(&root).unwrap_or((0.0, 0.0));
+        let (target_x, target_z) = root
+            .find_by_name("Zone IN")
+            .and_then(|zone| zone.pos_xz())
+            .unwrap_or((start_x, start_z));
+        let (ip_x, ip_z) = waypoint_xz(&root, 1).unwrap_or((start_x, start_z));
+        self.record_map_undo(format!("Added {name}"));
+        let sequence = self.next_mission_sequence();
+        self.map_missions.push(PlacedMission {
+            name,
+            eastern,
+            root,
+            target_x,
+            target_z,
+            start_x,
+            start_z,
+            ip_x,
+            ip_z,
+            target_label: "Patrol".into(),
+            target_class: None,
+            attacks: Vec::new(),
+            keep_template_attack: true,
+            sequence,
+            air_task: false,
+            air_weight: 5,
+            air_runs: 1,
+            air_spread: crate::airtask::AirSpread::Even,
+            air_enabled: true,
+            air_path: None,
+            hidden: false,
+            cap_minutes: 0,
+            strike_cover: Vec::new(),
         });
         self.focus_map_on(target_x, target_z);
     }
@@ -5606,19 +6200,7 @@ impl super::GroupGeneratorApp {
     /// Nearest snap candidate under the pointer. The list is built on the first
     /// Shift frame of a target drag, and only includes the chosen type inside the AO.
     fn snap_strike_target(&self, map_rect: Rect, pointer: Pos2) -> Option<StrikeObjective> {
-        let mut best: Option<StrikeObjective> = None;
-        let mut best_d = 72.0_f32;
-        for obj in &self.mission_snap {
-            if !self.front_aabb.contains(obj.x, obj.z) {
-                continue;
-            }
-            let d = world_to_pos(map_rect, obj.x, obj.z).distance(pointer);
-            if d < best_d {
-                best_d = d;
-                best = Some(obj.clone());
-            }
-        }
-        best
+        self.nearest_listed_target(map_rect, pointer, &self.mission_snap)
     }
 
     fn claimed_strike_points(&self) -> Vec<(f64, f64)> {
@@ -6609,6 +7191,14 @@ impl super::GroupGeneratorApp {
         }
         if self.map_void_drag {
             // Swallow the rest of the cancelled drag.
+        } else if self.target_pick.is_some() {
+            if response.clicked_by(egui::PointerButton::Primary) {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let (x, z) = uv_to_world(pos_to_uv(map_rect, pos));
+                    let shift = ui.input(|i| i.modifiers.shift);
+                    self.take_map_target(map_rect, pos, x, z, shift);
+                }
+            }
         } else if let Some(pos) = response.interact_pointer_pos() {
             let uv = pos_to_uv(map_rect, pos);
             let (x, z) = uv_to_world(uv);
@@ -6759,6 +7349,8 @@ impl super::GroupGeneratorApp {
                                 air_enabled: true,
                                 air_path: None,
             hidden: false,
+            cap_minutes: 0,
+            strike_cover: Vec::new(),
                             });
                         }
                         if !ui.input(|i| i.modifiers.shift) {
@@ -6978,8 +7570,20 @@ impl super::GroupGeneratorApp {
                                 let z = z.clamp(MAP_MIN, MAP_MAX);
                                 match handle {
                                     MissionHandle::Flight => {
+                                        if is_cap_group(&mission.root) {
+                                            let dx = x - mission.start_x;
+                                            let dz = z - mission.start_z;
+                                            shift_flight(&mut mission.root, dx, dz);
+                                        }
                                         mission.start_x = x;
                                         mission.start_z = z;
+                                    }
+                                    MissionHandle::Cap(number) => {
+                                        set_waypoint_xz(&mut mission.root, number, x, z);
+                                        if number == 1 {
+                                            mission.ip_x = x;
+                                            mission.ip_z = z;
+                                        }
                                     }
                                     MissionHandle::Target => {
                                         let (tx, tz, label, class) = if let Some(obj) = snap {
@@ -7145,10 +7749,14 @@ impl super::GroupGeneratorApp {
         let painter = ui.painter_at(rect);
 
         let overlay = timeline_preview(self.front_t);
+        let picking = self.target_pick.is_some();
 
-        draw_reference_overlays(&painter, map_rect);
-        self.draw_terrain_layers(ui.ctx(), &painter, map_rect);
+        if !picking {
+            draw_reference_overlays(&painter, map_rect);
+            self.draw_terrain_layers(ui.ctx(), &painter, map_rect);
+        }
 
+        if !picking {
         for battle in &overlay.battles {
             let pos = world_to_pos(map_rect, battle.x, battle.z);
             painter.circle_filled(pos, 4.0_f32, Color32::from_rgb(240, 220, 80));
@@ -7164,6 +7772,7 @@ impl super::GroupGeneratorApp {
                 Color32::from_rgb(240, 220, 80),
                 Align2::LEFT_BOTTOM,
             );
+        }
         }
 
         if composite_front.len() >= 2 {
@@ -7236,6 +7845,7 @@ impl super::GroupGeneratorApp {
         } else {
             &full_dense
         };
+        if !picking {
         for &(tail, tip) in &self.attack_arrows {
             let color = faction_map_color(point_north_of_front(arrow_front, tail.0, tail.1));
             let path = attack_arrow_points(tail, tip, ARROW_TAIL_WIDTH);
@@ -7245,6 +7855,7 @@ impl super::GroupGeneratorApp {
         if let Some((tail, tip)) = self.attack_drag {
             let color = faction_map_color(point_north_of_front(arrow_front, tail.0, tail.1));
             draw_attack_shaft(&painter, map_rect, tail, tip, color);
+        }
         }
 
         // 7. Draw Reference Groups
@@ -7282,13 +7893,20 @@ impl super::GroupGeneratorApp {
             }
         }
 
-        self.draw_map_networks(&painter, map_rect);
-        self.draw_map_fighters(&painter, map_rect);
-        self.draw_map_ships(&painter, map_rect);
+        if picking {
+            draw_map_cities(&painter, map_rect);
+        }
+        if !picking {
+            self.draw_map_networks(&painter, map_rect);
+            self.draw_map_fighters(&painter, map_rect);
+            self.draw_map_ships(&painter, map_rect);
+        }
         self.draw_map_ground(&painter, map_rect);
-        self.draw_map_objectives(&painter, map_rect);
-        self.draw_air_starts(&painter, map_rect);
-        self.draw_missions(&painter, map_rect);
+        if !picking {
+            self.draw_map_objectives(&painter, map_rect);
+            self.draw_air_starts(&painter, map_rect);
+            self.draw_missions(&painter, map_rect);
+        }
 
         // 8. Draw AABB Box
         // AO: dashed ACCENT_800 outline over a ~7 % accent wash (mockup 2f).
@@ -7309,7 +7927,19 @@ impl super::GroupGeneratorApp {
         ));
 
         // Tool banner at the top-center. A placed strike also says that Shift snaps its target.
-        let banner = if self.map_drawing_mode == MapDrawingMode::PlaceMission {
+        let banner = if let Some(pick) = &self.target_pick {
+            if pick.sweep {
+                Some((
+                    "CAP".to_string(),
+                    "Click friendly ground · Esc returns to tasking".to_string(),
+                ))
+            } else {
+                Some((
+                    "Strike".to_string(),
+                    "Click enemy ground to attack ground · Shift snaps to a target · Esc returns to tasking".to_string(),
+                ))
+            }
+        } else if self.map_drawing_mode == MapDrawingMode::PlaceMission {
             let name = self
                 .mission_place
                 .and_then(|i| self.map_mission_bank.get(i))
@@ -7361,7 +7991,9 @@ impl super::GroupGeneratorApp {
         if let Some((name, hint)) = banner {
             shell::map_tool_banner(&ui.painter_at(area), area, &name, &hint);
         }
-        if self.map_drawing_mode != MapDrawingMode::None && response.hovered() {
+        if (self.map_drawing_mode != MapDrawingMode::None || self.target_pick.is_some())
+            && response.hovered()
+        {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         self.map_overlays(ui, area);
@@ -7947,6 +8579,22 @@ impl super::GroupGeneratorApp {
             if mission.hidden {
                 continue;
             }
+            if is_cap_group(&mission.root) {
+                for number in 1..=5 {
+                    if let Some((x, z)) = waypoint_xz(&mission.root, number) {
+                        consider(&mut best, i, MissionHandle::Cap(number), x, z, 12.0);
+                    }
+                }
+                consider(
+                    &mut best,
+                    i,
+                    MissionHandle::Flight,
+                    mission.start_x,
+                    mission.start_z,
+                    16.0,
+                );
+                continue;
+            }
             consider(
                 &mut best,
                 i,
@@ -7990,6 +8638,10 @@ impl super::GroupGeneratorApp {
             if mission.hidden {
                 continue;
             }
+            if is_cap_group(&mission.root) {
+                self.draw_cap_mission(painter, map_rect, mission);
+                continue;
+            }
             let start = world_to_pos(map_rect, mission.start_x, mission.start_z);
             let ip = world_to_pos(map_rect, mission.ip_x, mission.ip_z);
             let target = world_to_pos(map_rect, mission.target_x, mission.target_z);
@@ -8010,6 +8662,13 @@ impl super::GroupGeneratorApp {
                 Color32::WHITE,
                 Align2::LEFT_BOTTOM,
             );
+            if let Some((_, _, radius_m)) = crate::template::attack_cover(&mission.strike_cover) {
+                let edge = world_to_pos(map_rect, mission.target_x, mission.target_z + radius_m);
+                let px = target.distance(edge);
+                if px > 8.0 {
+                    painter.circle_stroke(target, px, Stroke::new(1.4_f32, color));
+                }
+            }
             painter.circle_stroke(target, 7.0, Stroke::new(2.0_f32, color));
             draw_map_label(
                 painter,
@@ -8071,6 +8730,87 @@ impl super::GroupGeneratorApp {
                 Align2::RIGHT_TOP,
             );
         }
+    }
+
+    fn draw_cap_mission(&self, painter: &egui::Painter, map_rect: Rect, mission: &PlacedMission) {
+        let color = faction_map_color(mission.eastern);
+        let route = Stroke::new(1.6_f32, color);
+        let mut corners = Vec::new();
+        for number in 1..=4 {
+            let Some((x, z)) = waypoint_xz(&mission.root, number) else {
+                continue;
+            };
+            corners.push(world_to_pos(map_rect, x, z));
+        }
+        for index in 0..corners.len() {
+            let next = corners[(index + 1) % corners.len()];
+            painter.line_segment([corners[index], next], route);
+            draw_nav_arrow(painter, corners[index], next, color);
+        }
+        for (index, corner) in corners.iter().enumerate() {
+            painter.circle_filled(*corner, 5.0, color);
+            painter.circle_stroke(*corner, 5.0, Stroke::new(1.2_f32, Color32::WHITE));
+            draw_map_label(
+                painter,
+                *corner + Vec2::new(7.0, -6.0),
+                &format!("{}", index + 1),
+                Color32::WHITE,
+                Align2::LEFT_BOTTOM,
+            );
+        }
+        if let (Some(last), Some((x, z))) = (corners.last(), waypoint_xz(&mission.root, 5)) {
+            let rtb = world_to_pos(map_rect, x, z);
+            painter.line_segment([*last, rtb], Stroke::new(1.0_f32, color));
+            draw_nav_arrow(painter, *last, rtb, color);
+            painter.circle_stroke(rtb, 6.0, Stroke::new(1.6_f32, color));
+            draw_map_label(
+                painter,
+                rtb + Vec2::new(8.0, 4.0),
+                "RTB",
+                Color32::WHITE,
+                Align2::LEFT_TOP,
+            );
+        }
+        let start = world_to_pos(map_rect, mission.start_x, mission.start_z);
+        let strike_tex = if mission.eastern {
+            self.strike_tex_east.as_ref()
+        } else {
+            self.strike_tex_nato.as_ref()
+        };
+        if let Some(tex) = strike_tex {
+            painter.image(
+                tex.id(),
+                Rect::from_center_size(start, Vec2::splat(26.0)),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        } else {
+            painter.circle_filled(start, 8.0, color);
+            painter.circle_stroke(start, 8.0, Stroke::new(1.5_f32, Color32::WHITE));
+        }
+        let toward = waypoint_xz(&mission.root, 1).unwrap_or((mission.start_x, mission.start_z));
+        let heading = StrikePose {
+            target_x: toward.0,
+            target_z: toward.1,
+            start_x: mission.start_x,
+            start_z: mission.start_z,
+            ip_x: toward.0,
+            ip_z: toward.1,
+        }
+        .heading_deg()
+        .to_radians();
+        let dir = Vec2::new(heading.sin() as f32, -heading.cos() as f32);
+        painter.line_segment(
+            [start + dir * 15.0, start + dir * 24.0],
+            Stroke::new(2.0_f32, Color32::WHITE),
+        );
+        draw_map_label(
+            painter,
+            start + Vec2::new(-16.0, 14.0),
+            &mission.name,
+            Color32::WHITE,
+            Align2::RIGHT_TOP,
+        );
     }
 
     fn hit_air_start(&self, map_rect: Rect, pointer: Pos2) -> Option<usize> {
@@ -9725,6 +10465,10 @@ impl super::GroupGeneratorApp {
     /// One exported strike or sortie, back on the map so it can be edited.
     /// `Some(true)` is a Mission Tasking sortie.
     fn adopt_strike_group(&mut self, group: crate::ast::Il2Entity, packed: bool) -> Option<bool> {
+        if is_cap_group(&group) {
+            self.adopt_cap_group(group, packed);
+            return Some(true);
+        }
         let layout = strike_layout(&group, packed)?;
         let attacks = layout
             .attacks
@@ -9771,8 +10515,49 @@ impl super::GroupGeneratorApp {
             air_enabled: true,
             air_path: None,
             hidden: false,
+            cap_minutes: 0,
+            strike_cover: Vec::new(),
         });
         Some(air_task)
+    }
+
+    /// A CAP comes back as one patrol. The shift is the CAP Shift timer.
+    fn adopt_cap_group(&mut self, group: crate::ast::Il2Entity, packed: bool) {
+        let (start_x, start_z) = flight_anchor(&group).unwrap_or((0.0, 0.0));
+        let (target_x, target_z) = group
+            .find_by_name("Zone IN")
+            .and_then(|zone| zone.pos_xz())
+            .unwrap_or((start_x, start_z));
+        let (ip_x, ip_z) = waypoint_xz(&group, 1).unwrap_or((start_x, start_z));
+        let eastern = !flight_group_is_nato(&group);
+        let raw = group.name().unwrap_or("CAP");
+        let name = strip_pack_index(raw, packed);
+        let minutes = crate::template::cap_shift_minutes(&group).unwrap_or(20);
+        self.map_missions.push(PlacedMission {
+            name,
+            eastern,
+            root: group,
+            target_x,
+            target_z,
+            start_x,
+            start_z,
+            ip_x,
+            ip_z,
+            target_label: "Patrol".into(),
+            target_class: None,
+            attacks: Vec::new(),
+            keep_template_attack: true,
+            sequence: self.next_mission_sequence(),
+            air_task: true,
+            air_weight: 5,
+            air_runs: 1,
+            air_spread: crate::airtask::AirSpread::Even,
+            air_enabled: true,
+            air_path: None,
+            hidden: false,
+            cap_minutes: minutes,
+            strike_cover: Vec::new(),
+        });
     }
 
     /// A sortie flagged Attack Ground Targets keeps the unit it was aimed at.
@@ -9823,15 +10608,18 @@ impl super::GroupGeneratorApp {
         let zone_radii = shared_target_zone_radii(&missions);
         for (mission_i, mission) in missions.iter().enumerate() {
             let (mut clone, _) = duplicate_template(&mission.root, &mut next);
-            let pose = StrikePose {
-                target_x: mission.target_x,
-                target_z: mission.target_z,
-                start_x: mission.start_x,
-                start_z: mission.start_z,
-                ip_x: mission.ip_x,
-                ip_z: mission.ip_z,
-            };
-            place_strike_at(&mut clone, pose);
+            arm_cap_shift(mission, &mut clone);
+            if !is_cap_group(&clone) {
+                let pose = StrikePose {
+                    target_x: mission.target_x,
+                    target_z: mission.target_z,
+                    start_x: mission.start_x,
+                    start_z: mission.start_z,
+                    ip_x: mission.ip_x,
+                    ip_z: mission.ip_z,
+                };
+                place_strike_at(&mut clone, pose);
+            }
             if !mission.attacks.is_empty() {
                 let aims: Vec<(usize, f64, f64)> = mission
                     .attacks
@@ -9839,6 +10627,9 @@ impl super::GroupGeneratorApp {
                     .map(|a| (a.ordinal, a.x, a.z))
                     .collect();
                 place_flight_attack_areas(&mut clone, &aims);
+            }
+            if !mission.strike_cover.is_empty() {
+                cover_attack_area(&mut clone, &mission.strike_cover);
             }
             let flags = self.arm_strike_export(&mut clone, mission);
             notes.extend(flags);
@@ -9866,7 +10657,7 @@ impl super::GroupGeneratorApp {
             let runs = mission.air_runs.max(1);
             let spread = mission.air_spread;
             let duration_s = if timer_only {
-                crate::airtask::flight_secs(route_meters(mission), waypoint_kmh(&clone))
+                sortie_clock_secs(mission, &clone)
             } else {
                 0.0
             };
@@ -10548,18 +11339,12 @@ impl super::GroupGeneratorApp {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("BaseMap");
-        let mut strike_n = 0usize;
-        let mut sortie_n = 0usize;
         for army in imported.armies {
             let (eastern, name, entity) = (army.eastern, army.name, army.entity);
             let entity = match take_strike_missions(entity) {
                 Ok(taken) => {
                     for group in taken.groups {
-                        match self.adopt_strike_group(group, taken.packed) {
-                            Some(true) => sortie_n += 1,
-                            Some(false) => strike_n += 1,
-                            None => {}
-                        }
+                        self.adopt_strike_group(group, taken.packed);
                     }
                     continue;
                 }
@@ -10583,6 +11368,17 @@ impl super::GroupGeneratorApp {
             let idx = self.map_armies.len() - 1;
             self.refresh_army_slot(idx);
         }
+        merge_matching_sorties(&mut self.map_missions);
+        let sortie_n = self
+            .map_missions
+            .iter()
+            .filter(|mission| mission.air_task)
+            .count();
+        let strike_n = self
+            .map_missions
+            .iter()
+            .filter(|mission| !mission.air_task)
+            .count();
 
         self.map_imported_fighters = imported.fighters;
         if self.map_imported_fighters.is_empty() {
@@ -11077,6 +11873,8 @@ mod tests {
             air_enabled: true,
             air_path: None,
             hidden: false,
+            cap_minutes: 0,
+            strike_cover: Vec::new(),
         }
     }
 
@@ -11257,6 +12055,8 @@ mod tests {
             air_enabled: true,
             air_path: None,
             hidden: false,
+            cap_minutes: 0,
+            strike_cover: Vec::new(),
         };
         let mut app = super::super::GroupGeneratorApp::default();
         app.map_missions = vec![
@@ -11434,6 +12234,103 @@ mod tests {
         assert!(open.air_task);
         assert_eq!(open.target_label, "Unknown");
         assert!(open.target_class.is_none());
+    }
+
+    fn flight_shell(name: &str, x: &str, script: &str) -> Il2Entity {
+        let mut root = Il2Entity::new("Group");
+        root.set_name(name);
+        let mut plane = node(
+            "Plane",
+            &[
+                ("Name", "Lead"),
+                ("XPos", x),
+                ("ZPos", "2000"),
+                ("YPos", "3000"),
+                ("Country", "601"),
+                ("AILevel", "2"),
+                ("PayloadId", "0"),
+                ("Fuel", "1"),
+                ("NumberInFormation", "0"),
+                ("Script", script),
+            ],
+        );
+        plane.index = Some(4);
+        let mut zone = node(
+            "MCU_CheckZone",
+            &[("Name", "Zone IN"), ("XPos", "5000"), ("ZPos", "6000")],
+        );
+        zone.set_name("Zone IN");
+        let mut wp = node(
+            "MCU_Waypoint",
+            &[("Name", "WP 1"), ("XPos", "3000"), ("ZPos", "4000")],
+        );
+        wp.set_name("WP 1");
+        root.children = vec![plane, zone, wp];
+        root
+    }
+
+    #[test]
+    fn identical_sortie_copies_combine_and_a_cap_reloads() {
+        let mut sweep = placed_on("Sweep", 1_000.0, 2_000.0);
+        sweep.air_task = true;
+        sweep.root = flight_shell("Sweep", "1000", "f51");
+        let mut copy = placed_on("Sweep 2", 1_000.0, 2_000.0);
+        copy.air_task = true;
+        copy.root = flight_shell("Sweep 2", "1000", "f51");
+        let mut other = placed_on("Other", 9_000.0, 2_000.0);
+        other.air_task = true;
+        other.root = flight_shell("Other", "9000", "f80");
+        let mut app = super::super::GroupGeneratorApp::default();
+        app.map_missions = vec![sweep, copy, other];
+        super::merge_matching_sorties(&mut app.map_missions);
+        assert_eq!(app.map_missions.len(), 2, "the pair is one sortie");
+        let sweep = app
+            .map_missions
+            .iter()
+            .find(|mission| mission.name == "Sweep")
+            .expect("Sweep");
+        assert_eq!(sweep.air_runs, 2);
+        assert!(app.map_missions.iter().any(|mission| mission.name == "Other"));
+
+        let mut cap = flight_shell("NATO CAP", "4000", "f51");
+        for (name, x, z) in [("WP 4", "1", "0"), ("WP 5", "0", "1")] {
+            let mut wp = node(
+                "MCU_Waypoint",
+                &[("Name", name), ("XPos", x), ("ZPos", z)],
+            );
+            wp.set_name(name);
+            cap.children.push(wp);
+        }
+        let mut ret = node(
+            "MCU_Timer",
+            &[("Name", "Return to WP 1"), ("XPos", "0"), ("ZPos", "0")],
+        );
+        ret.set_name("Return to WP 1");
+        cap.children.push(ret);
+        let mut shift = node(
+            "MCU_Timer",
+            &[
+                ("Name", "CAP Shift"),
+                ("Time", "1200"),
+                ("XPos", "0"),
+                ("ZPos", "0"),
+            ],
+        );
+        shift.set_name("CAP Shift");
+        cap.children.push(shift);
+        let mut tasking = Il2Entity::new("Group");
+        tasking.set_name("Air Tasking");
+        tasking.children = vec![cap];
+        let taken = crate::template::take_strike_missions(tasking).unwrap();
+        assert_eq!(taken.groups.len(), 1);
+        app.map_missions.clear();
+        app.adopt_strike_group(taken.groups.into_iter().next().unwrap(), true)
+            .expect("cap");
+        let patrol = &app.map_missions[0];
+        assert!(patrol.air_task);
+        assert_eq!(patrol.target_label, "Patrol");
+        assert_eq!(patrol.cap_minutes, 20);
+        assert!(crate::template::is_cap_group(&patrol.root));
     }
 
     fn rename_zone_and_end(root: &mut Il2Entity, zone: &str, end: &str) {
@@ -11779,6 +12676,8 @@ mod tests {
             air_enabled: true,
             air_path: None,
             hidden: false,
+            cap_minutes: 0,
+            strike_cover: Vec::new(),
         }
     }
 

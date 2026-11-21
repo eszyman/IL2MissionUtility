@@ -2899,7 +2899,7 @@ fn tasking_library_opens_in_the_center() {
     assert!(h.has("Fighter Sweep"));
     assert!(h.has("Strike"));
     h.click("Strike");
-    assert!(h.has("Airfields"));
+    assert!(h.has("Pick on the map"));
     assert!(h.has("Imported units"));
     assert!(h.has("Home base"));
     assert!(h.has("Add to missions"));
@@ -3655,6 +3655,8 @@ fn timeline_mission(name: &str, eastern: bool, weight: i32, runs: u32) -> super:
         air_enabled: true,
         air_path: None,
         hidden: false,
+        cap_minutes: 0,
+        strike_cover: Vec::new(),
     }
 }
 

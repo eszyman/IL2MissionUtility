@@ -1151,13 +1151,10 @@ pub fn priority_label(priority: i32) -> &'static str {
     }
 }
 
-/// Timer name for a Goto hop. A loop is named for the waypoint it returns to.
+/// Timer name for a Goto hop. The hop that closes a patrol is still "Goto WP N".
+/// Arrival at that waypoint pulses a separate "Return to WP" timer.
 pub fn goto_timer_name(order: &OrderSpec) -> String {
-    if let Some(back) = order.loop_to {
-        format!("Return to WP {}", back.max(1))
-    } else {
-        format!("Goto WP {}", order.waypoint.max(1))
-    }
+    format!("Goto WP {}", order.waypoint.max(1))
 }
 
 /// Second line for a colored order chip: enough to check the tree at a glance.
@@ -1630,25 +1627,25 @@ pub struct ImportedStrikes {
 
 /// Planes, an AttackArea, and Mission Complete make a strike. An Exclusive
 /// Activation group yields each plan. A ground pack is returned unchanged.
+fn is_air_mission(entity: &Il2Entity) -> bool {
+    strike_side(entity).is_some() || is_cap_group(entity)
+}
+
 pub fn take_strike_missions(mut entity: Il2Entity) -> Result<ImportedStrikes, Il2Entity> {
-    let child_hits = entity
-        .children
-        .iter()
-        .filter(|c| strike_side(c).is_some())
-        .count();
-    let packed =
-        child_hits >= 2 || (child_hits >= 1 && entity.name() == Some("Exclusive Activation"));
+    let child_hits = entity.children.iter().filter(|c| is_air_mission(c)).count();
+    let named_pack = matches!(
+        entity.name(),
+        Some("Exclusive Activation") | Some("Air Tasking")
+    );
+    let packed = child_hits >= 2 || (child_hits >= 1 && named_pack);
     if packed {
         let kids = std::mem::take(&mut entity.children);
         return Ok(ImportedStrikes {
             packed: true,
-            groups: kids
-                .into_iter()
-                .filter(|c| strike_side(c).is_some())
-                .collect(),
+            groups: kids.into_iter().filter(is_air_mission).collect(),
         });
     }
-    if strike_side(&entity).is_some() {
+    if is_air_mission(&entity) {
         return Ok(ImportedStrikes {
             packed: false,
             groups: vec![entity],
@@ -1871,6 +1868,225 @@ pub fn place_strike_at(group: &mut Il2Entity, pose: StrikePose) -> bool {
     true
 }
 
+/// Center and radius of the attack circle around `points`. One point stays
+/// at 3 km. Extra points push the radius out until the farthest sits inside,
+/// plus a 500 m margin, and never past 40 km.
+pub fn attack_cover(points: &[(f64, f64)]) -> Option<(f64, f64, f64)> {
+    if points.is_empty() {
+        return None;
+    }
+    let n = points.len() as f64;
+    let cx = points.iter().map(|p| p.0).sum::<f64>() / n;
+    let cz = points.iter().map(|p| p.1).sum::<f64>() / n;
+    let reach = points
+        .iter()
+        .map(|p| (p.0 - cx).hypot(p.1 - cz))
+        .fold(0.0_f64, f64::max);
+    let radius = (reach + 500.0)
+        .max(f64::from(DEFAULT_ATTACK_AREA_M))
+        .min(40_000.0);
+    Some((cx, cz, radius))
+}
+
+/// Move the first AttackArea onto that circle. Later flights keep their own aim.
+pub fn cover_attack_area(group: &mut Il2Entity, points: &[(f64, f64)]) {
+    let Some((cx, cz, radius)) = attack_cover(points) else {
+        return;
+    };
+    let mut written = false;
+    group.for_each_mut(&mut |entity| {
+        if written || entity.block_type != "MCU_CMD_AttackArea" {
+            return;
+        }
+        entity.set_property("XPos", format!("{cx:.3}"));
+        entity.set_property("ZPos", format!("{cz:.3}"));
+        entity.set_property("AttackArea", format!("{radius:.0}"));
+        written = true;
+    });
+}
+
+/// A CAP patrol: four low-priority corners and a high-priority RTB, looped
+/// by Return to WP 1. A strike has no fourth waypoint.
+pub fn is_cap_group(group: &Il2Entity) -> bool {
+    group.find_by_name("WP 4").is_some()
+        && group.find_by_name("WP 5").is_some()
+        && group.find_by_name("Return to WP 1").is_some()
+}
+
+/// The patrol heads home when this timer fires. Goto WP 5 also runs Force
+/// Complete, and that pair in one pulse cancels the home waypoint, so the
+/// diamond keeps looping. The shift drops the current leg, turns the loop
+/// off, and orders WP 5 half a second later.
+pub fn ensure_cap_shift(group: &mut Il2Entity, minutes: u32) -> bool {
+    if !is_cap_group(group) {
+        return false;
+    }
+    let Some(wp5) = group
+        .find_by_name("WP 5")
+        .filter(|node| node.block_type == "MCU_Waypoint")
+        .and_then(|node| node.index)
+    else {
+        return false;
+    };
+    let force = group
+        .find_by_name("Force Complete - High")
+        .and_then(|node| node.index);
+    let loop_id = group
+        .find_by_name("Return to WP 1")
+        .and_then(|node| node.index);
+    let (x, z) = group
+        .find_by_name("Zone IN")
+        .and_then(|zone| zone.pos_xz())
+        .unwrap_or((0.0, 0.0));
+    let minutes = minutes.clamp(1, 180);
+    let secs = f64::from(minutes) * 60.0;
+    let mut next = group.max_index().saturating_add(1);
+
+    let head_id = if let Some(head) = group.find_by_name_mut("CAP Head Home") {
+        head.set_property("Time", format_time(BAKED_ORDER_DELAY));
+        head.set_property("Random", "0");
+        head.set_targets(vec![wp5]);
+        head.index.unwrap_or(0)
+    } else {
+        let mut head = timer("CAP Head Home", BAKED_ORDER_DELAY, &mut next, x, z + 20.0);
+        head.set_property("Random", "0");
+        head.set_targets(vec![wp5]);
+        let id = head.index.unwrap_or(0);
+        group.children.push(head);
+        id
+    };
+
+    let mut shift_targets = Vec::new();
+    if let Some(loop_id) = loop_id {
+        let stop_id = if let Some(stop) = group.find_by_name_mut("Stop Patrol") {
+            stop.set_objects(vec![loop_id]);
+            stop.set_targets(vec![loop_id]);
+            stop.index.unwrap_or(0)
+        } else {
+            let mut stop = mcu("MCU_Deactivate", "Stop Patrol", &mut next, x, z + 40.0);
+            stop.set_objects(vec![loop_id]);
+            stop.set_targets(vec![loop_id]);
+            let id = stop.index.unwrap_or(0);
+            group.children.push(stop);
+            id
+        };
+        shift_targets.push(stop_id);
+    }
+    if let Some(force) = force {
+        shift_targets.push(force);
+    }
+    shift_targets.push(head_id);
+
+    if let Some(shift) = group.find_by_name_mut("CAP Shift") {
+        shift.set_property("Time", format_time(secs));
+        shift.set_property("Random", "0");
+        shift.set_targets(shift_targets);
+        return true;
+    }
+    let mut shift = timer("CAP Shift", secs, &mut next, x, z);
+    shift.set_property("Random", "0");
+    shift.set_targets(shift_targets);
+    group.children.push(shift);
+    true
+}
+
+/// Minutes stored on CAP Shift, when the group has one.
+pub fn cap_shift_minutes(group: &Il2Entity) -> Option<u32> {
+    let secs = group
+        .find_by_name("CAP Shift")
+        .and_then(|node| node.property("Time"))
+        .and_then(|text| text.parse::<f64>().ok())?;
+    Some((secs / 60.0).round().clamp(1.0, 180.0) as u32)
+}
+
+/// Slide the whole patrol so Zone IN sits on `x`, `z`. Waypoints keep their
+/// offsets from that point.
+pub fn center_cap_on(group: &mut Il2Entity, x: f64, z: f64) -> bool {
+    let Some((zx, zz)) = group.find_by_name("Zone IN").and_then(|zone| zone.pos_xz()) else {
+        return false;
+    };
+    group.translate_xz(x - zx, z - zz);
+    true
+}
+
+pub fn waypoint_xz(group: &Il2Entity, number: u32) -> Option<(f64, f64)> {
+    group
+        .find_by_name(&format!("WP {number}"))
+        .filter(|wp| wp.block_type == "MCU_Waypoint")
+        .and_then(|wp| wp.pos_xz())
+}
+
+pub fn set_waypoint_xz(group: &mut Il2Entity, number: u32, x: f64, z: f64) -> bool {
+    let Some(wp) = group.find_by_name_mut(&format!("WP {number}")) else {
+        return false;
+    };
+    if wp.block_type != "MCU_Waypoint" {
+        return false;
+    }
+    wp.set_property("XPos", format!("{x:.3}"));
+    wp.set_property("ZPos", format!("{z:.3}"));
+    true
+}
+
+/// Lead aircraft, or the first plane in the group.
+pub fn flight_anchor(group: &Il2Entity) -> Option<(f64, f64)> {
+    let mut fallback = None;
+    let mut lead = None;
+    group.for_each(&mut |entity| {
+        if entity.block_type != "Plane" {
+            return;
+        }
+        let Some(pos) = entity.pos_xz() else {
+            return;
+        };
+        if fallback.is_none() {
+            fallback = Some(pos);
+        }
+        if entity
+            .property("NumberInFormation")
+            .and_then(|s| s.parse::<f64>().ok())
+            .is_some_and(|n| n.abs() < 0.5)
+        {
+            lead = Some(pos);
+        }
+    });
+    lead.or(fallback)
+}
+
+/// Move the aircraft and their entities. Waypoints and check zones stay.
+pub fn shift_flight(group: &mut Il2Entity, dx: f64, dz: f64) {
+    if dx.abs() < 0.01 && dz.abs() < 0.01 {
+        return;
+    }
+    group.for_each_mut(&mut |entity| {
+        if entity.block_type != "Plane" && entity.block_type != "MCU_TR_Entity" {
+            return;
+        }
+        if entity.name().is_some_and(|n| n.starts_with("Fake Object")) {
+            return;
+        }
+        if let Some((x, z)) = entity.pos_xz() {
+            entity.set_property("XPos", format!("{:.3}", x + dx));
+            entity.set_property("ZPos", format!("{:.3}", z + dz));
+        }
+    });
+}
+
+/// One lap of the four patrol corners, in metres.
+pub fn cap_circuit_m(group: &Il2Entity) -> Option<f64> {
+    let mut points = Vec::with_capacity(4);
+    for number in 1..=4 {
+        points.push(waypoint_xz(group, number)?);
+    }
+    let mut sum = 0.0;
+    for index in 0..4 {
+        let a = points[index];
+        let b = points[(index + 1) % 4];
+        sum += (a.0 - b.0).hypot(a.1 - b.1);
+    }
+    Some(sum)
+}
+
 const FAILSAFE_IP: &str = "FAILSAFE IP";
 const FAILSAFE_WP2: &str = "FAILSAFE WP2";
 const TOT_PROX: &str = "Time on Target Prox";
@@ -2087,6 +2303,7 @@ fn lead_seat(planes: &[PlaneSeat], plane_i: usize) -> usize {
 
 const CAP_ABORTS: &[EntityEvent] = &[
     EntityEvent::OnPlaneBingoMainMG,
+    EntityEvent::OnPlaneBingoFuel,
     EntityEvent::OnPlaneCriticalDamage,
     EntityEvent::OnPilotWounded,
 ];
@@ -2123,7 +2340,7 @@ pub fn apply_mission_package(
     let mut detail = match package {
         MissionPackage::Cap => {
             seats[seat].orders = cap_orders(base, spacing, rtb_north, rtb_east);
-            "Diamond patrol at low priority. RTB on bingo guns, critical damage, or wounded.".into()
+            "Diamond patrol at low priority. RTB on bingo guns, bingo fuel, critical damage, or wounded.".into()
         }
         MissionPackage::Strike => {
             let script = seats[seat].unit.script.clone();
@@ -3846,6 +4063,39 @@ fn western_country(country: i32) -> bool {
     country / 100 == 6
 }
 
+/// Check-zone side for this flight. A zone already set to the other side, or
+/// to both, stays. A zone that matches the flight's own side is the unset
+/// default: NATO then watches DPRK, and DPRK watches NATO.
+pub fn zone_for_aircraft(zone: ZoneCoalition, country: i32) -> ZoneCoalition {
+    let own = if western_country(country) {
+        ZoneCoalition::Western
+    } else {
+        ZoneCoalition::Eastern
+    };
+    if zone != own {
+        return zone;
+    }
+    if own == ZoneCoalition::Western {
+        ZoneCoalition::Eastern
+    } else {
+        ZoneCoalition::Western
+    }
+}
+
+/// The check zone of the first aircraft that takes orders.
+pub fn zone_watching_the_other_side(seats: &[TemplateSeat], zone: ZoneCoalition) -> ZoneCoalition {
+    let Some(country) = seats
+        .iter()
+        .enumerate()
+        .find(|(i, s)| s.unit.is_air() && receives_orders(seats, *i))
+        .or_else(|| seats.iter().enumerate().find(|(_, s)| s.unit.is_air()))
+        .map(|(_, s)| s.country)
+    else {
+        return zone;
+    };
+    zone_for_aircraft(zone, country)
+}
+
 fn rtb_destination(western: bool, group: usize) -> (f64, f64) {
     let side = if western { 1.0 } else { -1.0 };
     (
@@ -3911,7 +4161,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     let spacing = opts.spacing.max(10.0) as f64;
     let per_group = opts.per_group.max(1) as usize;
     let path_altitude = path_waypoint_altitude(opts);
-    let coalitions = opts.zone_coalition.plane_coalitions();
+    let coalitions = zone_watching_the_other_side(&opts.seats, opts.zone_coalition).plane_coalitions();
     let wants_rtb = opts
         .seats
         .iter()
@@ -4268,6 +4518,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                     mission_complete: false,
                     pause: false,
                     loop_to: None,
+                    return_id: None,
                 });
                 continue;
             }
@@ -4282,6 +4533,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                     mission_complete: false,
                     pause: false,
                     loop_to: order.loop_to,
+                    return_id: None,
                 });
                 continue;
             }
@@ -4296,6 +4548,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                     mission_complete: false,
                     pause: false,
                     loop_to: None,
+                    return_id: None,
                 });
                 continue;
             }
@@ -4310,6 +4563,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                     mission_complete: false,
                     pause: true,
                     loop_to: None,
+                    return_id: None,
                 });
                 continue;
             }
@@ -4324,6 +4578,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                     mission_complete: true,
                     pause: false,
                     loop_to: None,
+                    return_id: None,
                 });
                 continue;
             }
@@ -4338,6 +4593,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                     mission_complete: false,
                     pause: false,
                     loop_to: None,
+                    return_id: None,
                 });
                 continue;
             };
@@ -4369,6 +4625,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                 mission_complete: false,
                 pause: false,
                 loop_to: None,
+                return_id: None,
             });
         }
         emitted.push(steps);
@@ -4553,6 +4810,42 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
                 }
             }
             emitted[si][oi].delay.set_targets(targets);
+        }
+    }
+
+    // The last low-priority hop is "Goto WP 4". Arrival there pulses
+    // "Return to WP 1", which orders WP 1 again. Bingo, damage, and the
+    // tasking window still break the cycle through the high-priority RTB.
+    let mut loop_returns = Vec::new();
+    for steps in &mut emitted {
+        for step in steps.iter_mut() {
+            let Some(back) = step.loop_to else {
+                continue;
+            };
+            let back_idx = back.max(1) as usize - 1;
+            let Some(back_id) = waypoints.get(back_idx).and_then(|w| w.index) else {
+                continue;
+            };
+            let x = step
+                .delay
+                .property("XPos")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(ORIGIN_X);
+            let z = step
+                .delay
+                .property("ZPos")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(ORIGIN_Z);
+            let mut ret = timer(
+                &format!("Return to WP {}", back.max(1)),
+                BAKED_ORDER_DELAY,
+                &mut next_id,
+                x,
+                z + MCU_GAP,
+            );
+            ret.set_targets(vec![back_id]);
+            step.return_id = ret.index;
+            loop_returns.push(ret);
         }
     }
 
@@ -4807,6 +5100,7 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     for steps in &emitted {
         logic.children.extend(steps.iter().map(|s| s.delay.clone()));
     }
+    logic.children.extend(loop_returns);
 
     for unit in placed {
         units_g.children.push(unit.object);
@@ -4846,6 +5140,8 @@ struct EmittedOrder {
     mission_complete: bool,
     pause: bool,
     loop_to: Option<u32>,
+    /// "Return to WP" timer pulsed by the arrival waypoint. Targets `loop_to`.
+    return_id: Option<i32>,
 }
 
 fn is_attack_emitted(step: &EmittedOrder) -> bool {
@@ -5051,9 +5347,8 @@ fn wire_waypoint_chain(
             if idx >= extra.len() {
                 continue;
             }
-            if let Some(back) = step.loop_to {
-                let back_idx = back.max(1) as usize - 1;
-                if let Some(id) = waypoints.get(back_idx).and_then(|w| w.index) {
+            if step.loop_to.is_some() {
+                if let Some(id) = step.return_id {
                     if !extra[idx].contains(&id) {
                         extra[idx].push(id);
                     }
@@ -6683,6 +6978,25 @@ fn read_native_orders(
             timer: e,
         });
     });
+    // "Return to WP 1" that actually targets WP 1 is the patrol loop, not an
+    // order. A timer of that name which targets a later waypoint is the old
+    // misnamed hop and stays an order.
+    hits.retain(|hit| {
+        let Some(back) = hit.return_to else {
+            return true;
+        };
+        let closes_loop = hit.timer.targets.iter().any(|id| {
+            by_index.get(id).is_some_and(|e| {
+                e.block_type == "MCU_Waypoint" && e.name().and_then(parse_wp_number) == Some(back)
+            })
+        });
+        if closes_loop {
+            mark_consumed(hit.timer, consumed);
+            false
+        } else {
+            true
+        }
+    });
     for hit in &mut hits {
         if hit.seat.is_some() {
             continue;
@@ -7034,6 +7348,15 @@ fn spec_from_native_timer(
                     if other.block_type == "MCU_Waypoint" {
                         if let Some(back) = other.name().and_then(parse_wp_number) {
                             spec.loop_to = Some(back);
+                        }
+                    } else if other.block_type == "MCU_Timer" {
+                        if let Some(back) = other
+                            .name()
+                            .and_then(|n| n.strip_prefix("Return to WP "))
+                            .and_then(|s| s.trim().parse().ok())
+                        {
+                            spec.loop_to = Some(back);
+                            mark_consumed(other, consumed);
                         }
                     }
                 }
@@ -7783,6 +8106,20 @@ mod tests {
         .unwrap();
         assert_eq!(strike_side(&f80), Some(true));
         assert!(take_strike_missions(f80).is_ok());
+
+        let mut cap = Il2Entity::new("Group");
+        cap.set_name("NATO CAP 2");
+        cap.children = vec![
+            at("MCU_Waypoint", "WP 4", 1.0, 1.0),
+            at("MCU_Waypoint", "WP 5", 2.0, 2.0),
+            at("MCU_Timer", "Return to WP 1", 0.0, 0.0),
+        ];
+        let mut tasking = Il2Entity::new("Group");
+        tasking.set_name("Air Tasking");
+        tasking.children = vec![cap, at("Group", "Air Tasking Logic", 0.0, 0.0)];
+        let taken = take_strike_missions(tasking).unwrap();
+        assert_eq!(taken.groups.len(), 1);
+        assert!(is_cap_group(&taken.groups[0]));
     }
 
     fn four_migs() -> TemplateOptions {
@@ -10940,7 +11277,7 @@ mod tests {
         assert_eq!(opts.seats[0].orders[3].loop_to, Some(1));
         assert_eq!(opts.seats[0].orders[4].priority, 2);
         assert_eq!(opts.seats[1].orders.len(), 0);
-        assert_eq!(opts.seats[1].events.len(), 4);
+        assert_eq!(opts.seats[1].events.len(), 5);
         assert!(
             opts.seats[1]
                 .events
@@ -10959,16 +11296,20 @@ mod tests {
         let wp1 = pack.find_by_name("WP 1").unwrap();
         let wp4 = pack.find_by_name("WP 4").unwrap();
         let wp5 = pack.find_by_name("WP 5").unwrap();
+        let goto4 = pack.find_by_name("Goto WP 4").unwrap();
+        let ret = pack.find_by_name("Return to WP 1").unwrap();
         assert_eq!(wp1.property("Priority"), Some("0"));
         assert_eq!(wp5.property("Priority"), Some("2"));
-        assert!(wp4.targets.contains(&wp1.index.unwrap()));
+        assert!(goto4.targets.contains(&wp4.index.unwrap()));
+        assert!(!goto4.targets.contains(&wp1.index.unwrap()));
+        assert!(wp4.targets.contains(&ret.index.unwrap()));
+        assert!(!wp4.targets.contains(&wp1.index.unwrap()));
+        assert_eq!(ret.targets, vec![wp1.index.unwrap()]);
         assert!(!wp1.targets.contains(&wp5.index.unwrap()));
         assert!(pack.find_by_name("Goto WP 1").is_some());
         assert!(pack.find_by_name("Goto WP 2").is_some());
         assert!(pack.find_by_name("Goto WP 3").is_some());
-        assert!(pack.find_by_name("Return to WP 1").is_some());
         assert!(pack.find_by_name("Goto WP 5").is_some());
-        assert!(pack.find_by_name("Goto WP 4").is_none());
         let (north, east) = (
             opts.seats[0].orders[1].wp_north_m.unwrap(),
             opts.seats[0].orders[1].wp_east_m.unwrap(),
@@ -11003,6 +11344,7 @@ mod tests {
         let loaded = load_template(&pack, &builtin_plane_catalog()).unwrap();
         assert!(loaded.native_format);
         let orders = &loaded.options.seats[0].orders;
+        assert_eq!(orders.len(), 5);
         assert_eq!(orders[0].kind, OrderKind::GotoWaypoint);
         assert_eq!(orders[0].waypoint, 1);
         assert_eq!(orders[0].priority, 0);
@@ -11023,6 +11365,38 @@ mod tests {
         assert!(loaded.options.seats[0].events.iter().any(|e| {
             e.kind == EntityEvent::OnPlaneBingoMainMG && e.then == EventThen::Order(4)
         }));
+        assert!(loaded.options.seats[0].events.iter().any(|e| {
+            e.kind == EntityEvent::OnPlaneBingoFuel && e.then == EventThen::Order(4)
+        }));
+    }
+
+    #[test]
+    fn nato_cap_zone_watches_dprk() {
+        let plane = builtin_plane_catalog()
+            .into_iter()
+            .find(|u| u.script.contains("f51d"))
+            .expect("F-51D");
+        let mut opts = TemplateOptions::default();
+        opts.seats = vec![TemplateSeat::new(plane)];
+        opts.seats[0].country = 601;
+        opts.waypoint_count = 0;
+        opts.zone_coalition = ZoneCoalition::Western;
+        apply_mission_package(&mut opts.seats, 0, MissionPackage::Cap, 4_000.0).unwrap();
+        let pack = generate_template(&opts).unwrap();
+        assert_eq!(
+            pack.find_by_name("Zone IN")
+                .unwrap()
+                .property("PlaneCoalitions"),
+            Some("[1]")
+        );
+        assert_eq!(
+            pack.find_by_name("Zone Out")
+                .unwrap()
+                .property("PlaneCoalitions"),
+            Some("[1]")
+        );
+        let loaded = load_template(&pack, &builtin_plane_catalog()).unwrap();
+        assert_eq!(loaded.options.zone_coalition, ZoneCoalition::Eastern);
     }
 
     #[test]

@@ -228,6 +228,9 @@ fn waypoint_kmh(group: &crate::ast::Il2Entity) -> f64 {
 }
 
 fn mission_flight_secs(mission: &map::PlacedMission) -> f64 {
+    if crate::template::is_cap_group(&mission.root) && mission.cap_minutes > 0 {
+        return f64::from(mission.cap_minutes.clamp(1, 180)) * 60.0;
+    }
     let legs = [
         (
             (mission.start_x, mission.start_z),
@@ -406,11 +409,6 @@ fn task_timeline(
             painter.rect_filled(band, 2.0, c::ACCENT.linear_multiply(0.35));
         }
     }
-    let cap = if options.launch_while_active {
-        options.budget.max(1).min(flights.len().max(1) as u32)
-    } else {
-        1
-    };
     let mut events: Vec<(f64, usize, bool)> = Vec::new();
     for (index, marks) in schedules.iter().enumerate() {
         let eastern = flights.get(index).is_some_and(|flight| flight.eastern);
@@ -419,7 +417,7 @@ fn task_timeline(
         }
     }
     events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut airborne: Vec<f64> = Vec::new();
+    let mut airborne: Vec<(f64, bool)> = Vec::new();
     let mut cursor = 0;
     while cursor < events.len() {
         let time = events[cursor].0;
@@ -428,17 +426,25 @@ fn task_timeline(
             group.push(events[cursor]);
             cursor += 1;
         }
-        airborne.retain(|done| *done > time);
-        let room = airborne.len() as u32 >= cap;
+        airborne.retain(|(done, _)| *done > time);
+        let nato_out = airborne.iter().filter(|(_, eastern)| !eastern).count() as u32;
+        let dprk_out = airborne.iter().filter(|(_, eastern)| *eastern).count() as u32;
         for (offset, (_, index, eastern)) in group.iter().enumerate() {
             let pos = Pos2::new(at(time), baseline);
             let side = if *eastern { c::DPRK } else { c::NATO };
-            let launches = !room && offset == 0;
+            let side_full = if !options.launch_while_active {
+                !airborne.is_empty()
+            } else if *eastern {
+                dprk_out >= options.dprk_active.max(1)
+            } else {
+                nato_out >= options.nato_active.max(1)
+            };
+            let launches = !side_full && offset == 0;
             if launches {
                 painter.circle_filled(pos, 4.0, side);
                 let duration = flights.get(*index).map(|flight| flight.secs).unwrap_or(0.0);
                 if duration > 0.0 {
-                    airborne.push(time + duration);
+                    airborne.push((time + duration, *eastern));
                 }
             } else {
                 painter.circle_stroke(pos, 4.0, Stroke::new(1.5_f32, side));
@@ -515,6 +521,22 @@ const AIR_CONTROLS: &[(&str, &str)] = &[
     (
         "Out at once",
         "How many different sorties can be out together. A mark is missed once this many are already out.",
+    ),
+    (
+        "NATO",
+        "How many NATO sorties can be out at the same time. 1 keeps a single NATO flight up.",
+    ),
+    (
+        "DPRK",
+        "How many DPRK sorties can be out at the same time. 1 keeps a single DPRK flight up.",
+    ),
+    (
+        "Shift, minutes",
+        "How long this CAP stays out. The gold bar on the timeline is this long. The patrol heads home when it ends.",
+    ),
+    (
+        "Altitude, metres",
+        "How high this CAP flies. The aircraft and the patrol points use this height.",
     ),
 ];
 
@@ -643,6 +665,8 @@ struct GroupGeneratorApp {
     air_selected: Option<usize>,
     /// Library or template package open in the center, not placed yet.
     air_draft: Option<map::AirPackageDraft>,
+    /// Map click that aims the package open in Mission Tasking.
+    target_pick: Option<map::TargetPick>,
     /// Last target lists for the package in the center.
     package_target_cache: std::cell::RefCell<Option<map::PackageHitCache>>,
     air_options: AirOptions,
@@ -995,6 +1019,7 @@ impl Default for GroupGeneratorApp {
             bomber_loaded_path: None,
             air_selected: None,
             air_draft: None,
+            target_pick: None,
             package_target_cache: std::cell::RefCell::new(None),
             air_options: AirOptions::default(),
             task_view: TaskView::Tasking,
@@ -1300,6 +1325,7 @@ impl GroupGeneratorApp {
             return;
         }
         if self.mode == AppMode::Map {
+            self.drop_target_pick();
             self.cancel_map_tool();
         }
         // Each tab keeps its own status line: park the outgoing one, restore the incoming one.
@@ -1339,9 +1365,13 @@ impl GroupGeneratorApp {
             if let Some(i) = keys.map_tool {
                 self.pick_map_tool(MAP_TOOLS[i].0);
             }
-            if keys.escape {
+        if keys.escape {
+            if self.target_pick.is_some() {
+                self.cancel_target_pick();
+            } else {
                 self.cancel_map_tool();
             }
+        }
         }
     }
 
@@ -1776,6 +1806,7 @@ impl GroupGeneratorApp {
                                 mission.air_enabled,
                                 mission.air_runs,
                                 mission.air_weight,
+                                mission.cap_minutes,
                             )
                         })
                         .collect::<Vec<_>>(),
@@ -1785,6 +1816,8 @@ impl GroupGeneratorApp {
                     self.air_options.quiet_pct,
                     self.air_options.zone_chance_pct,
                     self.air_options.budget,
+                    self.air_options.nato_active,
+                    self.air_options.dprk_active,
                     self.air_options.extension_min,
                     self.air_options.window_min,
                 )
@@ -3200,22 +3233,26 @@ impl GroupGeneratorApp {
                 &mut self.air_options.launch_while_active,
                 "Launch while a sortie is still out",
             )
-            .on_hover_text("Off: a mark is missed while any sortie is out. On: another sortie that is not already out can start, up to Out at once.");
+            .on_hover_text("Off: a mark is missed while any sortie is out. On: each side keeps its own number of sorties out.");
             if self.air_options.launch_while_active {
-                let sortie_count = self
-                    .map_missions
-                    .iter()
-                    .filter(|mission| mission.air_task && mission.air_enabled)
-                    .count()
-                    .max(1) as u32;
-                let magazine = self
-                    .map_missions
-                    .iter()
-                    .filter(|mission| mission.air_task && mission.air_enabled)
-                    .map(|mission| mission.air_runs.max(1))
-                    .sum::<u32>()
-                    .max(sortie_count);
-                air_control(ui, 10, &mut self.air_options.budget, 1..=magazine);
+                ui.add_space(4.0);
+                ui.label(RichText::new("Active at Once"));
+                let side_runs = |eastern: bool| {
+                    self.map_missions
+                        .iter()
+                        .filter(|mission| {
+                            mission.air_task && mission.air_enabled && mission.eastern == eastern
+                        })
+                        .map(|mission| mission.air_runs.max(1))
+                        .sum::<u32>()
+                        .max(1)
+                };
+                let nato_max = side_runs(false);
+                let dprk_max = side_runs(true);
+                self.air_options.nato_active = self.air_options.nato_active.clamp(1, nato_max);
+                self.air_options.dprk_active = self.air_options.dprk_active.clamp(1, dprk_max);
+                air_control(ui, 11, &mut self.air_options.nato_active, 1..=nato_max);
+                air_control(ui, 12, &mut self.air_options.dprk_active, 1..=dprk_max);
             }
         } else {
             air_control(ui, 4, &mut self.air_options.budget, 1..=6);
@@ -3332,13 +3369,30 @@ impl GroupGeneratorApp {
             }
             air_control(ui, 6, &mut weight, sortie_count..=24);
             self.map_missions[i].air_weight = weight as i32;
-            let minutes = (mission_flight_secs(&self.map_missions[i]) / 60.0).round() as u32;
-            ui.label(
-                RichText::new(format!(
-                    "1 in {weight}. The route on the map is about {minutes} min."
-                ))
-                .color(c::NEUTRAL_700),
-            );
+            let cap = crate::template::is_cap_group(&self.map_missions[i].root);
+            if cap {
+                let mut shift = self.map_missions[i].cap_minutes.clamp(1, 180);
+                air_control(ui, 13, &mut shift, 1..=180);
+                self.map_missions[i].cap_minutes = shift;
+                let current = map::plane_altitude(&self.map_missions[i].root);
+                let mut altitude = current;
+                air_control(ui, 14, &mut altitude, 500..=8000);
+                if altitude != current {
+                    map::stamp_sweep_altitude(&mut self.map_missions[i].root, altitude);
+                }
+                ui.label(
+                    RichText::new(format!("1 in {weight}. The gold bar is this shift."))
+                        .color(c::NEUTRAL_700),
+                );
+            } else {
+                let minutes = (mission_flight_secs(&self.map_missions[i]) / 60.0).round() as u32;
+                ui.label(
+                    RichText::new(format!(
+                        "1 in {weight}. The route on the map is about {minutes} min."
+                    ))
+                    .color(c::NEUTRAL_700),
+                );
+            }
             if self.air_options.trigger == airtask::AirTrigger::Clock {
                 ui.add_space(8.0);
                 ui.label("Load the marks");
@@ -3499,8 +3553,12 @@ impl GroupGeneratorApp {
         });
         ui.add_space(8.0);
         let ready = self.air_draft.as_ref().is_some_and(|draft| match draft.kind {
-            Some(map::PackageKind::Strike) => draft.target.is_some(),
-            Some(map::PackageKind::Sweep) => true,
+            Some(map::PackageKind::Strike) => {
+                draft.target.is_some() || !draft.targets.is_empty()
+            }
+            Some(map::PackageKind::Sweep) => {
+                draft.editing.is_some() || !draft.targets.is_empty()
+            }
             None => false,
         });
         if ui
@@ -3516,51 +3574,31 @@ impl GroupGeneratorApp {
     }
 
     fn air_strike_parameters(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_sized([180.0, 28.0], egui::Button::new("Pick on the map"))
+            .clicked()
+        {
+            self.begin_target_pick(false);
+        }
+        shell::hint(
+            ui,
+            "The map shows the area, the front, blocks, cities, airfields, and the ground forces. Click enemy ground to attack ground. Hold Shift to snap to a target, the same as on the map. Select more than one unit below and the attack circle grows to cover them.",
+            false,
+        );
+        self.air_unit_list(ui);
+    }
+
+    fn air_unit_list(&mut self, ui: &mut egui::Ui) {
         if self.provisions_loaded_for.is_empty() {
             self.reload_map_provisions();
         }
-        let (eastern, kind, current) = {
+        let (eastern, picked_many) = {
             let Some(draft) = self.air_draft.as_ref() else {
                 return;
             };
-            (draft.eastern, draft.static_kind, draft.target.clone())
+            (draft.eastern, draft.targets.clone())
         };
-        ui.label("Target type");
-        let mut picked = kind;
-        egui::ComboBox::from_id_salt("package_target_kind")
-            .selected_text(picked.label())
-            .width(ui.available_width().min(360.0))
-            .show_ui(ui, |ui| {
-                for kind in map::StaticTargetKind::ALL {
-                    if ui.selectable_label(picked == kind, kind.label()).clicked() {
-                        picked = kind;
-                    }
-                }
-            });
-        if picked != kind {
-            if let Some(draft) = self.air_draft.as_mut() {
-                draft.static_kind = picked;
-                draft.target = None;
-            }
-        }
-        let (hits, units) = self.package_targets(eastern, picked);
-        ui.add_space(4.0);
-        ui.label("Inside the area");
-        if hits.is_empty() {
-            let note = if matches!(
-                picked,
-                map::StaticTargetKind::Encampments
-                    | map::StaticTargetKind::Ports
-                    | map::StaticTargetKind::Mines
-                    | map::StaticTargetKind::Industry
-            ) {
-                "Nothing of this type is charted inside the area."
-            } else {
-                "None of these inside the area."
-            };
-            shell::hint(ui, note, false);
-        }
-        self.pick_package_target(ui, &hits, &current);
+        let (_, units) = self.package_targets(eastern, map::StaticTargetKind::Airfields);
         ui.add_space(6.0);
         ui.label("Imported units");
         if units.is_empty() {
@@ -3570,8 +3608,8 @@ impl GroupGeneratorApp {
                 false,
             );
         }
-        self.pick_package_target(ui, &units, &current);
-        if current.as_ref().is_some_and(|hit| hit.may_not_spawn) {
+        self.pick_package_targets(ui, &units, &picked_many);
+        if picked_many.iter().any(|hit| hit.may_not_spawn) {
             shell::warning(
                 ui,
                 "This unit may not spawn. Army Generator activates only some of the copies.",
@@ -3579,14 +3617,14 @@ impl GroupGeneratorApp {
         }
     }
 
-    fn pick_package_target(
+    fn pick_package_targets(
         &mut self,
         ui: &mut egui::Ui,
         hits: &[map::StrikeObjective],
-        current: &Option<map::StrikeObjective>,
+        current: &[map::StrikeObjective],
     ) {
         for hit in hits {
-            let on = current.as_ref() == Some(hit);
+            let on = current.iter().any(|picked| picked == hit);
             let label = hit.label.clone();
             if ui
                 .add_sized(
@@ -3596,7 +3634,12 @@ impl GroupGeneratorApp {
                 .clicked()
             {
                 if let Some(draft) = self.air_draft.as_mut() {
-                    draft.target = Some(hit.clone());
+                    draft.target = None;
+                    if let Some(index) = draft.targets.iter().position(|picked| picked == hit) {
+                        draft.targets.remove(index);
+                    } else {
+                        draft.targets.push(hit.clone());
+                    }
                 }
             }
         }
@@ -3612,11 +3655,34 @@ impl GroupGeneratorApp {
         if let Some(draft) = self.air_draft.as_mut() {
             draft.altitude_m = altitude;
         }
+        ui.add_space(6.0);
+        if ui
+            .add_sized([180.0, 28.0], egui::Button::new("Pick on the map"))
+            .clicked()
+        {
+            self.begin_target_pick(true);
+        }
         shell::hint(
             ui,
-            "The patrol point starts at the middle of the area. Home is the column on the right. Drag the flight, the IP, and the patrol point on the map after the mission is added.",
+            "A CAP sits over friendly ground. The map shows the front and the ground forces. Click that ground and you come back here. Shift and altitude can both be changed on the sortie after it is added. The shift is the gold bar on the timeline.",
             false,
         );
+        if let Some(names) = self.air_draft.as_ref().and_then(|draft| {
+            if draft.targets.is_empty() {
+                None
+            } else {
+                Some(
+                    draft
+                        .targets
+                        .iter()
+                        .map(|hit| hit.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+            }
+        }) {
+            ui.label(names);
+        }
     }
 
     fn air_home_base(&mut self, ui: &mut egui::Ui) {

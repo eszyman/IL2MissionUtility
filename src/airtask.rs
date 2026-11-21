@@ -39,7 +39,7 @@ use crate::ast::Il2Entity;
 use crate::duplicate::duplicate_template;
 use crate::template::{
     FlightRole, MissionPackage, TemplateOptions, ZoneCoalition, append_seat, apply_mission_package,
-    bundled_catalog, generate_template,
+    bundled_catalog, center_cap_on, generate_template,
 };
 
 const LOGIC_GROUP: &str = "Air Tasking Logic";
@@ -56,7 +56,7 @@ const STOP_NAME: &str = "Stop Advances";
 const DISARM_START: &str = "Disarm At Start";
 
 /// What has to be true for the first sortie to spawn on a fresh scenario.
-pub const FIRING_HINT: &str = "On a timer only, each sortie keeps its own marks and its own number of firings. Generate builds that many flights on that path, and each mark spawns one of them with no check zone. A mark that arrives while that sortie is still out is missed, not moved later, until the sortie finishes or is destroyed. Launch while a sortie is out lets another start, up to Out at once. On a timer with a check zone, the mark opens the area and a player there starts the sortie. The gold bar is how long the route on the map takes at the set speed. 180 minutes is 3 hours. With these settings left as they are, the first mark can start immediately and one sortie is out at a time.";
+pub const FIRING_HINT: &str = "On a timer only, each sortie keeps its own marks and its own number of firings. Generate builds that many flights on that path, and each mark spawns one of them with no check zone. A mark that arrives while that sortie is still out is missed, not moved later, until the sortie finishes or is destroyed. Launch while a sortie is out lets each side keep its own number up. Active at once starts at one NATO and one DPRK. On a timer with a check zone, the mark opens the area and a player there starts the sortie. The gold bar is how long the route on the map takes at the set speed. 180 minutes is 3 hours. With these settings left as they are, the first mark can start immediately and one sortie is out at a time.";
 
 /// How a pool entry is allowed to start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,6 +126,11 @@ pub struct AirOptions {
     pub quiet_pct: u32,
     pub zone_chance_pct: u32,
     pub budget: u32,
+    /// Timer mode, once launches are allowed while a sortie is out.
+    /// How many NATO flights can be airborne together.
+    pub nato_active: u32,
+    /// How many DPRK flights can be airborne together.
+    pub dprk_active: u32,
     pub extension_min: u32,
     /// Package length. 180 is a 3 hour mission. 5–10 is a short test. 360 is the long end.
     pub window_min: u32,
@@ -250,6 +255,8 @@ impl Default for AirOptions {
             quiet_pct: 0,
             zone_chance_pct: 100,
             budget: 1,
+            nato_active: 1,
+            dprk_active: 1,
             extension_min: 0,
             window_min: 180,
             launches: 0,
@@ -379,6 +386,40 @@ pub fn build_sortie(def: &SortieDef, target: (f64, f64)) -> Result<Il2Entity, St
             let (x, _, z) = pos_of(zone);
             group.translate_xz(target.0 - x, target.1 - z);
         }
+    }
+    Ok(group)
+}
+
+/// Build one CAP patrol with the current template. `center` is the Zone IN point.
+/// The four corners and the RTB waypoint stay where the profile put them.
+pub fn build_cap(def: &SortieDef, center: (f64, f64)) -> Result<Il2Entity, String> {
+    let unit = catalog_plane(def.script_part)?;
+    let ships = def.ships.max(1);
+    let mut seats = Vec::new();
+    append_seat(&mut seats, unit.clone(), ships);
+    seats[0].role = FlightRole::Lead;
+    seats[0].country = def.country;
+    seats[0].skill = def.skill;
+    for _ in 1..ships {
+        append_seat(&mut seats, unit.clone(), ships);
+    }
+    for seat in &mut seats {
+        seat.country = def.country;
+        seat.skill = def.skill;
+    }
+    apply_mission_package(&mut seats, 0, MissionPackage::Cap, 8_000.0)?;
+    let mut opts = TemplateOptions::default();
+    opts.name = def.name.to_string();
+    opts.seats = seats;
+    opts.per_group = ships;
+    opts.zone_coalition = if def.nato {
+        ZoneCoalition::Eastern
+    } else {
+        ZoneCoalition::Western
+    };
+    let mut group = generate_template(&opts)?;
+    if !center_cap_on(&mut group, center.0, center.1) {
+        return Err("the CAP has no Zone IN to place".into());
     }
     Ok(group)
 }
@@ -777,6 +818,253 @@ fn wire_draw(
     stash(logic, draw)
 }
 
+/// Credits for one side. A launch spends the first free credit and starts that
+/// plan 0.1 s later. The plan's end gives one credit back. While every credit
+/// is spent, the next mark arms nothing and the flight stays on the ground.
+fn wire_side_active(
+    logic: &mut Vec<Il2Entity>,
+    next_id: &mut i32,
+    x: f64,
+    y: f64,
+    z: f64,
+    side: &str,
+    plans: &[usize],
+    slots: u32,
+    gates: &[i32],
+    starts: &[i32],
+) -> (Vec<i32>, Vec<i32>) {
+    let mut stop = Vec::new();
+    if plans.is_empty() {
+        return (stop, Vec::new());
+    }
+    let slots = (slots.max(1) as usize).min(plans.len());
+    let mut credits = Vec::with_capacity(slots);
+    let mut passes = Vec::new();
+    let mut restores = Vec::with_capacity(slots);
+    for i in 0..slots {
+        let credit = timer(
+            &format!("{side} Credit {}", i + 1),
+            0.0,
+            100,
+            true,
+            next_id,
+            x,
+            y,
+            z + i as f64 * 12.0,
+        );
+        credits.push(stash(logic, credit));
+        let restore = timer(
+            &format!("{side} Restore {}", i + 1),
+            0.0,
+            100,
+            false,
+            next_id,
+            x + 20.0,
+            y,
+            z + i as f64 * 12.0,
+        );
+        restores.push(stash(logic, restore));
+        if i + 1 < slots {
+            let pass = timer(
+                &format!("{side} Pass {}", i + 1),
+                0.0,
+                100,
+                true,
+                next_id,
+                x + 40.0,
+                y,
+                z + i as f64 * 12.0,
+            );
+            passes.push(stash(logic, pass));
+        }
+    }
+    let mut launch = timer(
+        &format!("{side} Launch"),
+        0.1,
+        100,
+        true,
+        next_id,
+        x,
+        y,
+        z + 80.0,
+    );
+    let mut starters = Vec::with_capacity(plans.len());
+    for &p in plans {
+        let starter = timer(
+            &format!("Plan {} Starter", p + 1),
+            0.0,
+            100,
+            false,
+            next_id,
+            x + 60.0,
+            y,
+            z + p as f64 * 12.0,
+        );
+        starters.push(stash(logic, starter));
+    }
+    launch.set_targets(starters.clone());
+    let launch_id = stash(logic, launch);
+    stop.extend(credits.iter().copied());
+    stop.extend(passes.iter().copied());
+    stop.extend(restores.iter().copied());
+    stop.push(launch_id);
+    stop.extend(starters.iter().copied());
+
+    for i in 0..slots {
+        let mut off = vec![credits[i]];
+        if i < passes.len() {
+            off.push(passes[i]);
+        }
+        let mut spend = deactivate(
+            &format!("{side} Spend {}", i + 1),
+            next_id,
+            x + 120.0,
+            y,
+            z + i as f64 * 12.0,
+        );
+        affect(&mut spend, off);
+        let spend_id = stash(logic, spend);
+        let mut arm_restore = activate(
+            &format!("{side} Arm Restore {}", i + 1),
+            next_id,
+            x + 130.0,
+            y,
+            z + i as f64 * 12.0,
+        );
+        affect(&mut arm_restore, vec![restores[i]]);
+        let arm_restore_id = stash(logic, arm_restore);
+        let mut credit_targets = vec![spend_id, arm_restore_id, launch_id];
+        if i < passes.len() {
+            let mut rearm = timer(
+                &format!("{side} Rearm {}", i + 1),
+                0.1,
+                100,
+                true,
+                next_id,
+                x + 80.0,
+                y,
+                z + i as f64 * 12.0,
+            );
+            let mut on = activate(
+                &format!("{side} Rearm Pass {}", i + 1),
+                next_id,
+                x + 100.0,
+                y,
+                z + i as f64 * 12.0,
+            );
+            affect(&mut on, vec![passes[i]]);
+            let on_id = stash(logic, on);
+            rearm.set_targets(vec![on_id]);
+            let rearm_id = stash(logic, rearm);
+            credit_targets.push(rearm_id);
+            stop.push(rearm_id);
+            stop.push(on_id);
+            let mut hop = vec![credits[i + 1]];
+            if i + 1 < passes.len() {
+                hop.push(passes[i + 1]);
+            }
+            set_targets_on(logic, passes[i], hop);
+        }
+        set_targets_on(logic, credits[i], credit_targets);
+        stop.push(spend_id);
+        stop.push(arm_restore_id);
+
+        let mut spent = vec![restores[i]];
+        spent.extend(restores[i + 1..].iter().copied());
+        let mut close_restore = deactivate(
+            &format!("{side} Close Restore {}", i + 1),
+            next_id,
+            x + 150.0,
+            y,
+            z + i as f64 * 12.0,
+        );
+        affect(&mut close_restore, spent);
+        let close_id = stash(logic, close_restore);
+        let mut give = activate(
+            &format!("{side} Give {}", i + 1),
+            next_id,
+            x + 140.0,
+            y,
+            z + i as f64 * 12.0,
+        );
+        affect(&mut give, vec![credits[i]]);
+        let give_id = stash(logic, give);
+        let mut restore_targets = vec![close_id, give_id];
+        if i + 1 < slots {
+            let mut rearm_restore = timer(
+                &format!("{side} Rearm Restore {}", i + 1),
+                0.1,
+                100,
+                true,
+                next_id,
+                x + 160.0,
+                y,
+                z + i as f64 * 12.0,
+            );
+            let mut on = activate(
+                &format!("{side} Rearm Restore On {}", i + 1),
+                next_id,
+                x + 180.0,
+                y,
+                z + i as f64 * 12.0,
+            );
+            affect(&mut on, restores[i + 1..].to_vec());
+            let on_id = stash(logic, on);
+            rearm_restore.set_targets(vec![on_id]);
+            let rearm_id = stash(logic, rearm_restore);
+            restore_targets.push(rearm_id);
+            stop.push(rearm_id);
+            stop.push(on_id);
+        }
+        set_targets_on(logic, restores[i], restore_targets);
+        stop.push(close_id);
+        stop.push(give_id);
+    }
+
+    for (nth, &p) in plans.iter().enumerate() {
+        let mut arm = activate(
+            &format!("Arm Plan {}", p + 1),
+            next_id,
+            x + 200.0,
+            y,
+            z + nth as f64 * 12.0,
+        );
+        affect(&mut arm, vec![starters[nth]]);
+        let arm_id = stash(logic, arm);
+        let mut cancel = timer(
+            &format!("Plan {} Cancel", p + 1),
+            0.2,
+            100,
+            true,
+            next_id,
+            x + 220.0,
+            y,
+            z + nth as f64 * 12.0,
+        );
+        let mut clear = deactivate(
+            &format!("Plan {} Clear", p + 1),
+            next_id,
+            x + 240.0,
+            y,
+            z + nth as f64 * 12.0,
+        );
+        affect(&mut clear, vec![starters[nth]]);
+        let clear_id = stash(logic, clear);
+        cancel.set_targets(vec![clear_id]);
+        let cancel_id = stash(logic, cancel);
+        set_targets_on(logic, starters[nth], vec![starts[p], clear_id]);
+        let mut entry = vec![arm_id, credits[0], cancel_id];
+        if !passes.is_empty() {
+            entry.insert(2, passes[0]);
+        }
+        set_targets_on(logic, gates[p], entry);
+        stop.push(arm_id);
+        stop.push(cancel_id);
+        stop.push(clear_id);
+    }
+    (stop, restores)
+}
+
 /// On a timer only. Each mark is an absolute time. A mark that arrives while
 /// the cap of sorties is already out is missed. The next mark is not delayed.
 fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2Entity, String> {
@@ -795,6 +1083,8 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
         time: f64,
         weight: i32,
         route_s: f64,
+        cap: bool,
+        nato: bool,
     }
     let mut copies: Vec<Copy> = Vec::with_capacity(n);
     for (i, plan) in plans.iter().enumerate() {
@@ -813,6 +1103,13 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
         for (k, time) in times.iter().enumerate() {
             let (mut clone, id_map) = duplicate_template(&plan.root, &mut next_id);
             silence_template_begin(&mut clone);
+            let cap = crate::template::is_cap_group(&clone);
+            if cap {
+                // The clock starts the flight. Zone IN still watches the other
+                // side, and Zone Out no longer ends the patrol when the area
+                // is empty. The package window closes both and runs cleanup.
+                rewire_cap_timer_zones(&mut clone);
+            }
             if times.len() == 1 {
                 clone.set_name(&base);
             } else if k == 0 {
@@ -838,6 +1135,8 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
                 route_s: plan.duration_s,
                 bring,
                 end,
+                cap,
+                nato: plan_is_nato(&clone),
                 root: clone,
             });
         }
@@ -851,11 +1150,6 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
         .unwrap_or((0.0, 0.0, 0.0));
     let (ax, ay, az) = anchor;
     let at = |col: usize, row: usize| (ax + col as f64 * 50.0, ay, az + 200.0 + row as f64 * 30.0);
-    let cap = if options.launch_while_active {
-        options.budget.max(1).min(n as u32)
-    } else {
-        1
-    };
     let mut logic: Vec<Il2Entity> = Vec::new();
     let mut gate = Vec::with_capacity(n);
     let mut start = Vec::with_capacity(n);
@@ -872,10 +1166,21 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
             z,
         );
         let mut start_targets = copies[p].bring.clone();
-        // Time on Target is armed by PULSE OUT, not by the bring-up timer.
-        // Without it the flight attacks until a failsafe, and the home
-        // waypoint never gets the order.
-        start_targets.extend(pulse_out_ids(&copies[p].root));
+        if copies[p].cap {
+            // Arm the check after Disarm At Start. PULSE OUT would enable
+            // Zone Out, and an empty Zone Out used to end the flight.
+            start_targets.extend(ids_named(
+                &copies[p].root,
+                "MCU_Activate",
+                "Zone In ReActivate",
+            ));
+            start_targets.extend(ids_named(&copies[p].root, "MCU_Timer", "CAP Shift"));
+        } else {
+            // Time on Target is armed by PULSE OUT, not by the bring-up timer.
+            // Without it the flight attacks until a failsafe, and the home
+            // waypoint never gets the order.
+            start_targets.extend(pulse_out_ids(&copies[p].root));
+        }
         started.set_targets(start_targets);
         start.push(stash(&mut logic, started));
         let gated = timer(
@@ -914,54 +1219,60 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
         held.extend(chain.hold);
     }
     held.extend(gate.iter().copied());
-    let mut hold = deactivate("Hold Launches", &mut next_id, x, y, z + 140.0);
-    affect(&mut hold, if cap == 1 { held.clone() } else { Vec::new() });
-    let hold_id = stash(&mut logic, hold);
-    let mut self_hold = Vec::with_capacity(n);
-    for p in 0..n {
-        let mut one = deactivate(
-            &format!("Hold Plan {}", p + 1),
-            &mut next_id,
-            x,
-            y,
-            z + 160.0 + p as f64 * 15.0,
-        );
-        affect(&mut one, vec![gate[p]]);
-        self_hold.push(stash(&mut logic, one));
-    }
-    for p in 0..n {
-        let mut targets = vec![start[p]];
-        if cap == 1 {
-            targets.push(hold_id);
-        } else {
-            targets.push(self_hold[p]);
-        }
-        set_targets_on(&mut logic, gate[p], targets);
-    }
-
     let mut release_ids = Vec::new();
-    if cap == 1 {
+    if options.launch_while_active {
+        let nato: Vec<usize> = (0..n).filter(|&p| copies[p].nato).collect();
+        let dprk: Vec<usize> = (0..n).filter(|&p| !copies[p].nato).collect();
+        let (nx, ny, nz) = at(0, 6);
+        let (nato_stop, nato_restore) = wire_side_active(
+            &mut logic,
+            &mut next_id,
+            nx,
+            ny,
+            nz,
+            "NATO",
+            &nato,
+            options.nato_active,
+            &gate,
+            &start,
+        );
+        let (dx, dy, dz) = at(4, 6);
+        let (dprk_stop, dprk_restore) = wire_side_active(
+            &mut logic,
+            &mut next_id,
+            dx,
+            dy,
+            dz,
+            "DPRK",
+            &dprk,
+            options.dprk_active,
+            &gate,
+            &start,
+        );
+        for (plans, restores) in [(&nato, &nato_restore), (&dprk, &dprk_restore)] {
+            for &p in plans {
+                let end = copies[p].end;
+                if let Some(node) = find_mut(&mut copies[p].root, end) {
+                    for id in restores {
+                        node.append_target(*id);
+                    }
+                }
+            }
+        }
+        release_ids.extend(nato_stop);
+        release_ids.extend(dprk_stop);
+    } else {
+        let mut hold = deactivate("Hold Launches", &mut next_id, x, y, z + 140.0);
+        affect(&mut hold, held.clone());
+        let hold_id = stash(&mut logic, hold);
+        for p in 0..n {
+            set_targets_on(&mut logic, gate[p], vec![start[p], hold_id]);
+        }
         let mut release = activate("Release Launches", &mut next_id, x, y, z + 200.0);
         affect(&mut release, held.clone());
         let release_id = stash(&mut logic, release);
         release_ids.push(release_id);
         for copy in &mut copies {
-            if let Some(node) = find_mut(&mut copy.root, copy.end) {
-                node.append_target(release_id);
-            }
-        }
-    } else {
-        for (p, copy) in copies.iter_mut().enumerate() {
-            let mut release = activate(
-                &format!("Release Plan {}", p + 1),
-                &mut next_id,
-                x,
-                y,
-                z + 200.0 + p as f64 * 15.0,
-            );
-            affect(&mut release, vec![gate[p]]);
-            let release_id = stash(&mut logic, release);
-            release_ids.push(release_id);
             if let Some(node) = find_mut(&mut copy.root, copy.end) {
                 node.append_target(release_id);
             }
@@ -975,7 +1286,12 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
     affect(&mut stop, stop_ids);
     let stop_id = stash(&mut logic, stop);
     let mut close = deactivate("Close Zones", &mut next_id, x, y, z + 260.0);
-    let zones: Vec<i32> = copies.iter().flat_map(|c| zone_in_ids(&c.root)).collect();
+    let mut zones: Vec<i32> = copies.iter().flat_map(|c| zone_in_ids(&c.root)).collect();
+    for copy in &copies {
+        if copy.cap {
+            zones.extend(zone_out_ids(&copy.root));
+        }
+    }
     affect(&mut close, zones);
     let close_id = stash(&mut logic, close);
     let mut window = timer(
@@ -988,7 +1304,13 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
         y,
         z + 280.0,
     );
-    window.set_targets(vec![stop_id, close_id]);
+    let mut window_targets = vec![stop_id, close_id];
+    for copy in &copies {
+        if copy.cap {
+            window_targets.push(copy.end);
+        }
+    }
+    window.set_targets(window_targets);
     let window_id = stash(&mut logic, window);
     let mut trace = timer(TRACE_NAME, 0.0, 100, true, &mut next_id, x, y, z + 300.0);
     let route_s = copies.iter().map(|copy| copy.route_s).fold(0.0, f64::max);
@@ -1031,6 +1353,47 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
     out.children.push(logic_group);
     disarm_illegal_enabled(&mut out);
     Ok(out)
+}
+
+/// Timer mode owns the launch and the cleanup. Zone IN still watches the
+/// other coalition, but it does not bring the flight up. Zone Out still
+/// turns itself off when that check clears, and it does not end the patrol
+/// or arm the check again. The package window closes both zones and pulses
+/// MISSION END.
+fn rewire_cap_timer_zones(root: &mut Il2Entity) {
+    let bring = bring_up_ids(root);
+    let pulse = pulse_out_ids(root);
+    let mission_end = root.find_by_name("MISSION END").and_then(|e| e.index);
+    let cooldown = root.find_by_name("COOLDOWN").and_then(|e| e.index);
+    let react_in = root
+        .find_by_name("Zone In ReActivate")
+        .and_then(|e| e.index);
+    if let Some(zone) = root.find_by_name_mut("Zone IN") {
+        zone.targets
+            .retain(|id| !bring.contains(id) && !pulse.contains(id));
+    }
+    if let Some(zone) = root.find_by_name_mut("Zone Out") {
+        zone.targets.retain(|id| {
+            Some(*id) != mission_end && Some(*id) != cooldown && Some(*id) != react_in
+        });
+        zone.set_property("Enabled", "0");
+    }
+}
+
+fn ids_named(root: &Il2Entity, block: &str, name: &str) -> Vec<i32> {
+    let mut ids = Vec::new();
+    root.for_each(&mut |entity| {
+        if entity.block_type == block && entity.name() == Some(name) {
+            if let Some(id) = entity.index {
+                ids.push(id);
+            }
+        }
+    });
+    ids
+}
+
+fn zone_out_ids(root: &Il2Entity) -> Vec<i32> {
+    ids_named(root, "MCU_CheckZone", "Zone Out")
 }
 
 fn bring_up_ids(root: &Il2Entity) -> Vec<i32> {
@@ -1976,6 +2339,8 @@ fn clamped(options: &AirOptions) -> AirOptions {
     o.quiet_pct = o.quiet_pct.min(100);
     o.zone_chance_pct = o.zone_chance_pct.min(100);
     o.budget = o.budget.max(1);
+    o.nato_active = o.nato_active.max(1);
+    o.dprk_active = o.dprk_active.max(1);
     o.period_min = o.period_min.max(1);
     o.window_min = o.window_min.clamp(5, 360);
     o
@@ -2295,6 +2660,7 @@ mod tests {
     use super::*;
     use crate::parser::parse_group_file;
     use crate::serialize::serialize_group;
+    use crate::template::is_cap_group;
 
     fn one(name: &'static str, nato: bool) -> SortieDef {
         SortieDef {
@@ -2626,6 +2992,99 @@ mod tests {
     }
 
     #[test]
+    fn cap_on_a_timer_checks_the_other_side_and_cleans_up_with_the_window() {
+        let nato = build_cap(&one("NATO CAP", true), default_target(0)).unwrap();
+        assert!(is_cap_group(&nato));
+        assert_eq!(
+            nato.find_by_name("Zone IN")
+                .unwrap()
+                .property("PlaneCoalitions"),
+            Some("[1]")
+        );
+        assert_eq!(
+            nato.find_by_name("Zone Out")
+                .unwrap()
+                .property("PlaneCoalitions"),
+            Some("[1]")
+        );
+        assert!(nato.find_by_name("Goto WP 4").is_some());
+        assert!(nato.find_by_name("Return to WP 1").is_some());
+        let dprk = build_cap(&one("DPRK CAP", false), default_target(1)).unwrap();
+        assert_eq!(
+            dprk.find_by_name("Zone IN")
+                .unwrap()
+                .property("PlaneCoalitions"),
+            Some("[2]")
+        );
+
+        let mut nato = nato;
+        assert!(crate::template::ensure_cap_shift(&mut nato, 25));
+        let plan = AirTaskInput {
+            label: "NATO CAP".into(),
+            root: nato,
+            weight: 1,
+            duration_s: 25.0 * 60.0,
+            runs: 1,
+            spread: AirSpread::Even,
+        };
+        let group = link_air_task(&[plan], &AirOptions::default()).unwrap();
+        let started = names_of(&group, &only(&group, "Plan 1 Start").targets);
+        assert!(started.iter().any(|n| n == "MISSION BEGIN"));
+        assert!(started.iter().any(|n| n == "Zone In ReActivate"));
+        assert!(started.iter().any(|n| n == "CAP Shift"));
+        assert!(!started.iter().any(|n| n == "PULSE OUT"));
+        let shift = only(&group, "CAP Shift");
+        assert_eq!(shift.property("Time"), Some("1500"));
+        assert_eq!(shift.property("Random"), Some("0"));
+        let shift_names = names_of(&group, &shift.targets);
+        assert!(shift_names.iter().any(|n| n == "Stop Patrol"));
+        assert!(shift_names.iter().any(|n| n == "Force Complete - High"));
+        assert!(shift_names.iter().any(|n| n == "CAP Head Home"));
+        assert!(
+            !shift_names.iter().any(|n| n == "Goto WP 5"),
+            "Goto WP 5 force-completes in the same pulse and cancels the home leg"
+        );
+        let home = only(&group, "CAP Head Home");
+        assert_eq!(home.property("Time"), Some("0.50"));
+        assert!(
+            home.targets.iter().any(|id| {
+                find_id(&group, *id).and_then(|e| e.name()) == Some("WP 5")
+            }),
+            "the delayed timer orders the home waypoint"
+        );
+        let stop = only(&group, "Stop Patrol");
+        assert!(
+            stop.objects.iter().any(|id| {
+                find_id(&group, *id).and_then(|e| e.name()) == Some("Return to WP 1")
+            }),
+            "the loop cannot order another lap"
+        );
+
+        let zone_in = only(&group, "Zone IN");
+        let zone_in_names = names_of(&group, &zone_in.targets);
+        assert!(zone_in_names.iter().any(|n| n == "Zone Out ReActivate"));
+        assert!(!zone_in_names.iter().any(|n| n == "MISSION BEGIN"));
+        assert!(!zone_in_names.iter().any(|n| n == "PULSE OUT"));
+
+        let zone_out = only(&group, "Zone Out");
+        let zone_out_names = names_of(&group, &zone_out.targets);
+        assert!(!zone_out_names.iter().any(|n| n == "MISSION END"));
+        assert!(!zone_out_names.iter().any(|n| n == "COOLDOWN"));
+        assert!(!zone_out_names.iter().any(|n| n == "Zone In ReActivate"));
+        assert!(zone_out_names.iter().any(|n| n == "Self Deactivate"));
+
+        let window = names_of(&group, &only(&group, WINDOW_NAME).targets);
+        assert!(window.iter().any(|n| n == "Close Zones"));
+        assert!(window.iter().any(|n| n == "MISSION END"));
+        let close = only(&group, "Close Zones");
+        assert!(close.objects.contains(&zone_in.index.unwrap()));
+        assert!(close.objects.contains(&zone_out.index.unwrap()));
+        let disarm = only(&group, DISARM_START);
+        assert!(disarm.objects.contains(&zone_in.index.unwrap()));
+        assert!(disarm.objects.contains(&zone_out.index.unwrap()));
+    }
+
+    #[test]
     fn clock_quiet_zone_and_hot_gate_follow_the_options() {
         let mut options = AirOptions::default();
         options.first_delay_min = 10;
@@ -2691,27 +3150,38 @@ mod tests {
     fn budget_and_extension_change_the_spawn_gate() {
         let mut options = AirOptions::default();
         options.budget = 2;
+        options.nato_active = 1;
+        options.dprk_active = 2;
         options.launch_while_active = true;
         let group = linked(2, &options);
         let nato_gate = names_of(&group, &only(&group, "Plan 1 Gate").targets);
-        assert!(nato_gate.iter().any(|n| n == "Plan 1 Start"));
-        assert!(nato_gate.iter().any(|n| n == "Hold Plan 1"));
+        assert!(nato_gate.iter().any(|n| n == "Arm Plan 1"));
+        assert!(nato_gate.iter().any(|n| n == "NATO Credit 1"));
+        assert!(!nato_gate.iter().any(|n| n == "Plan 1 Start"));
         assert!(!nato_gate.iter().any(|n| n == "Hold Launches"));
+        assert!(!nato_gate.iter().any(|n| n == "DPRK Credit 1"));
         let dprk_gate = names_of(&group, &only(&group, "Plan 2 Gate").targets);
-        assert!(dprk_gate.iter().any(|n| n == "Hold Plan 2"));
+        assert!(dprk_gate.iter().any(|n| n == "DPRK Credit 1"));
+        assert!(
+            only(&group, "Plan 1 Starter")
+                .targets
+                .iter()
+                .any(|id| find_id(&group, *id).and_then(|e| e.name()) == Some("Plan 1 Start"))
+        );
         let nato_end = many(&group, "MISSION END")
             .into_iter()
             .find(|e| {
                 names_of(&group, &e.targets)
                     .iter()
-                    .any(|n| n == "Release Plan 1")
+                    .any(|n| n == "NATO Restore 1")
             })
-            .expect("the NATO sortie frees only itself");
+            .expect("the NATO sortie returns a NATO credit");
         assert!(
             !names_of(&group, &nato_end.targets)
                 .iter()
-                .any(|n| n == "Release Plan 2")
+                .any(|n| n.starts_with("DPRK"))
         );
+        assert!(many(&group, "DPRK Credit 2").is_empty(), "one DPRK plan keeps one credit");
     }
 
     #[test]
