@@ -2642,7 +2642,9 @@ mod tests {
 
         let mut armor = Il2Entity::new("Group");
         armor.set_name("Unit Template [1]");
-        armor.children.push(node("MCU_Timer", "132945.798", "290987.415", None));
+        armor
+            .children
+            .push(node("MCU_Timer", "132945.798", "290987.415", None));
         armor.children.push(node(
             "Vehicle",
             "132710.646",
@@ -2671,7 +2673,9 @@ mod tests {
         assert!((train_copies[0].z - 292646.332).abs() < 0.01);
 
         let mut fleet = Il2Entity::new("Group");
-        fleet.children.push(node("MCU_TR_MissionBegin", "50000.000", "50000.000", None));
+        fleet
+            .children
+            .push(node("MCU_TR_MissionBegin", "50000.000", "50000.000", None));
         let mut ship = node(
             "Ship",
             "100000.000",
@@ -2684,10 +2688,7 @@ mod tests {
         );
         fleet.children.push(ship);
         let ship_copies = inspect_army_copies(&fleet);
-        assert_eq!(
-            ship_copies[0].kind,
-            crate::weapon_range::ArmyUnitKind::Ship
-        );
+        assert_eq!(ship_copies[0].kind, crate::weapon_range::ArmyUnitKind::Ship);
         assert!((ship_copies[0].x - 100_000.0).abs() < 0.01);
         assert!((ship_copies[0].z - 200_000.0).abs() < 0.01);
 

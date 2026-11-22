@@ -30,6 +30,7 @@ mod mapground;
 mod mapload;
 mod mapnet;
 mod mapshipping;
+mod mission;
 mod model_spec;
 mod pack;
 mod parser;

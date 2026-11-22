@@ -801,10 +801,7 @@ mod tests {
         let f80 = cat.for_script("f80c10.txt").expect("F-80C-10");
         assert!(f80.payloads.len() >= 73);
         assert!(
-            f80.payload(72)
-                .unwrap()
-                .summary()
-                .contains("AN-M26A1"),
+            f80.payload(72).unwrap().summary().contains("AN-M26A1"),
             "payload 72 is the tip-tank flare load"
         );
         let p5 = f80.payload(5).expect("payload 5");

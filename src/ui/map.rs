@@ -81,15 +81,30 @@ use crate::shell;
 use crate::template::{
     STRIKE_IP_M, STRIKE_START_M, StrikePose, StrikeTargetClass, TRAIN_ZONE_IN_M, cap_circuit_m,
     center_cap_on, cover_attack_area, flight_anchor, is_cap_group, place_flight_attack_areas,
-    place_strike_at,
-    separable_flight_attacks, set_waypoint_xz, shift_flight, strike_geometry, strike_ip_toward,
-    strike_layout, strike_pose_from_start, strike_side, take_strike_missions, waypoint_xz,
+    place_strike_at, separable_flight_attacks, set_waypoint_xz, shift_flight, strike_geometry,
+    strike_ip_toward, strike_layout, strike_pose_from_start, strike_side, take_strike_missions,
+    waypoint_xz,
 };
 use crate::terrain::HeightStore;
 use crate::theme::{self, c};
 use crate::weapon_range::{self, ArmyUnitKind};
 
 use super::{ReconSlot, Status, UnitKind, dialog, group_digits, labeled_slider, section_heading};
+
+/// The base map Generate writes, also embedded in a Create Mission file.
+pub(in crate::ui) struct BaseMapBuilt {
+    pub text: String,
+    pub tables: std::collections::HashMap<String, crate::locale::LocaleTable>,
+    pub icon_count: usize,
+    pub period_label: String,
+    pub period_note: String,
+    pub notes: Vec<String>,
+    pub aircraft: String,
+    pub clip_preview: String,
+    pub strike_notes: Vec<String>,
+    pub spawn_notes: Vec<String>,
+    pub terrain_note: Option<(String, bool)>,
+}
 
 /// Terrain lattice spacing in metres (terrain::STEP_M).
 const TERRAIN_STEP: f64 = crate::terrain::STEP_M;
@@ -593,12 +608,14 @@ fn preview_dot_style(kind: PreviewKind, in_box: bool) -> (Color32, f32) {
             (color, if in_box { 2.6 } else { 1.8 })
         }
         PreviewKind::Block => {
+            // Outside the area the dots stay the same brown, drawn lighter.
+            // A dark speck on every block reads as freckles across the terrain.
             let color = if in_box {
                 BLOCK_DOT
             } else {
-                BLOCK_DOT.gamma_multiply(0.35)
+                Color32::from_rgba_unmultiplied(BLOCK_DOT.r(), BLOCK_DOT.g(), BLOCK_DOT.b(), 150)
             };
-            (color, if in_box { 2.4 } else { 1.7 })
+            (color, if in_box { 2.2 } else { 1.4 })
         }
     }
 }
@@ -848,8 +865,19 @@ pub(super) enum KoreaMapLayer {
     Detail(ColorImage),
 }
 
-/// One close-up tile, decoded off the UI thread. `None` means the file failed.
+/// Landscape groups and harvested airfields parsed off the UI thread.
+pub(super) struct MapOpenMsg {
+    template: String,
+    air_dir: String,
+    landscape: Option<crate::provisions::LoadedGroups>,
+    airfields: Option<Vec<crate::frontlines::MapRefGroup>>,
+    catalog: Vec<super::airfield::IndexedAirbase>,
+}
+
+/// One editor tile, decoded off the UI thread. `None` means the file failed.
+/// `overview` is a lod0 tile; otherwise it is a close-up tile.
 pub(super) struct EditorTileMsg {
+    overview: bool,
     row: i32,
     col: i32,
     image: Option<ColorImage>,
@@ -861,6 +889,17 @@ fn load_korea_jpeg(bytes: &[u8], path: &str) -> ColorImage {
         .to_rgba8();
     let (w, h) = img.dimensions();
     ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw())
+}
+
+/// The extents picture is already small. Decode it whole, off the UI thread.
+fn decode_map_image(path: &Path) -> Option<ColorImage> {
+    let img = image::open(path).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        rgba.as_raw(),
+    ))
 }
 
 /// Shrink a close-up tile before it reaches the GPU. The worker does this,
@@ -1376,7 +1415,10 @@ fn group_is_eastern(root: &crate::ast::Il2Entity, path: &std::path::Path) -> boo
         ) {
             return;
         }
-        let Some(country) = entity.property("Country").and_then(|s| s.parse::<i32>().ok()) else {
+        let Some(country) = entity
+            .property("Country")
+            .and_then(|s| s.parse::<i32>().ok())
+        else {
             return;
         };
         match crate::aircraft::country_is_nato(country) {
@@ -1391,7 +1433,11 @@ fn group_is_eastern(root: &crate::ast::Il2Entity, path: &std::path::Path) -> boo
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let stem = stem.strip_suffix("_running").unwrap_or(stem);
     if let Some((_, suffix)) = stem.rsplit_once('_') {
-        if let Some(nato) = suffix.parse::<i32>().ok().and_then(crate::aircraft::country_is_nato) {
+        if let Some(nato) = suffix
+            .parse::<i32>()
+            .ok()
+            .and_then(crate::aircraft::country_is_nato)
+        {
             return !nato;
         }
     }
@@ -1514,7 +1560,12 @@ fn strip_pack_index(name: &str, packed: bool) -> String {
 fn sortie_base_name(name: &str) -> String {
     let name = strip_pack_index(name, true);
     if let Some((head, tail)) = name.rsplit_once(' ') {
-        if !head.is_empty() && tail.parse::<u32>().ok().is_some_and(|n| (2..=9).contains(&n)) {
+        if !head.is_empty()
+            && tail
+                .parse::<u32>()
+                .ok()
+                .is_some_and(|n| (2..=9).contains(&n))
+        {
             return head.to_string();
         }
     }
@@ -1588,16 +1639,13 @@ fn merge_matching_sorties(missions: &mut Vec<PlacedMission>) {
         let key = sortie_fingerprint(&mission.root);
         let has_plane = key.iter().any(|row| row.starts_with("Plane|"));
         let twin = if has_plane {
-            kept.iter_mut().find(|other| {
-                other.air_task && sortie_fingerprint(&other.root) == key
-            })
+            kept.iter_mut()
+                .find(|other| other.air_task && sortie_fingerprint(&other.root) == key)
         } else {
             None
         };
         if let Some(existing) = twin {
-            existing.air_runs = existing
-                .air_runs
-                .saturating_add(mission.air_runs.max(1));
+            existing.air_runs = existing.air_runs.saturating_add(mission.air_runs.max(1));
             existing.name = prefer_sortie_name(&existing.name, &mission.name);
             if existing.cap_minutes == 0 {
                 existing.cap_minutes = mission.cap_minutes;
@@ -1684,9 +1732,7 @@ fn route_meters(mission: &PlacedMission) -> f64 {
             (mission.start_x, mission.start_z),
         ),
     ];
-    legs.iter()
-        .map(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1))
-        .sum()
+    legs.iter().map(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1)).sum()
 }
 
 /// "F-80C HVAR strike 2 2" is still the strike, not a new stem.
@@ -2590,25 +2636,17 @@ fn draw_reference_overlays(painter: &egui::Painter, rect: Rect) {
 }
 
 fn draw_map_cities(painter: &egui::Painter, rect: Rect) {
+    // Names only, at every zoom. The pink and light-blue markers are gone;
+    // these stay because the zoom-gated block labels would hide them when
+    // the map is pulled out.
     for (city, x, z) in geo::cities_on_map() {
         let pos = world_to_pos(rect, x, z);
-        let color = if city.dprk {
-            Color32::from_rgb(230, 150, 150)
-        } else {
-            Color32::from_rgb(170, 200, 240)
-        };
-        painter.circle_filled(pos, 3.0_f32, color);
-        painter.circle_stroke(
-            pos,
-            3.0_f32,
-            Stroke::new(1.0_f32, Color32::from_rgb(20, 20, 24)),
-        );
         let (align, offset) = if city.label_left {
             (Align2::RIGHT_CENTER, Vec2::new(-5.0, 0.0))
         } else {
             (Align2::LEFT_CENTER, Vec2::new(5.0, 0.0))
         };
-        draw_map_label(painter, pos + offset, city.name, color, align);
+        draw_map_label(painter, pos + offset, city.name, BLOCK_LABEL, align);
     }
 }
 
@@ -2636,9 +2674,19 @@ const RAIL_LINE: Color32 = Color32::from_rgba_premultiplied(8, 8, 9, 128);
 /// AO box wash: ACCENT (#5980a6) at ~7 %, premultiplied.
 const AO_FILL: Color32 = Color32::from_rgba_premultiplied(6, 9, 12, 18);
 
-/// Reference-group blocks on the map and in the legend: a neutral token, so
-/// they no longer share the old AO yellow.
-const BLOCK_DOT: Color32 = c::NEUTRAL_800;
+/// Reference-group blocks on the map and in the legend. Same brown as the
+/// place names, so a field of blocks stays quiet against the terrain.
+const BLOCK_DOT: Color32 = Color32::from_rgb(143, 114, 93);
+
+/// Named blocks and airfields appear once the view is close enough that
+/// the labels are not a carpet over the whole peninsula.
+const PLACE_LABEL_ZOOM: f32 = 6.0;
+
+/// Block names. The same shadow `draw_map_label` puts under cities.
+const BLOCK_LABEL: Color32 = Color32::from_rgb(143, 114, 93);
+
+/// Airfield names. The same blue as the airfield dot.
+const AIRFIELD_LABEL: Color32 = Color32::from_rgb(30, 90, 220);
 
 /// On-screen side colour (tokens). The colours written into the base map
 /// (`RColor` / `GColor` / `BColor` in frontlines.rs) are separate and unchanged.
@@ -2799,6 +2847,257 @@ fn draw_dashed_world_circle(
             )
         };
         painter.line_segment([p(a0), p(a1)], stroke);
+    }
+}
+
+/// A place named by a landscape group or an airfield, drawn at high zoom.
+pub(super) struct PlaceLabel {
+    text: String,
+    x: f64,
+    z: f64,
+}
+
+/// `190-Sagimak` → `Sagimak`, `USA_military_camp_02` → `USA Military Camp`,
+/// `037-Inchon_industrial` → `Inchon Industrial`, `DAM_02` → `Dam`.
+/// Bridges and the folder titles (`Cities`, `DAMS`) are not labels.
+fn scenery_label(raw: &str) -> Option<String> {
+    let name = raw.trim().trim_matches('"').trim();
+    if name.is_empty() {
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    const SKIP: &[&str] = &[
+        "group",
+        "block",
+        "bridge",
+        "bridge_y",
+        "ground",
+        "vehicle",
+        "cities",
+        "military_camp",
+        "dams",
+        "mines",
+        "tunnels",
+        "rw_stations",
+        "bridges_hh",
+        "bridges_rr",
+    ];
+    if SKIP.iter().any(|skip| lower == *skip)
+        || lower.starts_with("bridge")
+        || lower.contains("ambient")
+        || lower.contains("industrial zones")
+    {
+        return None;
+    }
+    let rest = strip_index_prefix(name);
+    let mut words: Vec<&str> = rest
+        .split(|c: char| c == '_' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.len() > 1
+        && words
+            .last()
+            .is_some_and(|word| word.chars().all(|c| c.is_ascii_digit()))
+    {
+        words.pop();
+    }
+    if words.is_empty() {
+        return None;
+    }
+    let label = words
+        .into_iter()
+        .map(title_place_word)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if label.eq_ignore_ascii_case("group") || label.eq_ignore_ascii_case("bridge") {
+        None
+    } else {
+        Some(label)
+    }
+}
+
+/// `064-Seoul` and `027 - Kaesong` both drop the leading index.
+fn strip_index_prefix(name: &str) -> &str {
+    let Some((head, tail)) = name.split_once('-') else {
+        return name;
+    };
+    let head = head.trim();
+    let tail = tail.trim();
+    if !head.is_empty() && head.chars().all(|c| c.is_ascii_digit()) && !tail.is_empty() {
+        tail
+    } else {
+        name
+    }
+}
+
+/// A landscape label that repeats a city already drawn at every zoom.
+/// `Kangnung (Gangneung)` counts as Kangnung. The file spells one city
+/// `Hanjong-dong`; the map name is `Hanjon-dong`.
+fn is_major_city_name(label: &str) -> bool {
+    let primary = label.split(" (").next().unwrap_or(label).trim();
+    if primary.eq_ignore_ascii_case("Hanjong-dong") {
+        return true;
+    }
+    geo::MAJOR_CITIES
+        .iter()
+        .any(|city| city.name.eq_ignore_ascii_case(primary))
+}
+
+fn title_place_word(word: &str) -> String {
+    if let Some(inner) = word
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        && !inner.is_empty()
+    {
+        return format!("({})", title_place_word(inner));
+    }
+    let upper = word.to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "USA" | "DPRK" | "NATO" | "RW" | "AF" | "AFB"
+    ) {
+        return upper;
+    }
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let mut out: String = first.to_uppercase().collect();
+    out.extend(chars.flat_map(|c| c.to_lowercase()));
+    out
+}
+
+/// `K-14_Kimpo_AF` → `K-14 Kimpo`.
+fn airfield_place_label(key: &str) -> String {
+    let mut name = key.trim().trim_matches('"').trim();
+    for suffix in ["_AF", "_af", "_TG", "_tg"] {
+        if let Some(stripped) = name.strip_suffix(suffix) {
+            name = stripped;
+        }
+    }
+    let label = name.replace('_', " ");
+    if label.is_empty() || label.eq_ignore_ascii_case("airfield") {
+        "Airfield".into()
+    } else {
+        label
+    }
+}
+
+fn bridge_scenery(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains("bridge"))
+}
+
+/// Every bridge span in a landscape file. Dam pieces live in the dam file,
+/// so they stay with the Dam label instead of becoming black dots.
+fn collect_bridge_dots(root: &crate::ast::Il2Entity, out: &mut Vec<(f64, f64)>) {
+    if root.block_type.eq_ignore_ascii_case("Bridge")
+        && let Some(pos) = root.pos_xz()
+    {
+        out.push(pos);
+    }
+    for child in &root.children {
+        collect_bridge_dots(child, out);
+    }
+}
+
+fn collect_scenery_labels(root: &crate::ast::Il2Entity, out: &mut Vec<PlaceLabel>) {
+    fn walk(entity: &crate::ast::Il2Entity, depth: usize, out: &mut Vec<PlaceLabel>) {
+        if entity.block_type != "Group" {
+            return;
+        }
+        if depth > 0
+            && let Some(text) = scenery_label(entity.name().unwrap_or(""))
+        {
+            let mut pts = Vec::new();
+            group_positions(entity, &mut pts);
+            if let Some((x, z)) = centroid(&pts) {
+                out.push(PlaceLabel { text, x, z });
+            }
+        }
+        for child in &entity.children {
+            if child.block_type == "Group" {
+                walk(child, depth + 1, out);
+            }
+        }
+    }
+    walk(root, 0, out);
+}
+
+/// Positions that belong to this group. A nested group with its own name
+/// is a separate label, so its blocks are not pulled into this centroid.
+fn group_positions(entity: &crate::ast::Il2Entity, pts: &mut Vec<(f64, f64)>) {
+    if let Some(pos) = entity.pos_xz() {
+        pts.push(pos);
+    }
+    for child in &entity.children {
+        if child.block_type == "Group" && scenery_label(child.name().unwrap_or("")).is_some() {
+            continue;
+        }
+        group_positions(child, pts);
+    }
+}
+
+/// Same name within 1.5 km is one site (the pieces of one mine, one camp).
+fn cluster_place_labels(items: Vec<PlaceLabel>) -> Vec<PlaceLabel> {
+    const JOIN_M: f64 = 1_500.0;
+    let mut used = vec![false; items.len()];
+    let mut out = Vec::new();
+    for i in 0..items.len() {
+        if used[i] {
+            continue;
+        }
+        used[i] = true;
+        let mut pts = vec![(items[i].x, items[i].z)];
+        for j in (i + 1)..items.len() {
+            if used[j] || items[j].text != items[i].text {
+                continue;
+            }
+            let near = pts
+                .iter()
+                .any(|&(x, z)| (x - items[j].x).hypot(z - items[j].z) < JOIN_M);
+            if near {
+                used[j] = true;
+                pts.push((items[j].x, items[j].z));
+            }
+        }
+        let Some((x, z)) = centroid(&pts) else {
+            continue;
+        };
+        out.push(PlaceLabel {
+            text: items[i].text.clone(),
+            x,
+            z,
+        });
+    }
+    out
+}
+
+fn draw_place_labels(
+    painter: &egui::Painter,
+    rect: Rect,
+    labels: &[PlaceLabel],
+    color: Color32,
+    occupied: &mut Vec<Rect>,
+) {
+    let clip = rect.intersect(painter.clip_rect());
+    if !clip.is_positive() {
+        return;
+    }
+    for label in labels {
+        let pos = world_to_pos(rect, label.x, label.z);
+        if !clip.contains(pos) {
+            continue;
+        }
+        let anchor = pos + Vec2::new(6.0, 0.0);
+        let width = (label.text.chars().count() as f32 * 6.6).max(12.0);
+        let spot = Rect::from_min_size(anchor - Vec2::new(0.0, 7.0), Vec2::new(width, 14.0));
+        if occupied.iter().any(|other| other.intersects(spot)) {
+            continue;
+        }
+        occupied.push(spot);
+        draw_map_label(painter, anchor, &label.text, color, Align2::LEFT_CENTER);
     }
 }
 
@@ -3127,7 +3426,7 @@ impl super::GroupGeneratorApp {
     ///
     /// Production starts from the baked store and merges a newer file on
     /// top. UI tests set `terrain_use_builtin` off and read only the file.
-    fn terrain_store(&mut self) -> Option<&HeightStore> {
+    pub(in crate::ui) fn terrain_store(&mut self) -> Option<&HeightStore> {
         if self.terrain_store.is_none() && self.terrain_error.is_none() {
             let loaded = if self.terrain_use_builtin {
                 crate::terrain::open_store(&self.terrain_store_path)
@@ -3350,7 +3649,7 @@ impl super::GroupGeneratorApp {
 
     /// Add the terrain note to the export's status; units left unmeasured
     /// turn it into a warning.
-    pub(super) fn add_terrain_note(&mut self, note: Option<(String, bool)>) {
+    pub(in crate::ui) fn add_terrain_note(&mut self, note: Option<(String, bool)>) {
         let Some((note, warn)) = note else { return };
         self.status = match std::mem::replace(&mut self.status, Status::Idle) {
             Status::Info(msg) if warn => Status::Warn {
@@ -3614,12 +3913,18 @@ impl super::GroupGeneratorApp {
     /// Map tab (README §5.6): tool palette, the map with a front-date strip,
     /// and a right dock with Period / Forces / References.
     pub(super) fn map_page(&mut self, ctx: &egui::Context) {
-        if self.provisions_loaded_for.is_empty() {
-            self.reload_map_provisions();
+        // The click has to paint this frame. Parsing the landscape groups
+        // (~0.9 s) and the harvested airfields (~2.2 s) happens on a worker.
+        self.kick_map_open_if_needed(ctx);
+        if self.map_painted {
+            if self.provisions_loaded_for.is_empty() && self.map_open_rx.is_none() {
+                self.reload_map_provisions();
+            }
+            self.ensure_airbase_list();
+            self.reconcile_airbase_sides();
+            self.ensure_map_assets(ctx);
         }
-        self.ensure_airbase_list();
-        self.reconcile_airbase_sides();
-        self.ensure_map_assets(ctx);
+        self.map_painted = true;
         egui::SidePanel::left("map_tools")
             .exact_width(shell::TOOL_PALETTE_W)
             .resizable(false)
@@ -3699,9 +4004,10 @@ impl super::GroupGeneratorApp {
                 .iter()
                 .any(|p| p.field.name == field.name && p.field.nato == field.nato)
         };
-        let open = self.air_starts.iter().position(|field| {
-            field.nato == nato && !placed(field, &self.placed_air_starts)
-        });
+        let open = self
+            .air_starts
+            .iter()
+            .position(|field| field.nato == nato && !placed(field, &self.placed_air_starts));
         let index = if let Some(index) = open {
             index
         } else if self.air_starts.iter().any(|field| field.nato == nato) {
@@ -4207,7 +4513,11 @@ impl super::GroupGeneratorApp {
     }
 
     fn fresh_mission_name(&self, base: &str) -> String {
-        let names: Vec<&str> = self.map_missions.iter().map(|mission| mission.name.as_str()).collect();
+        let names: Vec<&str> = self
+            .map_missions
+            .iter()
+            .map(|mission| mission.name.as_str())
+            .collect();
         next_copy_name(&names, base)
     }
 
@@ -4387,7 +4697,9 @@ impl super::GroupGeneratorApp {
         self.map_missions.push(mission);
         self.air_selected = Some(self.map_missions.len() - 1);
         self.air_draft = None;
-        self.status = Status::Info(format!("{name} is a copy. Edit it to aim it somewhere else."));
+        self.status = Status::Info(format!(
+            "{name} is a copy. Edit it to aim it somewhere else."
+        ));
     }
 
     fn home_near(&self, eastern: bool, x: f64, z: f64) -> PackageHome {
@@ -4417,7 +4729,11 @@ impl super::GroupGeneratorApp {
             ground_nato_shown: self.ground_nato_shown,
             ships_shown: self.ships_shown,
             army_shown: self.map_armies.iter().map(|army| army.shown).collect(),
-            mission_hidden: self.map_missions.iter().map(|mission| mission.hidden).collect(),
+            mission_hidden: self
+                .map_missions
+                .iter()
+                .map(|mission| mission.hidden)
+                .collect(),
         };
         self.fighters_shown = false;
         self.ships_shown = false;
@@ -4481,13 +4797,7 @@ impl super::GroupGeneratorApp {
                 };
                 layout?.spots.get(i)
             }
-            GroundHit::Army { slot, i } => self
-                .map_armies
-                .get(slot)?
-                .ground
-                .as_ref()?
-                .spots
-                .get(i),
+            GroundHit::Army { slot, i } => self.map_armies.get(slot)?.ground.as_ref()?.spots.get(i),
         }
     }
 
@@ -4612,17 +4922,14 @@ impl super::GroupGeneratorApp {
                 }
             } else {
                 self.status = Status::Error(
-                    "Click enemy ground inside the area, or hold Shift to snap to a target."
-                        .into(),
+                    "Click enemy ground inside the area, or hold Shift to snap to a target.".into(),
                 );
                 return;
             };
             if let Some(draft) = self.air_draft.as_mut() {
-                if !draft
-                    .targets
-                    .iter()
-                    .any(|picked| (picked.x - objective.x).abs() < 1.0 && (picked.z - objective.z).abs() < 1.0)
-                {
+                if !draft.targets.iter().any(|picked| {
+                    (picked.x - objective.x).abs() < 1.0 && (picked.z - objective.z).abs() < 1.0
+                }) {
                     draft.targets.push(objective);
                 }
                 draft.target = None;
@@ -4633,8 +4940,7 @@ impl super::GroupGeneratorApp {
         self.status = Status::Info(if sweep {
             "CAP point set over friendly ground.".into()
         } else {
-            "Target added. Select more units here if the attack circle should cover them."
-                .into()
+            "Target added. Select more units here if the attack circle should cover them.".into()
         });
     }
 
@@ -4660,9 +4966,8 @@ impl super::GroupGeneratorApp {
                 } else if let Some(target) = draft.target.clone() {
                     vec![target]
                 } else {
-                    self.status = Status::Error(
-                        "Pick a target on the map, or select imported units.".into(),
-                    );
+                    self.status =
+                        Status::Error("Pick a target on the map, or select imported units.".into());
                     return false;
                 };
                 let points: Vec<(f64, f64)> = picks.iter().map(|hit| (hit.x, hit.z)).collect();
@@ -4811,12 +5116,10 @@ impl super::GroupGeneratorApp {
                 format!(
                     "{name} is a {side} CAP over {over}. Set the shift on the sortie. Drag the four patrol points and the RTB point on the map."
                 )
-            },
+            }
             PackageKind::Strike => {
                 if strike_cover.len() > 1 {
-                    format!(
-                        "{name} is a {side} strike. The attack circle covers {label}."
-                    )
+                    format!("{name} is a {side} strike. The attack circle covers {label}.")
                 } else {
                     format!("{name} is a {side} strike aimed at {label}.")
                 }
@@ -4980,11 +5283,7 @@ impl super::GroupGeneratorApp {
         (hits, units)
     }
 
-    fn static_targets(
-        &self,
-        flight_eastern: bool,
-        kind: StaticTargetKind,
-    ) -> Vec<StrikeObjective> {
+    fn static_targets(&self, flight_eastern: bool, kind: StaticTargetKind) -> Vec<StrikeObjective> {
         if kind == StaticTargetKind::Cities {
             let enemy_dprk = !flight_eastern;
             let mut out = Vec::new();
@@ -5012,22 +5311,23 @@ impl super::GroupGeneratorApp {
     fn imported_unit_targets(&self, flight_eastern: bool) -> Vec<StrikeObjective> {
         let enemy_eastern = !flight_eastern;
         let mut out = Vec::new();
-        let mut push = |class: StrikeTargetClass, label: String, x: f64, z: f64, may_not_spawn: bool| {
-            if !self.front_aabb.contains(x, z) {
-                return;
-            }
-            push_objective(
-                &mut out,
-                StrikeObjective {
-                    label,
-                    class,
-                    x,
-                    z,
-                    may_not_spawn,
-                },
-                250.0,
-            );
-        };
+        let mut push =
+            |class: StrikeTargetClass, label: String, x: f64, z: f64, may_not_spawn: bool| {
+                if !self.front_aabb.contains(x, z) {
+                    return;
+                }
+                push_objective(
+                    &mut out,
+                    StrikeObjective {
+                        label,
+                        class,
+                        x,
+                        z,
+                        may_not_spawn,
+                    },
+                    250.0,
+                );
+            };
         let ground = if enemy_eastern {
             self.map_ground_east.as_ref()
         } else {
@@ -5404,8 +5704,13 @@ impl super::GroupGeneratorApp {
             }
         }
         if ui
-            .add_sized([ui.available_width(), 28.0], egui::Button::new("Load units"))
-            .on_hover_text("Load one or more .Group files. Each file's coalition comes from its vehicles.")
+            .add_sized(
+                [ui.available_width(), 28.0],
+                egui::Button::new("Load units"),
+            )
+            .on_hover_text(
+                "Load one or more .Group files. Each file's coalition comes from its vehicles.",
+            )
             .clicked()
         {
             self.load_map_armies();
@@ -5463,10 +5768,7 @@ impl super::GroupGeneratorApp {
                             .map(UnitKind::from_army)
                             .and_then(|unit| self.unit_tex(eastern, unit));
                         let clicked = paint_unit_icon(ui, tex, 28.0);
-                        if clicked
-                            .on_hover_text("Change the unit icon")
-                            .clicked()
-                        {
+                        if clicked.on_hover_text("Change the unit icon").clicked() {
                             self.army_icon_slot = if open_icon == Some(i) { None } else { Some(i) };
                         }
                         ui.add(
@@ -5510,7 +5812,10 @@ impl super::GroupGeneratorApp {
                         });
                     }
                     if ui
-                        .add_sized([ui.available_width(), 28.0], egui::Button::new("Reload position"))
+                        .add_sized(
+                            [ui.available_width(), 28.0],
+                            egui::Button::new("Reload position"),
+                        )
                         .on_hover_text("Park this group along the front again, using its unit type")
                         .clicked()
                     {
@@ -5859,12 +6164,7 @@ impl super::GroupGeneratorApp {
 
     /// Park a CAP as the template built it. Zone IN is already on the patrol
     /// center. The flight icon sits on the lead. WP 5 is moved to home later.
-    fn place_cap_on(
-        &mut self,
-        name: String,
-        eastern: bool,
-        root: crate::ast::Il2Entity,
-    ) {
+    fn place_cap_on(&mut self, name: String, eastern: bool, root: crate::ast::Il2Entity) {
         let (start_x, start_z) = flight_anchor(&root).unwrap_or((0.0, 0.0));
         let (target_x, target_z) = root
             .find_by_name("Zone IN")
@@ -6796,9 +7096,143 @@ impl super::GroupGeneratorApp {
                 egui::TextureOptions::LINEAR,
             ));
         }
-        if self.map_rx.is_some() {
-            let mut disconnected = false;
-            while let Some(rx) = self.map_rx.as_ref() {
+    }
+
+    fn map_zoom_max(&mut self) -> f32 {
+        self.ensure_editor_map();
+        if self.editor_map_on { 48.0 } else { 12.0 }
+    }
+
+    fn ensure_editor_map(&mut self) {
+        if self.editor_map_tried {
+            return;
+        }
+        self.editor_map_tried = true;
+        if let Some(map) = crate::editormap::EditorMap::load_default() {
+            crate::editormap::install(map);
+            self.editor_map_on = true;
+        }
+    }
+
+    /// Lod0 index, and the small extents picture's path. Neither file is decoded
+    /// here. The stitched mosaic stays on disk.
+    fn ensure_overview_map(&mut self) {
+        if self.overview_map_tried {
+            return;
+        }
+        self.overview_map_tried = true;
+        if self.overview_extents.is_none() {
+            self.overview_extents = crate::editormap::OverviewExtents::load();
+        }
+        if crate::editormap::with_overview(|_| ()).is_some() {
+            self.overview_map_on = true;
+            return;
+        }
+        if let Some(map) = crate::editormap::EditorMap::load_overview() {
+            crate::editormap::install_overview(map);
+            self.overview_map_on = true;
+        }
+    }
+
+    /// Start the extents decode on a worker. The frame that starts it does not
+    /// upload, so the first paint is not blocked by the picture.
+    fn pump_overview_extents(&mut self, ctx: &egui::Context) {
+        if self.overview_extents.is_none() || self.overview_extents_tex.is_some() {
+            return;
+        }
+        if self.overview_extents_rx.is_none() {
+            let Some(path) = self
+                .overview_extents
+                .as_ref()
+                .map(|image| image.path.clone())
+            else {
+                return;
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.overview_extents_rx = Some(rx);
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let image = decode_map_image(&path);
+                let _ = tx.send(image);
+                ctx.request_repaint();
+            });
+            return;
+        }
+        let message = self.overview_extents_rx.as_ref().map(|rx| rx.try_recv());
+        match message {
+            Some(Ok(Some(image))) => {
+                self.overview_extents_tex = Some(ctx.load_texture(
+                    "korea_map_extents",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+                self.overview_extents_rx = None;
+            }
+            Some(Ok(None)) | Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.overview_extents = None;
+                self.overview_extents_rx = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn paint_overview_extents(&self, ui: &egui::Ui, widget: Rect) {
+        let Some(image) = &self.overview_extents else {
+            return;
+        };
+        let Some(tex) = &self.overview_extents_tex else {
+            if self.overview_extents_rx.is_some() {
+                ui.ctx().request_repaint();
+            }
+            return;
+        };
+        let map_full = map_screen_rect(widget, self.map_view_uv());
+        let top_left = world_to_pos(map_full, image.x_top, image.z_left);
+        let bottom_right = world_to_pos(map_full, image.x_bottom, image.z_right);
+        ui.painter().with_clip_rect(widget).image(
+            tex.id(),
+            Rect::from_two_pos(top_left, bottom_right),
+            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
+
+    /// JPEG stand-in when lod0 is missing. The small image can load at once.
+    /// The 15 MB image starts only after the view zooms, on a worker.
+    fn pump_jpeg_fallback(&mut self, ctx: &egui::Context) {
+        if self.overview_map_on {
+            return;
+        }
+        if self.map_tx.is_none() && self.map_lo_tex.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.map_tx = Some(tx.clone());
+            self.map_rx = Some(rx);
+            let ctx_clone = ctx.clone();
+            std::thread::spawn(move || {
+                let lo = load_korea_jpeg(
+                    include_bytes!("../../assets/DD052_en_map_01_LowQ.jpg"),
+                    "assets/DD052_en_map_01_LowQ.jpg",
+                );
+                let _ = tx.send(KoreaMapLayer::Overview(lo));
+                ctx_clone.request_repaint();
+            });
+        }
+        if self.map_zoom > 1.0 && !self.map_hi_started && self.map_tx.is_some() {
+            self.map_hi_started = true;
+            let tx = self.map_tx.clone().expect("map channel");
+            let ctx_clone = ctx.clone();
+            std::thread::spawn(move || {
+                let hi = load_korea_jpeg(
+                    include_bytes!("../../assets/DD052_en_map_01.jpg"),
+                    "assets/DD052_en_map_01.jpg",
+                );
+                let _ = tx.send(KoreaMapLayer::Detail(hi));
+                ctx_clone.request_repaint();
+            });
+        }
+        let mut disconnected = false;
+        if let Some(rx) = self.map_rx.as_ref() {
+            loop {
                 match rx.try_recv() {
                     Ok(KoreaMapLayer::Overview(image)) => {
                         self.map_lo_tex = Some(ctx.load_texture(
@@ -6821,43 +7255,10 @@ impl super::GroupGeneratorApp {
                     }
                 }
             }
-            if disconnected || self.map_hi_tex.is_some() {
-                self.map_rx = None;
-            }
-        } else if self.map_lo_tex.is_none() {
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.map_rx = Some(rx);
-            let ctx_clone = ctx.clone();
-            std::thread::spawn(move || {
-                let lo = load_korea_jpeg(
-                    include_bytes!("../../assets/DD052_en_map_01_LowQ.jpg"),
-                    "assets/DD052_en_map_01_LowQ.jpg",
-                );
-                let _ = tx.send(KoreaMapLayer::Overview(lo));
-                ctx_clone.request_repaint();
-                let hi = load_korea_jpeg(
-                    include_bytes!("../../assets/DD052_en_map_01.jpg"),
-                    "assets/DD052_en_map_01.jpg",
-                );
-                let _ = tx.send(KoreaMapLayer::Detail(hi));
-                ctx_clone.request_repaint();
-            });
         }
-    }
-
-    fn map_zoom_max(&mut self) -> f32 {
-        self.ensure_editor_map();
-        if self.editor_map_on { 48.0 } else { 12.0 }
-    }
-
-    fn ensure_editor_map(&mut self) {
-        if self.editor_map_tried {
-            return;
-        }
-        self.editor_map_tried = true;
-        if let Some(map) = crate::editormap::EditorMap::load_default() {
-            crate::editormap::install(map);
-            self.editor_map_on = true;
+        if disconnected || self.map_hi_tex.is_some() {
+            self.map_tx = None;
+            self.map_rx = None;
         }
     }
 
@@ -6870,33 +7271,48 @@ impl super::GroupGeneratorApp {
         self.editor_rx = Some(rx);
     }
 
-    /// Editor photographs for the close zoom. Decoding happens on a worker.
-    /// This frame only draws tiles that are already uploaded, and uploads at
-    /// most one that just finished, so a pan does not wait on a picture.
-    fn paint_editor_tiles(&mut self, ui: &mut egui::Ui, widget: Rect) {
-        if self.map_zoom < 8.0 || !self.editor_map_on {
+    /// Upload at most one tile that just finished. Decoding stays on a worker.
+    fn poll_editor_tile(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.editor_rx else {
             return;
+        };
+        let Ok(msg) = rx.try_recv() else {
+            return;
+        };
+        let key = (msg.row, msg.col);
+        if msg.overview {
+            self.overview_inflight.remove(&key);
+        } else {
+            self.editor_inflight.remove(&key);
         }
-        self.ensure_editor_channel();
-        if let Some(rx) = &self.editor_rx {
-            if let Ok(msg) = rx.try_recv() {
-                let key = (msg.row, msg.col);
-                self.editor_inflight.remove(&key);
-                match msg.image {
-                    Some(image) => {
-                        let tex = ui.ctx().load_texture(
-                            format!("editor_tile_{}_{}", msg.row, msg.col),
-                            image,
-                            egui::TextureOptions::LINEAR,
-                        );
-                        self.editor_tex.insert(key, tex);
-                    }
-                    None => {
-                        self.editor_miss.insert(key);
-                    }
+        match msg.image {
+            Some(image) => {
+                let name = if msg.overview {
+                    format!("overview_tile_{}_{}", msg.row, msg.col)
+                } else {
+                    format!("editor_tile_{}_{}", msg.row, msg.col)
+                };
+                let tex = ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
+                if msg.overview {
+                    self.overview_tex.insert(key, tex);
+                } else {
+                    self.editor_tex.insert(key, tex);
+                }
+            }
+            None => {
+                if msg.overview {
+                    self.overview_miss.insert(key);
+                } else {
+                    self.editor_miss.insert(key);
                 }
             }
         }
+    }
+
+    /// Photographs for one capture. `overview` is lod0 (zoomed out). The other
+    /// set is the close-up capture, drawn from 8×. This frame draws tiles that
+    /// are already uploaded and, when `request` is set, starts one decode.
+    fn paint_map_tiles(&mut self, ui: &mut egui::Ui, widget: Rect, overview: bool, request: bool) {
         let view = self.map_view_uv();
         let (north, west) = uv_to_world(view.min);
         let (south, east) = uv_to_world(view.max);
@@ -6904,7 +7320,7 @@ impl super::GroupGeneratorApp {
         let x1 = south.max(north);
         let z0 = west.min(east);
         let z1 = west.max(east);
-        let tiles = crate::editormap::with_installed(|map| {
+        let query = |map: &crate::editormap::EditorMap| {
             map.tiles_touching(x0, x1, z0, z1)
                 .into_iter()
                 .map(|tile| {
@@ -6912,50 +7328,98 @@ impl super::GroupGeneratorApp {
                     (tile.row, tile.col, tile.path.clone(), bounds)
                 })
                 .collect::<Vec<_>>()
-        });
-        let Some(tiles) = tiles else {
+        };
+        let tiles = if overview {
+            crate::editormap::with_overview(query)
+        } else {
+            crate::editormap::with_installed(query)
+        };
+        let Some(mut tiles) = tiles else {
             return;
         };
+        // Closest to the view first, so the middle of the map appears before the edges.
+        let (cx, cz) = uv_to_world(view.center());
+        tiles.sort_by(|a, b| {
+            let mid = |bounds: (f64, f64, f64, f64)| {
+                ((bounds.0 + bounds.1) * 0.5, (bounds.2 + bounds.3) * 0.5)
+            };
+            let (ax, az) = mid(a.3);
+            let (bx, bz) = mid(b.3);
+            let da = (ax - cx).powi(2) + (az - cz).powi(2);
+            let db = (bx - cx).powi(2) + (bz - cz).powi(2);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
         let interacting = ui.input(|i| {
             i.pointer.any_down()
                 || i.smooth_scroll_delta.length_sq() > 0.0
                 || i.raw_scroll_delta.length_sq() > 0.0
         });
-        if !interacting && self.editor_inflight.len() < 2 {
-            if let Some((row, col, path, _)) = tiles.iter().find(|(row, col, _, _)| {
+        let busy = self.overview_inflight.len() + self.editor_inflight.len();
+        if request && !interacting && busy < 2 {
+            let next = tiles.iter().find_map(|(row, col, path, _)| {
                 let key = (*row, *col);
-                !self.editor_tex.contains_key(&key)
-                    && !self.editor_miss.contains(&key)
-                    && !self.editor_inflight.contains(&key)
-            }) {
-                let key = (*row, *col);
-                self.editor_inflight.insert(key);
+                let fresh = if overview {
+                    !self.overview_tex.contains_key(&key)
+                        && !self.overview_miss.contains(&key)
+                        && !self.overview_inflight.contains(&key)
+                } else {
+                    !self.editor_tex.contains_key(&key)
+                        && !self.editor_miss.contains(&key)
+                        && !self.editor_inflight.contains(&key)
+                };
+                fresh.then(|| (*row, *col, path.clone()))
+            });
+            if let Some((row, col, path)) = next {
+                self.ensure_editor_channel();
+                if overview {
+                    self.overview_inflight.insert((row, col));
+                } else {
+                    self.editor_inflight.insert((row, col));
+                }
                 let tx = self.editor_tx.clone().expect("editor channel");
-                let path = path.clone();
-                let row = *row;
-                let col = *col;
                 std::thread::spawn(move || {
                     let image = decode_editor_tile(&path);
-                    let _ = tx.send(EditorTileMsg { row, col, image });
+                    let _ = tx.send(EditorTileMsg {
+                        overview,
+                        row,
+                        col,
+                        image,
+                    });
                 });
             }
         }
         let waiting = tiles.iter().any(|(row, col, _, _)| {
             let key = (*row, *col);
-            !self.editor_tex.contains_key(&key) && !self.editor_miss.contains(&key)
+            if overview {
+                !self.overview_tex.contains_key(&key) && !self.overview_miss.contains(&key)
+            } else {
+                !self.editor_tex.contains_key(&key) && !self.editor_miss.contains(&key)
+            }
         });
-        if waiting || !self.editor_inflight.is_empty() {
+        let inflight = if overview {
+            !self.overview_inflight.is_empty()
+        } else {
+            !self.editor_inflight.is_empty()
+        };
+        if request && (waiting || inflight) {
             ui.ctx().request_repaint();
         }
-        if self.editor_tex.len() > 48 {
+        // The close-up set is thousands of tiles. Lod0 is a few dozen and stays.
+        if !overview && self.editor_tex.len() > 48 {
             let live: std::collections::HashSet<(i32, i32)> =
                 tiles.iter().map(|(row, col, _, _)| (*row, *col)).collect();
             self.editor_tex.retain(|key, _| live.contains(key));
         }
         let map_full = map_screen_rect(widget, view);
         let painter = ui.painter().with_clip_rect(widget);
-        for (row, col, _, (south_x, north_x, west_z, east_z)) in &tiles {
-            let Some(tex) = self.editor_tex.get(&(*row, *col)) else {
+        for (row, col, _, (south_x, north_x, west_z, east_z)) in tiles.iter().rev() {
+            let key = (*row, *col);
+            let tex = if overview {
+                self.overview_tex.get(&key)
+            } else {
+                self.editor_tex.get(&key)
+            };
+            let Some(tex) = tex else {
                 continue;
             };
             let top_left = world_to_pos(map_full, *north_x, *west_z);
@@ -6997,33 +7461,69 @@ impl super::GroupGeneratorApp {
     }
 
     fn draw_korea_map(&mut self, ui: &mut egui::Ui) {
-        let Some(lo) = self.map_lo_tex.clone() else {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(RichText::new(" Loading map...").italics());
-            });
-            return;
-        };
-        // The map fills the center, letterboxed on NEUTRAL_200.
+        self.ensure_overview_map();
+        if self.overview_extents.is_some() {
+            self.pump_overview_extents(ui.ctx());
+        }
+        if self.overview_extents.is_none() && !self.overview_map_on {
+            self.pump_jpeg_fallback(ui.ctx());
+            if self.map_lo_tex.is_none() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new(" Loading map...").italics());
+                });
+                return;
+            }
+        }
+        // The map fills the center, letterboxed on NEUTRAL_200. The lod0
+        // picture is the editor square, so the widget is square. The JPEG
+        // fallback keeps that file's aspect.
         let area = ui.available_rect_before_wrap();
         ui.painter().rect_filled(area, 0.0, c::NEUTRAL_200);
-        let size = lo.size_vec2();
-        let scale = ((area.width() - 16.0) / size.x)
-            .min((area.height() - 16.0) / size.y)
-            .max(0.01);
-        let img_size = Vec2::new(size.x * scale, size.y * scale);
-        let rect = Rect::from_center_size(area.center(), img_size);
+        let (rect, base) = if self.overview_extents.is_some() || self.overview_map_on {
+            let side = (area.width() - 16.0).min(area.height() - 16.0).max(1.0);
+            (
+                Rect::from_center_size(area.center(), Vec2::splat(side)),
+                None,
+            )
+        } else {
+            let lo = self.map_lo_tex.clone().expect("low map");
+            let size = lo.size_vec2();
+            let scale = ((area.width() - 16.0) / size.x)
+                .min((area.height() - 16.0) / size.y)
+                .max(0.01);
+            let img_size = Vec2::new(size.x * scale, size.y * scale);
+            let rect = Rect::from_center_size(area.center(), img_size);
+            let tex = if self.map_zoom > 1.0 {
+                self.map_hi_tex.clone().unwrap_or(lo)
+            } else {
+                lo
+            };
+            (rect, Some((tex, img_size)))
+        };
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Korea map"));
         let view = self.map_view_uv();
-        let tex = if self.map_zoom > 1.0 {
-            self.map_hi_tex.clone().unwrap_or(lo)
-        } else {
-            lo
-        };
-        ui.put(rect, egui::Image::new((tex.id(), img_size)).uv(view));
-        self.paint_editor_tiles(ui, rect);
+        if let Some((tex, img_size)) = base {
+            ui.put(rect, egui::Image::new((tex.id(), img_size)).uv(view));
+        }
+        self.poll_editor_tile(ui.ctx());
+        // The extents picture is the opening view. It is coarse once the map
+        // is zoomed, so lod0 tiles cover that middle range. From 8× the
+        // close-up tiles take over.
+        if self.overview_extents.is_some() && self.map_zoom < 8.0 {
+            self.paint_overview_extents(ui, rect);
+        }
+        let lod0_tiles = self.overview_map_on
+            && self.map_zoom < 8.0
+            && !(self.overview_extents.is_some() && self.map_zoom <= 1.0);
+        if lod0_tiles {
+            self.paint_map_tiles(ui, rect, true, true);
+        }
+        if self.editor_map_on && self.map_zoom >= 8.0 {
+            self.paint_map_tiles(ui, rect, false, true);
+        }
 
         let map_rect = map_screen_rect(rect, view);
 
@@ -7348,9 +7848,9 @@ impl super::GroupGeneratorApp {
                                 air_spread: crate::airtask::AirSpread::Even,
                                 air_enabled: true,
                                 air_path: None,
-            hidden: false,
-            cap_minutes: 0,
-            strike_cover: Vec::new(),
+                                hidden: false,
+                                cap_minutes: 0,
+                                strike_cover: Vec::new(),
                             });
                         }
                         if !ui.input(|i| i.modifiers.shift) {
@@ -7757,22 +8257,22 @@ impl super::GroupGeneratorApp {
         }
 
         if !picking {
-        for battle in &overlay.battles {
-            let pos = world_to_pos(map_rect, battle.x, battle.z);
-            painter.circle_filled(pos, 4.0_f32, Color32::from_rgb(240, 220, 80));
-            painter.circle_stroke(
-                pos,
-                4.0_f32,
-                Stroke::new(1.0_f32, Color32::from_rgb(20, 20, 24)),
-            );
-            draw_map_label(
-                &painter,
-                pos + Vec2::new(6.0, -6.0),
-                battle.name,
-                Color32::from_rgb(240, 220, 80),
-                Align2::LEFT_BOTTOM,
-            );
-        }
+            for battle in &overlay.battles {
+                let pos = world_to_pos(map_rect, battle.x, battle.z);
+                painter.circle_filled(pos, 4.0_f32, Color32::from_rgb(240, 220, 80));
+                painter.circle_stroke(
+                    pos,
+                    4.0_f32,
+                    Stroke::new(1.0_f32, Color32::from_rgb(20, 20, 24)),
+                );
+                draw_map_label(
+                    &painter,
+                    pos + Vec2::new(6.0, -6.0),
+                    battle.name,
+                    Color32::from_rgb(240, 220, 80),
+                    Align2::LEFT_BOTTOM,
+                );
+            }
         }
 
         if composite_front.len() >= 2 {
@@ -7846,16 +8346,16 @@ impl super::GroupGeneratorApp {
             &full_dense
         };
         if !picking {
-        for &(tail, tip) in &self.attack_arrows {
-            let color = faction_map_color(point_north_of_front(arrow_front, tail.0, tail.1));
-            let path = attack_arrow_points(tail, tip, ARROW_TAIL_WIDTH);
-            draw_preview_arrow(&painter, map_rect, &path, color);
-            draw_attack_shaft(&painter, map_rect, tail, tip, color);
-        }
-        if let Some((tail, tip)) = self.attack_drag {
-            let color = faction_map_color(point_north_of_front(arrow_front, tail.0, tail.1));
-            draw_attack_shaft(&painter, map_rect, tail, tip, color);
-        }
+            for &(tail, tip) in &self.attack_arrows {
+                let color = faction_map_color(point_north_of_front(arrow_front, tail.0, tail.1));
+                let path = attack_arrow_points(tail, tip, ARROW_TAIL_WIDTH);
+                draw_preview_arrow(&painter, map_rect, &path, color);
+                draw_attack_shaft(&painter, map_rect, tail, tip, color);
+            }
+            if let Some((tail, tip)) = self.attack_drag {
+                let color = faction_map_color(point_north_of_front(arrow_front, tail.0, tail.1));
+                draw_attack_shaft(&painter, map_rect, tail, tip, color);
+            }
         }
 
         // 7. Draw Reference Groups
@@ -7891,6 +8391,40 @@ impl super::GroupGeneratorApp {
                 let (color, radius) = preview_dot_style(dot.kind, in_box);
                 painter.circle_filled(world_to_pos(map_rect, dot.x, dot.z), radius, color);
             }
+        }
+
+        if !picking && self.map_zoom + 0.01 >= self.map_zoom_max() {
+            self.ensure_scenery_labels();
+            for &(x, z) in &self.bridge_dots {
+                if !place.contains(x, z) {
+                    continue;
+                }
+                let pos = world_to_pos(map_rect, x, z);
+                if !map_rect.contains(pos) {
+                    continue;
+                }
+                painter.circle_filled(pos, 1.6, Color32::BLACK);
+            }
+        }
+
+        if !picking && self.map_zoom >= PLACE_LABEL_ZOOM {
+            self.ensure_scenery_labels();
+            let airfields = self.airfield_place_labels();
+            let mut occupied = Vec::new();
+            draw_place_labels(
+                &painter,
+                map_rect,
+                &airfields,
+                AIRFIELD_LABEL,
+                &mut occupied,
+            );
+            draw_place_labels(
+                &painter,
+                map_rect,
+                &self.scenery_labels,
+                BLOCK_LABEL,
+                &mut occupied,
+            );
         }
 
         if picking {
@@ -9060,6 +9594,9 @@ impl super::GroupGeneratorApp {
     }
 
     fn draw_map_networks(&self, painter: &egui::Painter, map_rect: Rect) {
+        if !crate::mapnet::networks_ready() {
+            return;
+        }
         draw_network_lines(
             painter,
             map_rect,
@@ -10284,7 +10821,7 @@ impl super::GroupGeneratorApp {
         Ok(out)
     }
 
-    fn current_mark(&self) -> TimelineMark {
+    pub(in crate::ui) fn current_mark(&self) -> TimelineMark {
         let max = TIMELINE.len().saturating_sub(1);
         let i = self.front_t.round().clamp(0.0, max as f32) as usize;
         TIMELINE.get(i).copied().unwrap_or(TIMELINE[0])
@@ -10815,10 +11352,7 @@ impl super::GroupGeneratorApp {
             self.mission_notes = notes;
             self.mission_notes_stamp = stamp;
         }
-        self.mission_notes
-            .get(index)
-            .cloned()
-            .unwrap_or_default()
+        self.mission_notes.get(index).cloned().unwrap_or_default()
     }
 
     /// Changes when a mission, its target, or a unit it might aim at moves.
@@ -11079,39 +11613,15 @@ impl super::GroupGeneratorApp {
         }
     }
 
-    pub(super) fn generate_front_file(&mut self) {
-        let fighter_packs = match self.build_map_fighter_packs() {
-            Ok(p) => p,
-            Err(err) => {
-                self.status = Status::Error(err);
-                return;
-            }
-        };
-        let mut ship_packs = match self.build_map_ship_packs() {
-            Ok(p) => p,
-            Err(err) => {
-                self.status = Status::Error(err);
-                return;
-            }
-        };
-        let mut ground_packs = match self.build_map_ground_packs() {
-            Ok(p) => p,
-            Err(err) => {
-                self.status = Status::Error(err);
-                return;
-            }
-        };
-        match self.build_loaded_army_packs() {
-            Ok((loaded_ships, loaded_ground)) => {
-                ship_packs.extend(loaded_ships);
-                ground_packs.extend(loaded_ground);
-            }
-            Err(err) => {
-                self.status = Status::Error(err);
-                return;
-            }
-        };
-        let (ref_groups, mut spawn_notes) = self.ref_groups_for_export();
+    /// The group text Generate Base Map writes, before the save dialog.
+    pub(in crate::ui) fn build_base_map(&mut self) -> Result<BaseMapBuilt, String> {
+        let fighter_packs = self.build_map_fighter_packs()?;
+        let mut ship_packs = self.build_map_ship_packs()?;
+        let mut ground_packs = self.build_map_ground_packs()?;
+        let (loaded_ships, loaded_ground) = self.build_loaded_army_packs()?;
+        ship_packs.extend(loaded_ships);
+        ground_packs.extend(loaded_ground);
+        let (ref_groups, spawn_notes) = self.ref_groups_for_export();
         let ref_paths: Vec<PathBuf> = ref_groups.iter().map(|g| g.path.clone()).collect();
         let opts = FrontOptions {
             year: self.front_year,
@@ -11138,31 +11648,13 @@ impl super::GroupGeneratorApp {
             ship_packs,
             ground_packs,
         };
-        let mut pack = match generate_front(&opts) {
-            Ok(p) => p,
-            Err(err) => {
-                self.status = Status::Error(err);
-                return;
-            }
-        };
+        let mut pack = generate_front(&opts)?;
         self.stamp_air_starts(&mut pack.root);
-        let mut strike_notes = self.stamp_missions(&mut pack.root);
+        let strike_notes = self.stamp_missions(&mut pack.root);
         let terrain_note = self.apply_terrain(&mut pack.root);
         // Each following group waits 0.5 s so zone arming and timers do not share a tick.
         stagger_sibling_starts(&mut pack.root);
         let text = serialize_group(&pack.root);
-        let suggested = format!("Korea_BaseMap_{}.Group", self.current_mark().date_label());
-        let Some(save_path) = dialog::FileDialog::new()
-            .add_filter("IL-2 Group", &["Group"])
-            .set_file_name(&suggested)
-            .save_file()
-        else {
-            return;
-        };
-        if let Err(err) = std::fs::write(&save_path, text) {
-            self.status = Status::Error(format!("Could not write file: {err}"));
-            return;
-        }
         let mut paths = ref_paths;
         paths.extend(self.recon_slots.iter().map(|s| s.path.clone()));
         paths.extend(self.map_armies.iter().map(|a| a.path.clone()));
@@ -11173,42 +11665,80 @@ impl super::GroupGeneratorApp {
                 .or_default()
                 .overlay(pack.locale.clone());
         }
+        Ok(BaseMapBuilt {
+            text,
+            tables,
+            icon_count: pack.icon_count,
+            period_label: pack.period_label.to_string(),
+            period_note: pack.period_note.to_string(),
+            notes: pack.notes,
+            aircraft: pack
+                .aircraft
+                .iter()
+                .map(|a| a.label)
+                .collect::<Vec<_>>()
+                .join(", "),
+            clip_preview: pack.clip_preview,
+            strike_notes,
+            spawn_notes,
+            terrain_note,
+        })
+    }
+
+    pub(super) fn generate_front_file(&mut self) {
+        let built = match self.build_base_map() {
+            Ok(built) => built,
+            Err(err) => {
+                self.status = Status::Error(err);
+                return;
+            }
+        };
+        let suggested = format!("Korea_BaseMap_{}.Group", self.current_mark().date_label());
+        let Some(save_path) = dialog::FileDialog::new()
+            .add_filter("IL-2 Group", &["Group"])
+            .set_file_name(&suggested)
+            .save_file()
+        else {
+            return;
+        };
+        if let Err(err) = std::fs::write(&save_path, &built.text) {
+            self.status = Status::Error(format!("Could not write file: {err}"));
+            return;
+        }
         let file = save_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file");
-        match write_sidecars(&save_path, &tables) {
+        match write_sidecars(&save_path, &built.tables) {
             Ok(exts) => {
-                let extra = if pack.notes.is_empty() {
+                let extra = if built.notes.is_empty() {
                     String::new()
                 } else {
-                    format!(" {}", pack.notes.join(" "))
+                    format!(" {}", built.notes.join(" "))
                 };
                 self.status = Status::Info(format!(
                     "Wrote base map ({} objects, {}) plus {} to {file}.{extra} {} Aircraft: {}. {}",
-                    pack.icon_count,
-                    pack.period_label,
+                    built.icon_count,
+                    built.period_label,
                     if exts.is_empty() {
                         "no language files".into()
                     } else {
                         exts.join("/")
                     },
-                    pack.period_note,
-                    pack.aircraft
-                        .iter()
-                        .map(|a| a.label)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    pack.clip_preview.replace('\n', " "),
+                    built.period_note,
+                    built.aircraft,
+                    built.clip_preview.replace('\n', " "),
                 ));
+                let mut strike_notes = built.strike_notes;
+                let mut spawn_notes = built.spawn_notes;
                 strike_notes.append(&mut spawn_notes);
-                if !strike_notes.is_empty() {
-                    if let Status::Info(lead) = std::mem::replace(&mut self.status, Status::Idle) {
-                        self.status = Status::Warn {
-                            lead,
-                            items: strike_notes,
-                        };
-                    }
+                if !strike_notes.is_empty()
+                    && let Status::Info(lead) = std::mem::replace(&mut self.status, Status::Idle)
+                {
+                    self.status = Status::Warn {
+                        lead,
+                        items: strike_notes,
+                    };
                 }
             }
             Err(err) => {
@@ -11216,7 +11746,7 @@ impl super::GroupGeneratorApp {
                     Status::Error(format!("Wrote the group, but language files failed: {err}"));
             }
         }
-        self.add_terrain_note(terrain_note);
+        self.add_terrain_note(built.terrain_note);
     }
 
     fn stamp_imported_fighters(&self) -> Result<Vec<MapFighterPack>, String> {
@@ -11500,6 +12030,66 @@ impl super::GroupGeneratorApp {
         self.place_harvested_airfields(groups).groups
     }
 
+    /// Named landscape groups, rebuilt when the loaded files change.
+    /// The walk waits until the view is zoomed in, so opening the map does not do it.
+    fn ensure_scenery_labels(&mut self) {
+        let key = self.scenery_label_key_now();
+        if self.scenery_label_key == Some(key) {
+            return;
+        }
+        let mut labels = Vec::new();
+        let mut bridges = Vec::new();
+        for group in self.map_provisions.iter().chain(self.map_refs.iter()) {
+            if bridge_scenery(&group.path) {
+                collect_bridge_dots(&group.entity, &mut bridges);
+                continue;
+            }
+            if provisions::group_has_airfield(&group.entity) {
+                continue;
+            }
+            collect_scenery_labels(&group.entity, &mut labels);
+        }
+        self.scenery_labels = cluster_place_labels(labels)
+            .into_iter()
+            .filter(|label| !is_major_city_name(&label.text))
+            .collect();
+        self.bridge_dots = bridges;
+        self.scenery_label_key = Some(key);
+    }
+
+    fn scenery_label_key_now(&self) -> u64 {
+        let mut key = self.map_provisions.len() as u64;
+        key = key
+            .wrapping_mul(31)
+            .wrapping_add(self.map_refs.len() as u64);
+        for group in self.map_provisions.iter().chain(self.map_refs.iter()) {
+            key = key
+                .wrapping_mul(31)
+                .wrapping_add(group.entity.children.len() as u64);
+        }
+        key
+    }
+
+    /// Airfields in play, labeled from the field name (`K-14 Kimpo`).
+    fn airfield_place_labels(&self) -> Vec<PlaceLabel> {
+        let mut out = Vec::new();
+        for slot in &self.airbases {
+            if !self.airbase_in_play(slot) {
+                continue;
+            }
+            let id = provisions::airfield_identity(&slot.root, &slot.path);
+            let Some((x, z)) = id.pos else {
+                continue;
+            };
+            out.push(PlaceLabel {
+                text: airfield_place_label(&id.key),
+                x,
+                z,
+            });
+        }
+        out
+    }
+
     /// Automatic provisions first, then groups added by hand. A path counts once.
     fn map_ref_sources(&self) -> Vec<&MapRefGroup> {
         let mut seen = std::collections::HashSet::new();
@@ -11536,7 +12126,106 @@ impl super::GroupGeneratorApp {
         country
     }
 
+    /// Start the landscape and airfield parse if it is not already running.
+    /// Returns without waiting. The first map frame stays on this path.
+    fn kick_map_open_if_needed(&mut self, ctx: &egui::Context) {
+        if self.map_open_rx.is_some() {
+            ctx.request_repaint();
+            return;
+        }
+        let need_landscape = self.provisions_loaded_for.is_empty();
+        let need_air = self.airbase_scan_dir.is_empty();
+        let need_net = !crate::mapnet::networks_ready();
+        if !need_landscape && !need_air && !need_net {
+            return;
+        }
+        let template = self.map_template_dir.trim().to_string();
+        let air_dir = self.harvest_db_dir.trim().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.map_open_rx = Some(rx);
+        let ctx_worker = ctx.clone();
+        std::thread::spawn(move || {
+            if need_net {
+                crate::mapnet::warm_networks();
+            }
+            let landscape = need_landscape.then(|| {
+                crate::provisions::load_named_groups(
+                    Path::new(&template),
+                    crate::provisions::LANDSCAPE_FILES,
+                )
+            });
+            let (airfields, catalog) = if need_air {
+                let groups =
+                    crate::provisions::load_harvested_airfields(Path::new(&air_dir)).groups;
+                let catalog = super::airfield::catalog_index(Path::new(&air_dir));
+                (Some(groups), catalog)
+            } else {
+                (None, Vec::new())
+            };
+            let _ = tx.send(MapOpenMsg {
+                template,
+                air_dir,
+                landscape,
+                airfields,
+                catalog,
+            });
+            ctx_worker.request_repaint();
+        });
+        ctx.request_repaint();
+    }
+
+    /// Apply a finished parse. A message that is not ready yet is left alone,
+    /// so this never waits on the worker.
+    pub(super) fn poll_map_open(&mut self) {
+        let msg = {
+            let Some(rx) = self.map_open_rx.as_ref() else {
+                return;
+            };
+            rx.try_recv()
+        };
+        let msg = match msg {
+            Ok(msg) => msg,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.map_open_rx = None;
+                return;
+            }
+        };
+        self.map_open_rx = None;
+        self.apply_map_open(msg);
+    }
+
+    /// Generate and other readers wait for the parse already running, instead
+    /// of starting a second one or exporting before it finishes.
+    fn finish_map_open(&mut self) {
+        let Some(rx) = self.map_open_rx.take() else {
+            return;
+        };
+        if let Ok(msg) = rx.recv() {
+            self.apply_map_open(msg);
+        }
+    }
+
+    fn apply_map_open(&mut self, msg: MapOpenMsg) {
+        if let Some(landscape) = msg.landscape
+            && self.provisions_loaded_for.is_empty()
+            && self.map_template_dir.trim() == msg.template.trim()
+        {
+            self.map_provision_missing = landscape.missing;
+            self.map_provision_errors = landscape.errors;
+            self.map_provisions = landscape.groups;
+            self.provisions_loaded_for = format!("{}\n{}", msg.template.trim(), msg.air_dir.trim());
+        }
+        if let Some(groups) = msg.airfields
+            && self.airbase_scan_dir.is_empty()
+            && self.harvest_db_dir.trim() == msg.air_dir.trim()
+        {
+            self.install_airfield_scan(groups, msg.catalog);
+        }
+    }
+
     pub(super) fn reload_map_provisions(&mut self) {
+        self.finish_map_open();
         let template = PathBuf::from(self.map_template_dir.trim());
         let landscape = provisions::load_named_groups(&template, provisions::LANDSCAPE_FILES);
         self.map_provision_missing = landscape.missing;
@@ -11704,7 +12393,9 @@ fn stagger_sibling_starts(root: &mut crate::ast::Il2Entity) {
             if !wanted.contains(&id) {
                 return;
             }
-            let Some(time) = entity.property("Time").and_then(|text| text.parse::<f64>().ok())
+            let Some(time) = entity
+                .property("Time")
+                .and_then(|text| text.parse::<f64>().ok())
             else {
                 return;
             };
@@ -11767,7 +12458,11 @@ mod tests {
         );
         assert_eq!(
             super::next_copy_name(
-                &["F-80C HVAR strike", "F-80C HVAR strike 2", "F-80C HVAR strike 4"],
+                &[
+                    "F-80C HVAR strike",
+                    "F-80C HVAR strike 2",
+                    "F-80C HVAR strike 4"
+                ],
                 "F-80C HVAR strike"
             ),
             "F-80C HVAR strike 5"
@@ -11776,7 +12471,10 @@ mod tests {
 
     #[test]
     fn later_groups_wait_one_server_step() {
-        let mut first_timer = node("MCU_Timer", &[("Index", "2"), ("Name", "\"Start\""), ("Time", "0")]);
+        let mut first_timer = node(
+            "MCU_Timer",
+            &[("Index", "2"), ("Name", "\"Start\""), ("Time", "0")],
+        );
         first_timer.index = Some(2);
         let mut first_begin = node(
             "MCU_TR_MissionBegin",
@@ -11787,7 +12485,10 @@ mod tests {
         let mut first = node("Group", &[("Name", "\"One\"")]);
         first.children = vec![first_begin, first_timer];
 
-        let mut second_timer = node("MCU_Timer", &[("Index", "4"), ("Name", "\"Start\""), ("Time", "0")]);
+        let mut second_timer = node(
+            "MCU_Timer",
+            &[("Index", "4"), ("Name", "\"Start\""), ("Time", "0")],
+        );
         second_timer.index = Some(4);
         let mut second_begin = node(
             "MCU_TR_MissionBegin",
@@ -12089,10 +12790,7 @@ mod tests {
         );
         zone.index = Some(2);
         zone.set_name("Zone IN");
-        let mut end = node(
-            "MCU_Timer",
-            &[("Index", "3"), ("Name", "Mission Complete")],
-        );
+        let mut end = node("MCU_Timer", &[("Index", "3"), ("Name", "Mission Complete")]);
         end.index = Some(3);
         end.set_name("Mission Complete");
         let mut plane = node(
@@ -12131,7 +12829,10 @@ mod tests {
         );
         wp.index = Some(6);
         wp.set_name("WP 1");
-        root.children = vec![zone, end, plane, area, wp];
+        let mut begin = node("MCU_Timer", &[("Index", "7"), ("Name", "MISSION BEGIN")]);
+        begin.index = Some(7);
+        begin.set_name("MISSION BEGIN");
+        root.children = vec![zone, end, plane, area, wp, begin];
         root
     }
 
@@ -12290,14 +12991,15 @@ mod tests {
             .find(|mission| mission.name == "Sweep")
             .expect("Sweep");
         assert_eq!(sweep.air_runs, 2);
-        assert!(app.map_missions.iter().any(|mission| mission.name == "Other"));
+        assert!(
+            app.map_missions
+                .iter()
+                .any(|mission| mission.name == "Other")
+        );
 
         let mut cap = flight_shell("NATO CAP", "4000", "f51");
         for (name, x, z) in [("WP 4", "1", "0"), ("WP 5", "0", "1")] {
-            let mut wp = node(
-                "MCU_Waypoint",
-                &[("Name", name), ("XPos", x), ("ZPos", z)],
-            );
+            let mut wp = node("MCU_Waypoint", &[("Name", name), ("XPos", x), ("ZPos", z)]);
             wp.set_name(name);
             cap.children.push(wp);
         }
@@ -12848,17 +13550,16 @@ mod tests {
                 "{text}"
             );
         }
-        assert_eq!(
-            crate::airtask::AirTrigger::Clock.label(),
-            "On a timer only"
-        );
+        assert_eq!(crate::airtask::AirTrigger::Clock.label(), "On a timer only");
         assert_eq!(
             crate::airtask::AirTrigger::Zone.label(),
             "On a timer with check zone trigger"
         );
-        assert!(!super::super::AIR_CONTROLS
-            .iter()
-            .any(|(label, _)| label.contains("Players")));
+        assert!(
+            !super::super::AIR_CONTROLS
+                .iter()
+                .any(|(label, _)| label.contains("Players"))
+        );
     }
 
     #[test]
@@ -12923,12 +13624,104 @@ mod tests {
         let mut inner = crate::ast::Il2Entity::new("Group");
         inner.set_name("HVAR on the bridges");
         root.children.push(inner);
-        assert_eq!(
-            super::package_title(&root, "file"),
-            "HVAR on the bridges"
-        );
+        assert_eq!(super::package_title(&root, "file"), "HVAR on the bridges");
         root.set_name("Named package");
         assert_eq!(super::package_title(&root, "file"), "Named package");
+    }
+
+    #[test]
+    fn scenery_names_drop_indexes_and_bridges() {
+        assert_eq!(
+            super::scenery_label("190-Sagimak").as_deref(),
+            Some("Sagimak")
+        );
+        assert_eq!(
+            super::scenery_label("037-Inchon_industrial").as_deref(),
+            Some("Inchon Industrial")
+        );
+        assert_eq!(
+            super::scenery_label("USA_military_camp_02").as_deref(),
+            Some("USA Military Camp")
+        );
+        assert_eq!(super::scenery_label("DAM_02").as_deref(), Some("Dam"));
+        assert_eq!(super::scenery_label("Dredges").as_deref(), Some("Dredges"));
+        assert_eq!(super::scenery_label("Bridge"), None);
+        assert_eq!(super::scenery_label("Group"), None);
+        assert_eq!(super::scenery_label("Cities"), None);
+        assert_eq!(super::airfield_place_label("K-14_Kimpo_AF"), "K-14 Kimpo");
+        assert_eq!(
+            super::BLOCK_LABEL,
+            eframe::egui::Color32::from_rgb(143, 114, 93)
+        );
+        assert_eq!(super::BLOCK_DOT, super::BLOCK_LABEL);
+        assert_eq!(super::scenery_label("064-Seoul").as_deref(), Some("Seoul"));
+        assert_eq!(
+            super::scenery_label("027 - Kaesong").as_deref(),
+            Some("Kaesong")
+        );
+        assert_eq!(
+            super::scenery_label("041-Kangnung (Gangneung)").as_deref(),
+            Some("Kangnung (Gangneung)")
+        );
+        assert!(super::is_major_city_name("Seoul"));
+        assert!(super::is_major_city_name("Kangnung (Gangneung)"));
+        assert!(super::is_major_city_name("Hanjong-dong"));
+        assert!(!super::is_major_city_name("Inchon Industrial"));
+        assert!(!super::is_major_city_name("Chaeryong-ni"));
+        for city in crate::geo::MAJOR_CITIES {
+            assert!(
+                super::is_major_city_name(city.name),
+                "{} is drawn at every zoom",
+                city.name
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_spans_are_dots_and_dam_bridges_are_not_collected_here() {
+        let mut span = Il2Entity::new("Bridge");
+        span.set_property("XPos", "1200");
+        span.set_property("ZPos", "3400");
+        let mut root = Il2Entity::new("Group");
+        root.set_name("BRIDGES_HH");
+        root.children.push(span);
+        root.children.push(node(
+            "Block",
+            &[("Name", "Block"), ("XPos", "9"), ("ZPos", "9")],
+        ));
+        let mut dots = Vec::new();
+        super::collect_bridge_dots(&root, &mut dots);
+        assert_eq!(dots, vec![(1200.0, 3400.0)]);
+    }
+
+    #[test]
+    fn a_named_group_labels_its_blocks_and_skips_a_bridge() {
+        let mut root = Il2Entity::new("Group");
+        root.set_name("Cities");
+        let mut city = Il2Entity::new("Group");
+        city.set_name("190-Sagimak");
+        city.children.push(node(
+            "Block",
+            &[("Name", "Block"), ("XPos", "1000"), ("ZPos", "2000")],
+        ));
+        city.children.push(node(
+            "Block",
+            &[("Name", "Block"), ("XPos", "3000"), ("ZPos", "4000")],
+        ));
+        let mut bridge = Il2Entity::new("Group");
+        bridge.set_name("Bridge");
+        bridge.children.push(node(
+            "Bridge",
+            &[("Name", "Bridge"), ("XPos", "9"), ("ZPos", "9")],
+        ));
+        root.children.push(city);
+        root.children.push(bridge);
+        let mut labels = Vec::new();
+        super::collect_scenery_labels(&root, &mut labels);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].text, "Sagimak");
+        assert!((labels[0].x - 2000.0).abs() < 0.1);
+        assert!((labels[0].z - 3000.0).abs() < 0.1);
     }
 
     #[test]

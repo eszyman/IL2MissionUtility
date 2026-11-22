@@ -105,6 +105,8 @@ use map::{
     MapDrawingMode, MapForces, ShipHit,
 };
 mod airfield;
+mod cloud_preview;
+mod mission;
 pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -135,6 +137,7 @@ enum AppMode {
     Airfield,
     Map,
     AirTasking,
+    Mission,
 }
 
 /// Status-slot index. Fighter Pack and Exclusive stay addressable after they
@@ -148,18 +151,20 @@ fn mode_slot(mode: AppMode) -> usize {
         AppMode::Airfield => 4,
         AppMode::Map => 5,
         AppMode::AirTasking => 6,
+        AppMode::Mission => 7,
     }
 }
 
-/// Rail order. Map is listed first. The app still opens on Template.
-/// Ctrl 1–5 follow this list. Fighter packs and exclusive plans are sections
-/// of Mission Tasking, not their own tabs.
-const MODES: [(AppMode, &str); 5] = [
+/// Rail order. Map is listed first and Mission last. The app still opens on
+/// Template. Ctrl 1–6 follow this list. Fighter packs and exclusive plans are
+/// sections of Mission Tasking, not their own tabs.
+const MODES: [(AppMode, &str); 6] = [
     (AppMode::Map, "Map"),
     (AppMode::Template, "Template"),
     (AppMode::Recon, "Army Generator"),
     (AppMode::AirTasking, "Mission Tasking"),
     (AppMode::Airfield, "Airfields"),
+    (AppMode::Mission, "Mission"),
 ];
 
 /// Which part of Mission Tasking is on screen. The rail stays on Air Tasking.
@@ -217,7 +222,10 @@ fn waypoint_kmh(group: &crate::ast::Il2Entity) -> f64 {
     let mut speed = None;
     group.for_each(&mut |entity| {
         if speed.is_none() && entity.block_type == "MCU_Waypoint" {
-            if let Some(value) = entity.property("Speed").and_then(|text| text.parse::<f64>().ok()) {
+            if let Some(value) = entity
+                .property("Speed")
+                .and_then(|text| text.parse::<f64>().ok())
+            {
                 if value >= 1.0 {
                     speed = Some(value);
                 }
@@ -245,10 +253,7 @@ fn mission_flight_secs(mission: &map::PlacedMission) -> f64 {
             (mission.start_x, mission.start_z),
         ),
     ];
-    let meters: f64 = legs
-        .iter()
-        .map(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1))
-        .sum();
+    let meters: f64 = legs.iter().map(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1)).sum();
     airtask::flight_secs(meters, waypoint_kmh(&mission.root))
 }
 
@@ -363,7 +368,10 @@ fn task_timeline(
         painter.rect_filled(bar, 2.0, gold);
         let side = if flight.eastern { c::DPRK } else { c::NATO };
         painter.rect_filled(
-            Rect::from_min_max(Pos2::new(bar.left(), y), Pos2::new(bar.left() + 4.0, y + 10.0)),
+            Rect::from_min_max(
+                Pos2::new(bar.left(), y),
+                Pos2::new(bar.left() + 4.0, y + 10.0),
+            ),
             1.0,
             side,
         );
@@ -641,6 +649,8 @@ struct ReconSlot {
 
 struct GroupGeneratorApp {
     mode: AppMode,
+    /// Single-player, co-op, and deathmatch packages for the Mission tab.
+    mission: crate::mission::MissionWork,
     custom_path: Option<PathBuf>,
     linked_groups: u32,
     flight_count: u32,
@@ -744,6 +754,21 @@ struct GroupGeneratorApp {
     map_lo_tex: Option<TextureHandle>,
     map_hi_tex: Option<TextureHandle>,
     map_rx: Option<std::sync::mpsc::Receiver<KoreaMapLayer>>,
+    /// Sender for the JPEG fallback. Unused when the lod0 overview is present.
+    map_tx: Option<std::sync::mpsc::Sender<KoreaMapLayer>>,
+    /// The 15 MB map JPEG has been asked for. That happens only after a zoom,
+    /// and only when the lod0 overview is missing.
+    map_hi_started: bool,
+    /// Lod0 index has been looked for. Tiles load as the view needs them.
+    overview_map_tried: bool,
+    overview_map_on: bool,
+    overview_tex: HashMap<(i32, i32), TextureHandle>,
+    overview_miss: std::collections::HashSet<(i32, i32)>,
+    overview_inflight: std::collections::HashSet<(i32, i32)>,
+    /// Lod0 extents picture for the opening scale. The PNG is decoded on a worker.
+    overview_extents: Option<crate::editormap::OverviewExtents>,
+    overview_extents_tex: Option<TextureHandle>,
+    overview_extents_rx: Option<std::sync::mpsc::Receiver<Option<ColorImage>>>,
     /// Editor-tile index has been looked for. Textures load as the view needs them.
     editor_map_tried: bool,
     editor_map_on: bool,
@@ -761,10 +786,21 @@ struct GroupGeneratorApp {
     /// Landscape groups from the template folder. Airfields are not included;
     /// the Airfield tab decides which of those are placed.
     map_provisions: Vec<MapRefGroup>,
+    /// Named blocks from those groups, for the zoomed-in map. Empty until
+    /// the view is close enough to draw them.
+    scenery_labels: Vec<map::PlaceLabel>,
+    /// Bridge spans from the landscape bridge files. Drawn only at maximum zoom.
+    bridge_dots: Vec<(f64, f64)>,
+    scenery_label_key: Option<u64>,
     map_provision_missing: Vec<String>,
     map_provision_errors: Vec<String>,
     /// Empty until the next Map frame should read the folders again.
     provisions_loaded_for: String,
+    /// Landscape groups and harvested airfields, parsed off the UI thread.
+    /// The first map frame only starts this. It does not wait.
+    map_open_rx: Option<std::sync::mpsc::Receiver<map::MapOpenMsg>>,
+    /// False on the frame Map is first shown, so icon rasterizing waits.
+    map_painted: bool,
     /// Harvested airfields, each with its own field-spawn list.
     airbases: Vec<airfield::AirbaseSlot>,
     /// Every harvested file, including the coalition the front left out.
@@ -882,7 +918,7 @@ struct GroupGeneratorApp {
     help_topic: HelpTopic,
     status: Status,
     /// Each tab's status while another tab is shown, in `MODES` order (`set_mode` swaps).
-    tab_status: [Status; 7],
+    tab_status: [Status; 8],
     /// Status text last seen, and the tab's edit fingerprint when it appeared (`age_status`).
     status_seen: String,
     status_fp: u64,
@@ -1000,6 +1036,7 @@ impl Default for GroupGeneratorApp {
             .collect();
         Self {
             mode: AppMode::Template,
+            mission: crate::mission::MissionWork::default(),
             custom_path: None,
             linked_groups: 3,
             flight_count: 4,
@@ -1079,6 +1116,16 @@ impl Default for GroupGeneratorApp {
             map_lo_tex: None,
             map_hi_tex: None,
             map_rx: None,
+            map_tx: None,
+            map_hi_started: false,
+            overview_map_tried: false,
+            overview_map_on: false,
+            overview_tex: HashMap::new(),
+            overview_miss: std::collections::HashSet::new(),
+            overview_inflight: std::collections::HashSet::new(),
+            overview_extents: None,
+            overview_extents_tex: None,
+            overview_extents_rx: None,
             editor_map_tried: false,
             editor_map_on: false,
             editor_tex: HashMap::new(),
@@ -1091,9 +1138,14 @@ impl Default for GroupGeneratorApp {
             map_refs: Vec::new(),
             map_template_dir: crate::provisions::DEFAULT_TEMPLATE_DIR.to_string(),
             map_provisions: Vec::new(),
+            scenery_labels: Vec::new(),
+            bridge_dots: Vec::new(),
+            scenery_label_key: None,
             map_provision_missing: Vec::new(),
             map_provision_errors: Vec::new(),
             provisions_loaded_for: String::new(),
+            map_open_rx: None,
+            map_painted: false,
             airbases: Vec::new(),
             airbase_pool: Vec::new(),
             airbase_side_stamp: None,
@@ -1238,6 +1290,7 @@ impl GroupGeneratorApp {
     /// tests (`ui_tests.rs`) can drive frames on a bare `egui::Context`.
     fn ui(&mut self, ctx: &egui::Context) {
         map::ensure_side_textures(ctx);
+        self.poll_map_open();
         self.poll_harvest(ctx);
         let keys = shell::read_shortcuts(ctx, self.mode == AppMode::Map);
         self.handle_shortcuts(&keys);
@@ -1278,6 +1331,7 @@ impl GroupGeneratorApp {
             AppMode::Airfield => self.airfield_page(ctx),
             AppMode::Map => self.map_page(ctx),
             AppMode::AirTasking => self.air_page(ctx),
+            AppMode::Mission => self.mission_page(ctx),
         }
         self.confirm_dialogs(ctx);
         // The Airfield tab asks which copy to keep. Map mode uses the side of
@@ -1311,6 +1365,7 @@ impl GroupGeneratorApp {
             AppMode::Airfield => HelpTopic::Airfield,
             AppMode::Map => HelpTopic::Front,
             AppMode::AirTasking => HelpTopic::Overview,
+            AppMode::Mission => HelpTopic::Mission,
         }
     }
 
@@ -1365,13 +1420,13 @@ impl GroupGeneratorApp {
             if let Some(i) = keys.map_tool {
                 self.pick_map_tool(MAP_TOOLS[i].0);
             }
-        if keys.escape {
-            if self.target_pick.is_some() {
-                self.cancel_target_pick();
-            } else {
-                self.cancel_map_tool();
+            if keys.escape {
+                if self.target_pick.is_some() {
+                    self.cancel_target_pick();
+                } else {
+                    self.cancel_map_tool();
+                }
             }
-        }
         }
     }
 
@@ -1464,6 +1519,10 @@ impl GroupGeneratorApp {
                     .any(|mission| mission.air_task && mission.air_enabled),
                 "At least one sortie on the map",
             )],
+            AppMode::Mission => vec![Check::new(
+                !self.mission.package().title.trim().is_empty(),
+                "A mission title",
+            )],
         }
     }
 
@@ -1485,6 +1544,7 @@ impl GroupGeneratorApp {
             AppMode::Airfield => self.export_airfield(),
             AppMode::Map => self.generate_front_file(),
             AppMode::AirTasking => self.generate_air_file(),
+            AppMode::Mission => self.create_mission(),
         }
     }
 
@@ -1507,6 +1567,7 @@ impl GroupGeneratorApp {
             AppMode::Exclusive => self.add_bomber_template(),
             AppMode::Airfield => self.load_airfield(),
             AppMode::AirTasking => self.add_air_template(),
+            AppMode::Mission => self.load_mission(),
         }
     }
 
@@ -1579,13 +1640,19 @@ impl GroupGeneratorApp {
                 );
                 ("Map", Some(period), "Generate Base Map")
             }
+            AppMode::Mission => (
+                "Mission",
+                Some(self.mission.active.label().to_string()),
+                "Create Mission",
+            ),
         };
         let mode = self.mode;
         let work = self.work_mode();
         let submode = self.recon_submode;
         let mut new_submode = submode;
         let mut new_task = self.task_view;
-        let (mut load, mut reset, mut add_folder) = (false, false, false);
+        let (mut load, mut reset, mut add_folder, mut create_mission) =
+            (false, false, false, false);
         let checks = self.readiness_checks();
         let generate = shell::page_header(
             ui,
@@ -1670,9 +1737,19 @@ impl GroupGeneratorApp {
                         .clicked();
                 }
                 AppMode::Map => {
+                    create_mission = ui
+                        .button("Create Mission")
+                        .on_hover_text("Write a .mission for the package on the Mission tab, with this base map inside it.")
+                        .clicked();
                     load = ui
                         .button("Load base map…")
                         .on_hover_text("Reload a previously generated Korea base map: AO, front, attack arrows, units, fighters, air starts, and airfield aircraft. Objectives are not stored in the file.  (Ctrl O)")
+                        .clicked();
+                }
+                AppMode::Mission => {
+                    load = ui
+                        .button("Load mission…")
+                        .on_hover_text("Open a .mission this utility wrote. Title, type, time, weather, and briefing come back. The Map tab keeps its base map.  (Ctrl O)")
                         .clicked();
                 }
             },
@@ -1697,6 +1774,9 @@ impl GroupGeneratorApp {
         }
         if generate {
             self.primary_action();
+        }
+        if create_mission {
+            self.run_io(AppMode::Mission, |app| app.create_mission());
         }
     }
 
@@ -1791,6 +1871,25 @@ impl GroupGeneratorApp {
                 )
             ),
             AppMode::Airfield => format!("{:?}{}", self.airfield_path, self.airfield_western),
+            AppMode::Mission => {
+                let pkg = self.mission.package();
+                format!(
+                    "{:?}{}{}{}{}{}{}{}{}{}{}{}{}",
+                    self.mission.active as u8,
+                    pkg.title,
+                    pkg.hour,
+                    pkg.minute,
+                    pkg.clouds.index(),
+                    pkg.cloud_base_m,
+                    pkg.prec_level,
+                    pkg.wind_from_deg,
+                    pkg.wind_speed_mps,
+                    pkg.temperature_c,
+                    pkg.pressure_mmhg,
+                    pkg.climate_custom,
+                    pkg.briefing.text
+                )
+            }
             AppMode::AirTasking => format!(
                 "{:?}",
                 (
@@ -1904,7 +2003,7 @@ impl GroupGeneratorApp {
                 ));
                 self.map_undo.settle(fp);
             }
-            AppMode::Fighter | AppMode::Airfield | AppMode::AirTasking => {}
+            AppMode::Fighter | AppMode::Airfield | AppMode::AirTasking | AppMode::Mission => {}
         }
     }
 
@@ -1916,7 +2015,7 @@ impl GroupGeneratorApp {
             AppMode::Exclusive => self.bomber_undo.label(),
             // Placement edits made from Mission Tasking live on the map stack.
             AppMode::Map | AppMode::AirTasking => self.map_undo_label(),
-            AppMode::Fighter | AppMode::Airfield => None,
+            AppMode::Fighter | AppMode::Airfield | AppMode::Mission => None,
         }
     }
 
@@ -1956,7 +2055,7 @@ impl GroupGeneratorApp {
                 Some(MapAction::Drawing) => self.remove_last_mark(),
                 None => return,
             },
-            AppMode::Fighter | AppMode::Airfield => return,
+            AppMode::Fighter | AppMode::Airfield | AppMode::Mission => return,
         }
         if let Some(label) = label {
             self.status = Status::Info(format!("Undone: {label}."));
@@ -3065,7 +3164,10 @@ impl GroupGeneratorApp {
     fn air_page(&mut self, ctx: &egui::Context) {
         if self.map_missions.is_empty() {
             self.air_selected = None;
-        } else if self.air_selected.is_none_or(|i| i >= self.map_missions.len()) {
+        } else if self
+            .air_selected
+            .is_none_or(|i| i >= self.map_missions.len())
+        {
             self.air_selected = Some(0);
         }
         side_panel(ctx, "air_left", true, 290.0, |ui| self.air_plans_panel(ui));
@@ -3419,10 +3521,8 @@ impl GroupGeneratorApp {
                 air_control(ui, 7, &mut times, 1..=cap);
                 self.map_missions[i].air_runs = times;
                 ui.label(
-                    RichText::new(format!(
-                        "Generate builds {times} flights on this path."
-                    ))
-                    .color(c::NEUTRAL_700),
+                    RichText::new(format!("Generate builds {times} flights on this path."))
+                        .color(c::NEUTRAL_700),
                 );
             }
         }
@@ -3476,14 +3576,12 @@ impl GroupGeneratorApp {
         }
         if staged == 0 {
             if !matches!(self.status, Status::Error(_)) {
-                self.status = Status::Error(
-                    last_err.unwrap_or_else(|| "No package was opened.".into()),
-                );
+                self.status =
+                    Status::Error(last_err.unwrap_or_else(|| "No package was opened.".into()));
             }
         } else if staged > 1 {
             self.status = Status::Info(
-                "The last package is in the middle. Set its mission, then load the others."
-                    .into(),
+                "The last package is in the middle. Set its mission, then load the others.".into(),
             );
         }
     }
@@ -3512,7 +3610,10 @@ impl GroupGeneratorApp {
             .unwrap_or((false, false));
         ui.horizontal(|ui| {
             if ui
-                .add_sized([140.0, 28.0], egui::Button::selectable(sweep, "Fighter Sweep"))
+                .add_sized(
+                    [140.0, 28.0],
+                    egui::Button::selectable(sweep, "Fighter Sweep"),
+                )
                 .clicked()
             {
                 if let Some(draft) = self.air_draft.as_mut() {
@@ -3552,15 +3653,18 @@ impl GroupGeneratorApp {
             });
         });
         ui.add_space(8.0);
-        let ready = self.air_draft.as_ref().is_some_and(|draft| match draft.kind {
-            Some(map::PackageKind::Strike) => {
-                draft.target.is_some() || !draft.targets.is_empty()
-            }
-            Some(map::PackageKind::Sweep) => {
-                draft.editing.is_some() || !draft.targets.is_empty()
-            }
-            None => false,
-        });
+        let ready = self
+            .air_draft
+            .as_ref()
+            .is_some_and(|draft| match draft.kind {
+                Some(map::PackageKind::Strike) => {
+                    draft.target.is_some() || !draft.targets.is_empty()
+                }
+                Some(map::PackageKind::Sweep) => {
+                    draft.editing.is_some() || !draft.targets.is_empty()
+                }
+                None => false,
+            });
         if ui
             .add_enabled_ui(ready, |ui| {
                 ui.add_sized([180.0, 28.0], egui::Button::new("Add to missions"))
@@ -4223,6 +4327,7 @@ impl GroupGeneratorApp {
                 "Load a Freeflight airfield from _gen.mission, then generate the cleaned group."
             }
             AppMode::Map => "Draw a box on the Korea map, then generate icons for that area.",
+            AppMode::Mission => "Set the title, weather, and briefing, then create the mission.",
             AppMode::AirTasking => {
                 "Add a sortie or a mission. It is listed here and placed on the map."
             }
@@ -5339,7 +5444,12 @@ fn step_buttons(ui: &mut egui::Ui, up: &str, down: &str) -> i32 {
 }
 
 /// Slider plus the number, with `+` / `-` and the scroll wheel beside the number.
-fn stepped_count(ui: &mut egui::Ui, label: &str, value: &mut u32, range: std::ops::RangeInclusive<u32>) {
+fn stepped_count(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+) {
     ui.label(label);
     let width = ui.available_width();
     ui.horizontal(|ui| {

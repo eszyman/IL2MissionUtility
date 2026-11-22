@@ -29,13 +29,14 @@ pub enum HelpTopic {
     Recon,
     Airfield,
     Front,
+    Mission,
     Language,
     Import,
     Troubleshooting,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 11] = [
+    pub const ALL: [HelpTopic; 12] = [
         HelpTopic::Overview,
         HelpTopic::Shortcuts,
         HelpTopic::Template,
@@ -44,6 +45,7 @@ impl HelpTopic {
         HelpTopic::Exclusive,
         HelpTopic::Airfield,
         HelpTopic::Front,
+        HelpTopic::Mission,
         HelpTopic::Language,
         HelpTopic::Import,
         HelpTopic::Troubleshooting,
@@ -59,6 +61,7 @@ impl HelpTopic {
             HelpTopic::Recon => "Army Generator",
             HelpTopic::Airfield => "Airfields",
             HelpTopic::Front => "Map",
+            HelpTopic::Mission => "Mission",
             HelpTopic::Language => "Language files",
             HelpTopic::Import => "Importing into the mission editor",
             HelpTopic::Troubleshooting => "Troubleshooting",

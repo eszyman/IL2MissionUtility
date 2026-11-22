@@ -317,7 +317,10 @@ pub fn plane_entry(
     e.set_property("AvSkins", "\"\"");
     e.set_property("AvPayloads", "\"\"");
     e.set_property("AvBotSkins", "\"\"");
-    e.set_property("Name", quoted(&written_plane_name(plane, start_type, snap_to)));
+    e.set_property(
+        "Name",
+        quoted(&written_plane_name(plane, start_type, snap_to)),
+    );
     e.set_property("Callsign", callsign.to_string());
     e.set_property("Callnum", "0");
     e.set_property("TCode", "\"\"");

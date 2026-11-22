@@ -97,6 +97,7 @@ struct Harness {
     time: f64,
     mods: Modifiers,
     pointer: Pos2,
+    screen: Vec2,
     dir: PathBuf,
 }
 
@@ -128,6 +129,7 @@ impl Harness {
             time: 0.0,
             mods: Modifiers::NONE,
             pointer: Pos2::ZERO,
+            screen: SCREEN,
             dir,
         };
         h.settle();
@@ -136,7 +138,7 @@ impl Harness {
 
     fn step(&mut self, events: Vec<Event>) {
         let raw = RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SCREEN)),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.screen)),
             time: Some(self.time),
             modifiers: self.mods,
             events,
@@ -158,6 +160,16 @@ impl Harness {
 
     fn settle(&mut self) {
         for _ in 0..4 {
+            self.step(Vec::new());
+        }
+        // Opening the map starts the folder parse on a worker and returns.
+        // A settled click is one where that result has been applied, so a
+        // later assert sees the landscape list. A single step does not wait.
+        for _ in 0..400 {
+            if self.app.map_open_rx.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
             self.step(Vec::new());
         }
     }
@@ -299,10 +311,15 @@ impl Harness {
         }
     }
 
-    /// Step until the map textures are loaded (they decode on a thread).
+    /// Step until the map can draw and the background folder parse has been
+    /// applied. The lod0 extents picture is ready as soon as its georef file
+    /// loads. Without that capture, the small JPEG arrives on a worker.
     fn wait_for_map(&mut self) {
         for _ in 0..2000 {
-            if self.app.map_lo_tex.is_some() {
+            let picture = self.app.overview_extents.is_some()
+                || self.app.overview_map_on
+                || self.app.map_lo_tex.is_some();
+            if picture && self.app.map_open_rx.is_none() {
                 self.settle();
                 return;
             }
@@ -370,6 +387,7 @@ fn rail_and_ctrl_numbers_switch_every_tab() {
         Key::Num3,
         Key::Num4,
         Key::Num5,
+        Key::Num6,
     ]
     .into_iter()
     .enumerate()
@@ -397,10 +415,10 @@ fn every_tab_has_a_primary_button_with_its_shortcut() {
     let mut h = Harness::new("primary");
     for (mode, label) in MODES {
         h.tab(label);
-        let primary = if mode == AppMode::Map {
-            "Generate Base Map"
-        } else {
-            "Generate File"
+        let primary = match mode {
+            AppMode::Map => "Generate Base Map",
+            AppMode::Mission => "Create Mission",
+            _ => "Generate File",
         };
         let n = h.find(primary);
         assert!(
@@ -409,6 +427,75 @@ fn every_tab_has_a_primary_button_with_its_shortcut() {
             n.rect.height()
         );
     }
+}
+
+#[test]
+fn mission_packages_keep_their_own_title_and_map_can_create_one() {
+    let mut h = Harness::new("missionpkg");
+    h.tab("Map");
+    let create = h.find("Create Mission");
+    assert!(create.rect.height() >= 28.0);
+    h.tab("Mission");
+    assert!(h.app.mode == AppMode::Mission);
+    assert_eq!(h.app.mission.package().title, "Korea");
+    h.app.mission.package_mut().title = "Dawn strike".into();
+    h.click("Co-op");
+    assert_eq!(h.app.mission.active, crate::mission::MissionKind::Coop);
+    assert_eq!(h.app.mission.package().title, "Korea co-op");
+    h.click("Single-player");
+    assert_eq!(h.app.mission.package().title, "Dawn strike");
+    assert!(h.find("SEA STATE").rect.height() > 0.0);
+    assert!(h.find("BRIEFING").rect.width() > 0.0);
+    assert!(h.find("Load mission…").rect.height() >= 28.0);
+}
+
+#[test]
+fn load_mission_button_restores_a_utility_file() {
+    use crate::frontlines::Season;
+    use crate::locale::{encode_locale_utf16le, serialize_locale};
+    use crate::mission::{
+        MissionKind, MissionPackage, MissionScene, describe, render_mission, stamp_briefing,
+    };
+
+    let mut h = Harness::new("missionload");
+    let mut package = MissionPackage::for_kind(MissionKind::Deathmatch);
+    package.title = "Furball".into();
+    package.hour = 16;
+    package.briefing.rebase("Meet over the river");
+    let scene = MissionScene {
+        season: Season::Summer,
+        year: 1952,
+        month: 6,
+        day: 8,
+    };
+    let html = describe(&package, &scene);
+    let mut tables = std::collections::HashMap::new();
+    let (name, desc, author) = stamp_briefing(&mut tables, "Furball", &html);
+    let text = render_mission(
+        MissionKind::Deathmatch,
+        &package,
+        &scene,
+        name,
+        desc,
+        author,
+        "Group\r\n{\r\n}\r\n",
+    );
+    let path = h.dir.join("Furball.mission");
+    std::fs::write(&path, text).unwrap();
+    let eng = encode_locale_utf16le(&serialize_locale(&tables["eng"]));
+    std::fs::write(path.with_extension("eng"), eng).unwrap();
+
+    h.tab("Mission");
+    dialog::answer(vec![path]);
+    h.click("Load mission…");
+    assert_eq!(h.app.mission.active, MissionKind::Deathmatch);
+    assert_eq!(h.app.mission.package().title, "Furball");
+    assert_eq!(h.app.mission.package().hour, 16);
+    assert_eq!(h.app.mission.package().wind_speed_mps, 5);
+    assert!(matches!(
+        h.app.status,
+        Status::Info(ref text) if text.contains("Furball.mission")
+    ));
 }
 
 // ── Template ──────────────────────────────────────────────────────────────
@@ -495,7 +582,7 @@ fn template_mission_menu_adds_a_cap() {
             .any(|o| o.kind == crate::template::OrderKind::GotoWaypoint && o.loop_to == Some(1)),
         "CAP closes the diamond"
     );
-    assert_eq!(h.app.tpl_seats[0].events.len(), 4);
+    assert_eq!(h.app.tpl_seats[0].events.len(), 5);
     assert!(h.app.tpl_seats[0].events.iter().any(|e| {
         e.kind == crate::template::EntityEvent::OnKilled
             && e.then == crate::template::EventThen::AllDestroyed
@@ -694,6 +781,216 @@ fn template_kind_cells_and_both_filters() {
         "{} is filtered out",
         hidden.label()
     );
+}
+
+/// The class combo and Change Model both have to pick one type, not only
+/// open. A parent scroll or the formation canvas used to eat that click.
+#[test]
+fn template_class_filter_and_change_model_pick_a_type() {
+    let mut h = Harness::new("tpltypes");
+    h.tab("Template");
+    let classes = h.app.classes_for_kind(CatalogKind::Plane);
+    let fighter = classes
+        .iter()
+        .copied()
+        .find(|c| c.label() == "Fighter")
+        .expect("planes include fighters");
+    let panel_right = h.find("Planes").rect.left() + 270.0;
+    let mut combos: Vec<Node> = h
+        .nodes
+        .iter()
+        .filter(|n| n.role == Role::ComboBox && n.rect.left() < panel_right)
+        .cloned()
+        .collect();
+    combos.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
+    h.click_at(combos[0].rect.center());
+    assert!(
+        h.has("Fighter"),
+        "class popup lists Fighter: {:?}",
+        h.labels()
+    );
+    h.click("Fighter");
+    assert_eq!(h.app.tpl_class, Some(fighter));
+    let shown = h.app.displayed_catalog();
+    assert!(
+        !shown.is_empty()
+            && shown
+                .iter()
+                .all(|u| crate::model_spec::class_for(&u.script) == fighter)
+    );
+
+    // Clicking the model name selects it. + Add is the right-hand end.
+    let other = shown
+        .iter()
+        .find(|u| u.label() != shown[0].label())
+        .unwrap();
+    let row = h.find(&format!("Model {}", other.label()));
+    h.click_at(Pos2::new(row.rect.left() + 24.0, row.rect.center().y));
+    assert_eq!(
+        h.app.tpl_add_pick,
+        shown
+            .iter()
+            .position(|u| u.label() == other.label())
+            .unwrap()
+    );
+
+    add_model(&mut h, "F-51D");
+    let change = h.find("Change Model");
+    let model_combo = h
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.role == Role::ComboBox
+                && n.rect.top() >= change.rect.top() - 4.0
+                && (n.rect.left() - change.rect.left()).abs() < 40.0
+        })
+        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .cloned()
+        .expect("model combo under Change Model");
+    h.click_at(model_combo.rect.center());
+    let last = h
+        .app
+        .tpl_catalog
+        .iter()
+        .filter(|u| u.kind == CatalogKind::Plane)
+        .map(|u| u.label().to_string())
+        .max()
+        .unwrap();
+    let before = h.find(&last).rect.top();
+    // Wheel while the pointer is on the open list. The formation view must
+    // not eat this, or types below the fold cannot be reached.
+    let hover = h.find("Il-10").rect.center();
+    h.move_to(hover);
+    for _ in 0..8 {
+        h.step(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -80.0),
+            modifiers: Modifiers::NONE,
+        }]);
+    }
+    h.settle();
+    let after = h.find(&last).rect.top();
+    assert!(
+        after < before - 20.0,
+        "{last} did not scroll into reach ({before} -> {after})"
+    );
+    h.click(&last);
+    assert_eq!(h.app.tpl_seats[0].unit.label(), last);
+
+    // The widget under the pointer has to be the control, not a preview or
+    // list row painted over it.
+    let top_at = |h: &Harness, pos: Pos2| -> String {
+        h.nodes
+            .iter()
+            .rev()
+            .find(|n| n.rect.contains(pos) && n.rect.width() > 0.0 && n.rect.height() > 0.0)
+            .map(|n| n.label.clone())
+            .unwrap_or_default()
+    };
+    let vehicles = h.find("Vehicles");
+    let over = top_at(&h, vehicles.rect.center());
+    assert_eq!(over, "Vehicles", "something covers the kind cell: {over}");
+    h.click("Fixed Units");
+    let classes = h.app.classes_for_kind(CatalogKind::Fixed);
+    let lower = classes
+        .iter()
+        .copied()
+        .find(|c| c.label() == "Artillery")
+        .expect("fixed units include artillery");
+    let mut combos: Vec<Node> = h
+        .nodes
+        .iter()
+        .filter(|n| n.role == Role::ComboBox && n.rect.left() < panel_right)
+        .cloned()
+        .collect();
+    combos.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
+    let over = top_at(&h, combos[0].rect.center());
+    assert!(
+        over.is_empty() || over == "All types" || over.contains("type"),
+        "class combo is covered by {over:?} at {:?}",
+        combos[0].rect
+    );
+    h.click_at(combos[0].rect.center());
+    let item = h.find("Artillery");
+    h.click_at(item.rect.center());
+    assert_eq!(h.app.tpl_class, Some(lower));
+}
+
+/// The minimum window used to push the model list under the order tree.
+/// Those rows were painted and then could not be selected.
+#[test]
+fn template_models_stay_selectable_on_a_short_window() {
+    let mut h = Harness::new("tplshort");
+    h.screen = Vec2::new(1280.0, 800.0);
+    h.settle();
+    h.tab("Template");
+    let tree_top = h.screen.y - shell::STATUS_H - 360.0;
+    let planes = h.find("Planes");
+    assert!(
+        planes.rect.bottom() < tree_top,
+        "kind buttons end at {}, tree starts at {tree_top}",
+        planes.rect.bottom()
+    );
+    let panel_right = planes.rect.left() + 270.0;
+    let class_combo = h
+        .nodes
+        .iter()
+        .filter(|n| n.role == Role::ComboBox && n.rect.left() < panel_right)
+        .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+        .cloned()
+        .expect("class combo");
+    assert!(
+        class_combo.rect.bottom() < tree_top,
+        "type filter ends at {}",
+        class_combo.rect.bottom()
+    );
+    let first = h
+        .nodes
+        .iter()
+        .filter(|n| n.label.starts_with("Model "))
+        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .cloned()
+        .expect("a model row");
+    assert!(
+        first.rect.bottom() < tree_top,
+        "first model row ends at {} under the order tree",
+        first.rect.bottom()
+    );
+    h.click_at(class_combo.rect.center());
+    h.click("Fighter");
+    assert_eq!(
+        h.app.tpl_class,
+        Some(crate::model_spec::ModelClass::Fighter)
+    );
+    let shown = h.app.displayed_catalog();
+    let target = shown
+        .iter()
+        .find(|u| u.label() != shown[0].label())
+        .unwrap();
+    let row = h.find(&format!("Model {}", target.label()));
+    // A few pixels of movement used to cancel the click on a drag-sensing row.
+    let from = Pos2::new(row.rect.left() + 24.0, row.rect.center().y);
+    let to = from + Vec2::new(8.0, 0.0);
+    h.move_to(from);
+    h.step(vec![Event::PointerButton {
+        pos: from,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    }]);
+    h.move_to(to);
+    h.step(vec![Event::PointerButton {
+        pos: to,
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    h.settle();
+    let pick = shown
+        .iter()
+        .position(|u| u.label() == target.label())
+        .unwrap();
+    assert_eq!(h.app.tpl_add_pick, pick);
 }
 
 #[test]
@@ -1089,9 +1386,17 @@ fn fighter_steps_change_flights_and_altitude() {
     let in_flight_top = h.find("Max in a flight").rect.top();
     let in_flight_bottom = h.find("Max in a flight").rect.bottom();
     let country_top = h.find("COUNTRY").rect.top();
-    h.click_at(between(&h, "+", flights_bottom, in_flight_top).rect.center());
+    h.click_at(
+        between(&h, "+", flights_bottom, in_flight_top)
+            .rect
+            .center(),
+    );
     assert_eq!(h.app.flight_count, flights + 1);
-    h.click_at(between(&h, "+", in_flight_bottom, country_top).rect.center());
+    h.click_at(
+        between(&h, "+", in_flight_bottom, country_top)
+            .rect
+            .center(),
+    );
     assert_eq!(h.app.max_in_flight, in_flight + 1);
     let on_row = |h: &Harness, mark: &str, y: f32| {
         h.all(mark)
@@ -1105,7 +1410,11 @@ fn fighter_steps_change_flights_and_altitude() {
     h.click_at(on_row(&h, "+", max_y).rect.center());
     assert!((h.app.altitude_min - (low + 100.0)).abs() < 0.1);
     assert!((h.app.altitude_max - (high + 100.0)).abs() < 0.1);
-    h.click_at(between(&h, "-", flights_bottom, in_flight_top).rect.center());
+    h.click_at(
+        between(&h, "-", flights_bottom, in_flight_top)
+            .rect
+            .center(),
+    );
     assert_eq!(h.app.flight_count, flights);
 }
 
@@ -1916,9 +2225,9 @@ fn airfield_drops_the_coalition_on_the_wrong_side_of_the_front() {
         "north of the 38th keeps DPRK: {listed:?}"
     );
     assert!(
-        listed
-            .iter()
-            .all(|name| name != "Suwon_502.Group" && name != "Yonpo_601.Group" && name != "SoloSouth_502.Group"),
+        listed.iter().all(|name| name != "Suwon_502.Group"
+            && name != "Yonpo_601.Group"
+            && name != "SoloSouth_502.Group"),
         "the wrong coalition is left out when no front is drawn: {listed:?}"
     );
 
@@ -2442,6 +2751,86 @@ fn exclusive_undo_reselects_the_removed_plan() {
 }
 
 // ── Map ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn map_open_uses_the_extents_image_and_skips_the_hi_jpeg() {
+    let extents = Path::new("References/MapCapture/lod0/korea_editor_map_extents.png");
+    let mut h = Harness::new("mapjpeg");
+    h.app.mode = AppMode::Map;
+    h.step(Vec::new());
+    assert!(
+        (h.app.map_zoom - 1.0).abs() < f32::EPSILON,
+        "the map opens at minimum scale"
+    );
+    assert!(h.app.map_hi_tex.is_none());
+    assert!(!h.app.map_hi_started);
+    if extents.is_file() {
+        let image = h
+            .app
+            .overview_extents
+            .as_ref()
+            .expect("minimum scale uses the lod0 extents image");
+        assert!(image.path.ends_with("korea_editor_map_extents.png"));
+        assert!((image.x_top - 499_200.0).abs() < 1.0);
+        assert!(image.z_left.abs() < 1.0);
+        assert!(image.x_bottom < 1.0);
+        assert!(image.z_right > 499_200.0);
+        assert!(
+            h.app.overview_extents_tex.is_none(),
+            "the extents image is not uploaded on the first frame"
+        );
+        assert!(
+            h.app.overview_extents_rx.is_some(),
+            "the extents image decodes on a worker"
+        );
+        assert!(
+            h.app.overview_inflight.is_empty() && h.app.overview_tex.is_empty(),
+            "lod0 tiles stay idle at minimum scale"
+        );
+        assert!(
+            h.app.provisions_loaded_for.is_empty(),
+            "landscape groups are not parsed before the first frame"
+        );
+        assert!(
+            h.app.airbase_scan_dir.is_empty(),
+            "harvested airfields are not parsed before the first frame"
+        );
+        assert!(
+            h.app.map_open_rx.is_some(),
+            "the folder parse starts on a worker"
+        );
+        assert!(h.app.map_lo_tex.is_none());
+        assert!(h.app.map_rx.is_none());
+        assert!(h.has("Korea map"));
+        for _ in 0..2000 {
+            if h.app.overview_extents_tex.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            h.step(Vec::new());
+        }
+        assert!(
+            h.app.overview_extents_tex.is_some(),
+            "the extents image arrives after the first frame"
+        );
+        assert!(!h.app.map_hi_started);
+        assert!(h.app.map_hi_tex.is_none());
+        assert!(h.app.overview_inflight.is_empty());
+        assert!((h.app.map_zoom - 1.0).abs() < f32::EPSILON);
+    } else if Path::new("References/MapCapture/lod0/calibration.json").is_file() {
+        assert!(
+            h.app.overview_map_on,
+            "lod0 index should drive the overview"
+        );
+        assert!(h.app.map_lo_tex.is_none());
+        assert!(h.app.map_rx.is_none());
+        assert!(
+            !h.app.overview_inflight.is_empty() || !h.app.overview_tex.is_empty(),
+            "lod0 tiles should start loading"
+        );
+        assert!(h.has("Korea map"));
+    }
+}
 
 #[test]
 fn map_tools_keys_escape_one_shot_objectives_and_tab_reset() {
@@ -3089,7 +3478,9 @@ fn map_tool_icons_are_painted_inside_their_box() {
     // Painted line icons (mockup 2f), not font glyphs: each has strokes that
     // stay inside the 24-unit viewBox the painter scales to 18 px.
     use shell::ToolIcon::*;
-    for icon in [Select, Front, Salient, Arrow, Objective, AirStart, Undo, Redo] {
+    for icon in [
+        Select, Front, Salient, Arrow, Objective, AirStart, Undo, Redo,
+    ] {
         let paths = shell::tool_icon_paths(icon);
         assert!(!paths.is_empty(), "{icon:?} has no strokes");
         for (pts, _) in paths {
@@ -3445,13 +3836,14 @@ fn every_ui_glyph_is_in_a_loaded_font() {
 #[test]
 fn side_panel_controls_stay_inside_their_panel() {
     // (tab, left panel width, right panel width), after the 172 px rail.
-    const PANELS: [(&str, f32, f32); 7] = [
+    const PANELS: [(&str, f32, f32); 8] = [
         ("Template", 270.0, 304.0),
         ("Army Generator", 330.0, 300.0),
         ("Fighter Pack", 270.0, 304.0),
         ("Exclusive Activation", 290.0, 290.0),
         ("Airfields", 290.0, 270.0),
         ("Map", 56.0, 304.0),
+        ("Mission", 300.0, 304.0),
         ("Air Tasking", 290.0, 290.0),
     ];
     let mut h = Harness::new("panelfit");
@@ -3632,7 +4024,12 @@ fn map_ao_resize_and_reset_are_undoable() {
     assert_eq!(h.app.front_aabb, resized, "Ctrl Z restores the resized AO");
 }
 
-fn timeline_mission(name: &str, eastern: bool, weight: i32, runs: u32) -> super::map::PlacedMission {
+fn timeline_mission(
+    name: &str,
+    eastern: bool,
+    weight: i32,
+    runs: u32,
+) -> super::map::PlacedMission {
     super::map::PlacedMission {
         name: name.to_string(),
         eastern,

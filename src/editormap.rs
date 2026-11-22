@@ -1,18 +1,24 @@
 //! Editor map tiles photographed from the mission editor.
 //!
-//! The stitched TIFF is the same picture at full resolution and is too large
-//! to keep open. This module reads `References/MapCapture`: one PNG per view,
-//! plus the calibration that places it on the Korea square. The Map tab draws
-//! the tiles that intersect the current zoom. Ground placement does not read
-//! them. Open ground and woods come from the packed terrain mask. Woods are
-//! baked into that mask offline (`py -3 tools/mapcapture/bake_woods.py`),
-//! using the same olive and beige test as `classify_rgb`.
+//! The stitched TIFF and PNG are the same picture at full resolution and are
+//! too large to keep open. This module reads an index only: one PNG per view,
+//! plus the calibration that places it on the Korea square. `References/MapCapture`
+//! is the close-up set. `References/MapCapture/lod0` is the zoomed-out set
+//! (about 70 m per pixel). `korea_editor_map_extents.png` in that folder is one
+//! small picture of the whole set; this module records its path and the bounds
+//! from `korea_editor_map.json` and does not decode it. `lod1` did not stitch
+//! and is not read. The Map tab draws the tiles that intersect the current view.
+//! Ground placement does not read them. Open ground and woods come from the
+//! packed terrain mask. Woods are baked into that mask offline
+//! (`py -3 tools/mapcapture/bake_woods.py`), using the same olive and beige
+//! test as `classify_rgb`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 static INSTALLED: OnceLock<EditorMap> = OnceLock::new();
+static OVERVIEW: OnceLock<EditorMap> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cover {
@@ -44,8 +50,32 @@ pub fn install(map: EditorMap) {
     let _ = INSTALLED.set(map);
 }
 
+pub fn install_overview(map: EditorMap) {
+    let _ = OVERVIEW.set(map);
+}
+
 pub fn with_installed<R>(f: impl FnOnce(&EditorMap) -> R) -> Option<R> {
     INSTALLED.get().map(f)
+}
+
+pub fn with_overview<R>(f: impl FnOnce(&EditorMap) -> R) -> Option<R> {
+    OVERVIEW.get().map(f)
+}
+
+fn candidate_dirs(parts: &[&str]) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
+    roots
+        .into_iter()
+        .map(|root| parts.iter().fold(root, |path, part| path.join(part)))
+        .collect()
 }
 
 fn bucket_key(m: f64) -> i32 {
@@ -54,16 +84,17 @@ fn bucket_key(m: f64) -> i32 {
 
 impl EditorMap {
     pub fn load_default() -> Option<Self> {
-        let mut dirs = Vec::new();
-        if let Ok(cwd) = std::env::current_dir() {
-            dirs.push(cwd.join("References").join("MapCapture"));
-        }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                dirs.push(dir.join("References").join("MapCapture"));
-            }
-        }
-        dirs.into_iter().find_map(|dir| Self::load(&dir).ok())
+        candidate_dirs(&["References", "MapCapture"])
+            .into_iter()
+            .find_map(|dir| Self::load(&dir).ok())
+    }
+
+    /// Zoomed-out editor capture. Same `z_left` / `x_top` placement as the
+    /// close-up tiles. The stitched mosaic in that folder is not opened.
+    pub fn load_overview() -> Option<Self> {
+        candidate_dirs(&["References", "MapCapture", "lod0"])
+            .into_iter()
+            .find_map(|dir| Self::load(&dir).ok())
     }
 
     pub fn load(dir: &Path) -> Result<Self, String> {
@@ -173,7 +204,68 @@ impl EditorMap {
         }
         out
     }
+}
 
+/// One small picture of the lod0 capture, for the map's opening scale.
+///
+/// `korea_editor_map.json` is the stitched image's georef (`il2_x_north` is
+/// the top edge, `il2_z_west` the left edge). The extents file is that same
+/// picture scaled down, so it covers the same ground. The PNG is not opened.
+#[derive(Clone, Debug)]
+pub struct OverviewExtents {
+    pub path: PathBuf,
+    pub x_top: f64,
+    pub x_bottom: f64,
+    pub z_left: f64,
+    pub z_right: f64,
+}
+
+impl OverviewExtents {
+    pub fn load() -> Option<Self> {
+        candidate_dirs(&["References", "MapCapture", "lod0"])
+            .into_iter()
+            .find_map(|dir| Self::from_dir(&dir).ok())
+    }
+
+    pub fn from_dir(dir: &Path) -> Result<Self, String> {
+        let path = dir.join("korea_editor_map_extents.png");
+        if !path.is_file() {
+            return Err("korea_editor_map_extents.png is missing".into());
+        }
+        let text = std::fs::read_to_string(dir.join("korea_editor_map.json"))
+            .map_err(|e| format!("korea_editor_map.json: {e}"))?;
+        let (x_bottom, x_top, z_left, z_right) = mosaic_bounds(&text)?;
+        Ok(Self {
+            path,
+            x_top,
+            x_bottom,
+            z_left,
+            z_right,
+        })
+    }
+}
+
+/// World edges of the stitched lod0 image: south, north, west, east.
+fn mosaic_bounds(text: &str) -> Result<(f64, f64, f64, f64), String> {
+    let x_top =
+        json_number(text, "il2_x_north").ok_or("korea_editor_map.json is missing il2_x_north")?;
+    let z_left =
+        json_number(text, "il2_z_west").ok_or("korea_editor_map.json is missing il2_z_west")?;
+    let width = json_number(text, "width").ok_or("korea_editor_map.json is missing width")?;
+    let height = json_number(text, "height").ok_or("korea_editor_map.json is missing height")?;
+    let mpp_x = json_number(text, "meters_per_pixel_x")
+        .ok_or("korea_editor_map.json is missing meters_per_pixel_x")?;
+    let mpp_z = json_number(text, "meters_per_pixel_z")
+        .ok_or("korea_editor_map.json is missing meters_per_pixel_z")?;
+    if width <= 0.0 || height <= 0.0 || mpp_x <= 0.0 || mpp_z <= 0.0 {
+        return Err("korea_editor_map.json has an empty image".into());
+    }
+    Ok((
+        x_top - height * mpp_x,
+        x_top,
+        z_left,
+        z_left + width * mpp_z,
+    ))
 }
 
 /// One editor-map pixel. Contours, the grid, and type are left unclassified.
@@ -273,5 +365,64 @@ mod tests {
             json_array4(cal, "viewport"),
             Some([1.0, 2.0, 1435.0, 901.0])
         );
+    }
+
+    #[test]
+    fn lod0_overview_covers_the_korea_square() {
+        let dir = Path::new("References/MapCapture/lod0");
+        if !dir.join("calibration.json").is_file() {
+            return;
+        }
+        let map = EditorMap::load(dir).expect("lod0 index");
+        assert!(map.tiles.len() > 1);
+        assert!(
+            (map.mpp_z - 70.0).abs() < 5.0 && (map.mpp_x - 70.0).abs() < 5.0,
+            "lod0 scale {} {}",
+            map.mpp_z,
+            map.mpp_x
+        );
+        let mut north = f64::MIN;
+        let mut south = f64::MAX;
+        let mut west = f64::MAX;
+        let mut east = f64::MIN;
+        for tile in &map.tiles {
+            let (x0, x1, z0, z1) = map.tile_bounds(tile);
+            north = north.max(x1);
+            south = south.min(x0);
+            west = west.min(z0);
+            east = east.max(z1);
+        }
+        assert!((north - 499_200.0).abs() < 1.0, "north {north}");
+        assert!(south.abs() < 1.0, "south {south}");
+        assert!(west < 100.0, "west {west}");
+        assert!(east > 499_200.0, "east {east}");
+    }
+
+    #[test]
+    fn mosaic_json_places_the_image_on_the_square() {
+        let text = r#"{"il2_x_north": 499200.0, "il2_z_west": 0.0, "width": 100, "height": 50, "meters_per_pixel_x": 10.0, "meters_per_pixel_z": 20.0}"#;
+        let (south, north, west, east) = mosaic_bounds(text).unwrap();
+        assert_eq!(
+            (south, north, west, east),
+            (498_700.0, 499_200.0, 0.0, 2_000.0)
+        );
+    }
+
+    #[test]
+    fn extents_image_covers_the_korea_square() {
+        let dir = Path::new("References/MapCapture/lod0");
+        if !dir.join("korea_editor_map_extents.png").is_file() {
+            return;
+        }
+        let image = OverviewExtents::from_dir(dir).expect("extents georef");
+        assert!(image.path.ends_with("korea_editor_map_extents.png"));
+        assert!(
+            (image.x_top - 499_200.0).abs() < 1.0,
+            "north {}",
+            image.x_top
+        );
+        assert!(image.z_left.abs() < 1.0, "west {}", image.z_left);
+        assert!(image.x_bottom < 1.0, "south {}", image.x_bottom);
+        assert!(image.z_right > 499_200.0, "east {}", image.z_right);
     }
 }

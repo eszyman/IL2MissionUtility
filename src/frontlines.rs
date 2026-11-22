@@ -3811,37 +3811,27 @@ mod tests {
         }
 
         let mut kimpo = field("K-14_Kimpo_AF", 601, 106_612.0, 268_571.0);
-        kimpo.children.push(node(
-            "Block",
-            3,
-            "Kimpo windsock",
-            105_558.0,
-            269_437.0,
-        ));
+        kimpo
+            .children
+            .push(node("Block", 3, "Kimpo windsock", 105_558.0, 269_437.0));
 
         let mut pyonggang = field("K-21_Pyonggang_AF", 503, 203_550.0, 312_334.0);
         // Allocation starts at 100 and the side groups take 100–102, so
         // Kimpo's airfield becomes 103. The stripped approach waypoint
         // still carries that number, which is the collision.
         pyonggang.children[1].set_objects(vec![103, 12]);
-        pyonggang.children.push(node(
-            "MCU_Waypoint",
-            103,
-            "APPROACH",
-            205_969.0,
-            321_355.0,
-        ));
-        pyonggang.children.push(node(
-            "Block",
-            12,
-            "Pyonggang light",
-            203_796.0,
-            312_378.0,
-        ));
+        pyonggang
+            .children
+            .push(node("MCU_Waypoint", 103, "APPROACH", 205_969.0, 321_355.0));
+        pyonggang
+            .children
+            .push(node("Block", 12, "Pyonggang light", 203_796.0, 312_378.0));
         let mut far = node("MCU_Timer", 13, "Far link", 203_550.0, 312_334.0);
         far.set_targets(vec![14]);
         pyonggang.children.push(far);
-        pyonggang.children.push(node("Block", 14, "Far shed", 1_000.0, 1_000.0));
+        pyonggang
+            .children
+            .push(node("Block", 14, "Far shed", 1_000.0, 1_000.0));
 
         let mut next = 100;
         let aabb = WorldAabb::from_corners(50_000.0, 150_000.0, 250_000.0, 400_000.0);
@@ -3886,9 +3876,7 @@ mod tests {
             .iter()
             .find(|c| c.name() == Some("Airfield entity"))
             .expect("pyonggang entity");
-        let light = pyong
-            .find_by_name("Pyonggang light")
-            .expect("kept block");
+        let light = pyong.find_by_name("Pyonggang light").expect("kept block");
         assert_eq!(entity.objects, vec![light.index.unwrap()]);
         assert_ne!(light.index, Some(12));
         assert!(!entity.objects.contains(&kimpo_af.index.unwrap()));

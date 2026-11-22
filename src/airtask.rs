@@ -522,7 +522,14 @@ fn wire_mark(
     let mut hold = Vec::new();
     let dest = if members.len() >= 2 {
         let draw = wire_draw(
-            logic, next_id, gates, weights, members, ordinal, classic, (x, y, z),
+            logic,
+            next_id,
+            gates,
+            weights,
+            members,
+            ordinal,
+            classic,
+            (x, y, z),
         );
         hold.push(draw);
         draw
@@ -670,7 +677,16 @@ fn wire_draw(
         let col = *member;
         roll.push(stash(
             logic,
-            timer(&roll_name, 0.2, pct, true, next_id, x + col as f64 * 50.0, y, z + 200.0),
+            timer(
+                &roll_name,
+                0.2,
+                pct,
+                true,
+                next_id,
+                x + col as f64 * 50.0,
+                y,
+                z + 200.0,
+            ),
         ));
         pass.push(stash(
             logic,
@@ -802,11 +818,7 @@ fn wire_draw(
         set_targets_on(logic, pass[local], next_pass);
         set_targets_on(logic, sweep[local], vec![off_skip, claim[local]]);
         set_targets_on(logic, skip[local], next_skip);
-        set_targets_on(
-            logic,
-            claim[local],
-            vec![gates[members[local]], rearm_wait],
-        );
+        set_targets_on(logic, claim[local], vec![gates[members[local]], rearm_wait]);
     }
     let draw_name = if classic {
         "Draw".to_string()
@@ -1094,11 +1106,7 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
         if end_timer_id(&plan.root).is_none() {
             return Err(format!("plan {} has no end timer", i + 1));
         }
-        let base = plan
-            .root
-            .name()
-            .unwrap_or(plan.label.as_str())
-            .to_string();
+        let base = plan.root.name().unwrap_or(plan.label.as_str()).to_string();
         let times = sortie_marks(options, plan.runs, plan.spread);
         for (k, time) in times.iter().enumerate() {
             let (mut clone, id_map) = duplicate_template(&plan.root, &mut next_id);
@@ -1696,18 +1704,30 @@ pub fn link_air_task(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2
         counter("DPRK Budget", options.budget, &mut next_id, x + 40.0, y, z),
     );
     let mut nato_closed = deactivate("NATO Budget Closed", &mut next_id, x, y, z + 20.0);
-    affect(&mut nato_closed, nato_plans.iter().map(|&p| gate[p]).collect());
+    affect(
+        &mut nato_closed,
+        nato_plans.iter().map(|&p| gate[p]).collect(),
+    );
     let nato_closed = stash(&mut logic, nato_closed);
     let mut dprk_closed = deactivate("DPRK Budget Closed", &mut next_id, x + 40.0, y, z + 20.0);
-    affect(&mut dprk_closed, dprk_plans.iter().map(|&p| gate[p]).collect());
+    affect(
+        &mut dprk_closed,
+        dprk_plans.iter().map(|&p| gate[p]).collect(),
+    );
     let dprk_closed = stash(&mut logic, dprk_closed);
     set_targets_on(&mut logic, nato_budget, vec![nato_closed]);
     set_targets_on(&mut logic, dprk_budget, vec![dprk_closed]);
     let mut nato_release = activate("NATO Release", &mut next_id, x, y, z + 40.0);
-    affect(&mut nato_release, nato_plans.iter().map(|&p| gate[p]).collect());
+    affect(
+        &mut nato_release,
+        nato_plans.iter().map(|&p| gate[p]).collect(),
+    );
     let nato_release = stash(&mut logic, nato_release);
     let mut dprk_release = activate("DPRK Release", &mut next_id, x + 40.0, y, z + 40.0);
-    affect(&mut dprk_release, dprk_plans.iter().map(|&p| gate[p]).collect());
+    affect(
+        &mut dprk_release,
+        dprk_plans.iter().map(|&p| gate[p]).collect(),
+    );
     let dprk_release = stash(&mut logic, dprk_release);
     let mut off_slots = deactivate("Off Slots", &mut next_id, x, y, z + 60.0);
     affect(&mut off_slots, slot.clone());
@@ -2370,16 +2390,7 @@ pub fn bind_outside_zones(air: &mut Il2Entity, zone_ids: &[i32], next_id: &mut i
     affect(&mut arm, zone_ids.to_vec());
     drop_enabled(&mut arm);
     let arm_id = arm.index.unwrap();
-    let mut pulse = timer(
-        "Pulse Zone Plans",
-        0.1,
-        100,
-        true,
-        next_id,
-        x,
-        y,
-        z + 30.0,
-    );
+    let mut pulse = timer("Pulse Zone Plans", 0.1, 100, true, next_id, x, y, z + 30.0);
     pulse.set_targets(zone_ids.to_vec());
     drop_enabled(&mut pulse);
     let pulse_id = pulse.index.unwrap();
@@ -2970,9 +2981,10 @@ mod tests {
         );
         let timer = only(&group, "Time on Target 1");
         assert!(
-            timer.targets.iter().any(|id| {
-                find_id(&group, *id).and_then(|e| e.name()) == Some("Goto WP 2")
-            }),
+            timer
+                .targets
+                .iter()
+                .any(|id| { find_id(&group, *id).and_then(|e| e.name()) == Some("Goto WP 2") }),
             "Time on Target orders the home waypoint"
         );
         let gate = names_of(&group, &only(&group, "Plan 1 Gate").targets);
@@ -3047,9 +3059,9 @@ mod tests {
         let home = only(&group, "CAP Head Home");
         assert_eq!(home.property("Time"), Some("0.50"));
         assert!(
-            home.targets.iter().any(|id| {
-                find_id(&group, *id).and_then(|e| e.name()) == Some("WP 5")
-            }),
+            home.targets
+                .iter()
+                .any(|id| { find_id(&group, *id).and_then(|e| e.name()) == Some("WP 5") }),
             "the delayed timer orders the home waypoint"
         );
         let stop = only(&group, "Stop Patrol");
@@ -3181,7 +3193,10 @@ mod tests {
                 .iter()
                 .any(|n| n.starts_with("DPRK"))
         );
-        assert!(many(&group, "DPRK Credit 2").is_empty(), "one DPRK plan keeps one credit");
+        assert!(
+            many(&group, "DPRK Credit 2").is_empty(),
+            "one DPRK plan keeps one credit"
+        );
     }
 
     #[test]

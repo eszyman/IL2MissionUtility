@@ -44,7 +44,6 @@ use crate::template::{
     attack_area_range_limit, bundled_catalog, carriage_label, catalog_carriage_scripts,
     copy_seat_attributes, event_triggers_order, flight_lead_of, formation_label, formations_for,
     generate_template, goto_timer_name, has_linked_wingmen, insert_goto_waypoint_after,
-    zone_watching_the_other_side,
     is_follower, lead_indexes, load_catalog, load_catalog_as_user_added, load_template,
     merge_catalog, mission_path_segments, move_seat, near_visual_range, next_waypoint_number,
     normalize_order_chain, offset_label, order_chip_detail, order_seat_indexes, order_tree_columns,
@@ -53,6 +52,7 @@ use crate::template::{
     replace_seat_unit, set_report_following, shift_tree_order, tree_order_can_shift,
     used_waypoint_count, visual_range_m, waypoint_area_m, waypoint_display_altitude,
     waypoint_display_priority, waypoint_offset_m, zone_defaults, zone_mix_for_seats,
+    zone_watching_the_other_side,
 };
 use crate::theme::{self, c};
 
@@ -1582,9 +1582,13 @@ impl super::GroupGeneratorApp {
     }
 
     pub(super) fn template_add_units_section(&mut self, ui: &mut egui::Ui) {
-        // Fixed height so selecting a unit does not push the kind buttons down.
+        // The picture stays a fixed height on a tall window so picking a unit
+        // does not push the kind buttons. On a short window it shrinks, or the
+        // type filter and the model list slide under the order tree.
+        let budget = ui.available_height();
+        let preview_h = (budget - 340.0).clamp(72.0, 176.0);
         let (rect, _) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 176.0), Sense::hover());
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), preview_h), Sense::hover());
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("tpl_left_preview")
@@ -1844,10 +1848,8 @@ impl super::GroupGeneratorApp {
                         if applied.disable_zone_out {
                             self.tpl_zone_out_enabled = false;
                         }
-                        self.tpl_zone_coalition = zone_watching_the_other_side(
-                            &self.tpl_seats,
-                            self.tpl_zone_coalition,
-                        );
+                        self.tpl_zone_coalition =
+                            zone_watching_the_other_side(&self.tpl_seats, self.tpl_zone_coalition);
                         self.tpl_select = Some(TplSelect::Order { seat: si, order: 0 });
                         self.status = Status::Info(format!(
                             "{} on unit {}: {}",
@@ -2634,21 +2636,24 @@ impl super::GroupGeneratorApp {
             .cloned()
             .collect();
         models.sort_by(|a, b| a.label().cmp(b.label()));
-        ui.menu_button("Change Model", |ui| {
-            ui.set_min_width(220.0);
-            ui.set_max_height(280.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
+        // A menu clipped to 280 px left the lower models visible to the
+        // accessibility tree and dead to the pointer. The combo scrolls them
+        // into a hittable row.
+        ui.label("Change Model");
+        egui::ComboBox::from_id_salt(("tpl_change_model", si))
+            .selected_text(self.tpl_seats[si].unit.label())
+            .width(220.0)
+            .height(360.0)
+            .show_ui(ui, |ui| {
                 for unit in &models {
                     let selected = unit.script.eq_ignore_ascii_case(&current_script);
                     if ui.selectable_label(selected, unit.label()).clicked() {
                         picked_model = Some(unit.clone());
-                        ui.close();
                     }
                 }
-            });
-        })
-        .response
-        .on_hover_text("Replace this unit with another model of the same kind.");
+            })
+            .response
+            .on_hover_text("Replace this unit with another model of the same kind.");
         if ui
             .button("Copy attributes to all")
             .on_hover_text(
@@ -3687,6 +3692,7 @@ impl super::GroupGeneratorApp {
                 egui::ComboBox::from_id_salt("tpl_class_filter")
                     .selected_text(current)
                     .width(combo_w)
+                    .height(360.0)
                     .truncate()
                     .show_ui(ui, |ui| {
                         if ui
@@ -3765,7 +3771,9 @@ impl super::GroupGeneratorApp {
         let mut pick = None;
         let mut add = None;
         let show_models = std::mem::take(&mut self.tpl_show_models);
-        let list_h = (ui.available_height() - 40.0).max(160.0);
+        // Stay inside the column. A forced 160 px list runs under the order
+        // tree, and the rows there cannot be clicked or scrolled to.
+        let list_h = (ui.available_height() - 40.0).max(28.0);
         let list = egui::ScrollArea::vertical()
             .id_salt("tpl_model_list")
             .max_height(list_h)
@@ -3830,14 +3838,17 @@ impl super::GroupGeneratorApp {
                     if resp.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                     }
-                    let dropped_outside = resp.drag_stopped()
-                        && ui
-                            .ctx()
-                            .pointer_latest_pos()
-                            .is_some_and(|p| p.x > rect.right() + 24.0);
+                    let pointer = ui.ctx().pointer_latest_pos();
+                    let dropped_outside =
+                        resp.drag_stopped() && pointer.is_some_and(|p| p.x > rect.right() + 24.0);
+                    // A press that moves a few pixels is a drag, so clicked()
+                    // stays false. Releasing on the row still selects that model.
+                    let released_on_row = resp.drag_stopped()
+                        && !dropped_outside
+                        && pointer.is_some_and(|p| rect.contains(p));
                     if resp.double_clicked() || (resp.clicked() && over_add) || dropped_outside {
                         add = Some(i);
-                    } else if resp.clicked() {
+                    } else if resp.clicked() || released_on_row {
                         pick = Some(i);
                     }
                 }
@@ -4462,7 +4473,10 @@ impl super::GroupGeneratorApp {
                 .input(|i| i.pointer.hover_pos())
                 .is_some_and(|p| formation_card_rect(rect).contains(p));
 
-        if response.hovered() && !pointer_on_card {
+        // A type or model menu hangs over this canvas. Eating the wheel here
+        // leaves the lower entries unreachable.
+        let popup_open = egui::Popup::is_any_open(ui.ctx());
+        if response.hovered() && !pointer_on_card && !popup_open {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.5 {
                 let factor = if scroll > 0.0 { 1.15 } else { 1.0 / 1.15 };

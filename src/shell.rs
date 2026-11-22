@@ -1195,14 +1195,15 @@ pub fn read_shortcuts(ctx: &egui::Context, map_active: bool) -> Shortcuts {
         s.help = i.consume_key(Modifiers::NONE, Key::F1);
         // Not consumed: egui's own popups, combo boxes and text edits also close on Esc.
         s.escape = i.key_pressed(Key::Escape);
-        // Ctrl 1–5 follow the rail: Map, Template, Army, Mission Tasking, Airfields.
-        // Bare 1–6 stay map tools, and only while the map is up.
+        // Ctrl 1–6 follow the rail: Map, Template, Army, Mission Tasking,
+        // Airfields, Mission. Bare 1–6 stay map tools, and only while the map is up.
         let nums = [
             Key::Num1,
             Key::Num2,
             Key::Num3,
             Key::Num4,
             Key::Num5,
+            Key::Num6,
         ];
         for (n, k) in nums.iter().enumerate() {
             if i.consume_key(Modifiers::COMMAND, *k) {

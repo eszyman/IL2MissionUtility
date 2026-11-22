@@ -631,12 +631,15 @@ roughly 78 km by 499 km, and is not either of those files.
 **Command line (`--height-run`, `--height-merge`).**
 
 ### `editormap.rs` — editor map tiles
-The mission-editor photographs in `References/MapCapture` (one PNG per
-view, not the stitched TIFF). `EditorMap` places each tile on the Korea
-square. The Map tab draws the tiles that cross the current view once zoom
-passes 8×, up to 48×. Those pictures decode on a worker. Ground placement
-does not read them. Open ground and woods are the packed mask.
-`classify_rgb` is the olive and beige test used when that mask is baked.
+The mission-editor photographs (one PNG per view, not the stitched mosaic).
+`References/MapCapture/lod0` is the zoomed-out set, about 70 m per pixel.
+`korea_editor_map_extents.png` in that folder is one small picture of the
+whole set. `korea_editor_map.json` places it on the Korea square. The Map
+tab draws that picture at the opening scale, lod0 tiles after the view
+zooms until 8×, and the close-up tiles in `References/MapCapture` from 8×
+to 48×. `lod1` did not stitch and is not read. Pictures decode on a worker.
+Ground placement does not read them. Open ground and woods are the packed
+mask. `classify_rgb` is the olive and beige test used when that mask is baked.
 **Map mode.**
 
 ### `watermap.rs` — water/terrain queries

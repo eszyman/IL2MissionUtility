@@ -72,6 +72,20 @@ pub(super) struct IndexedAirbase {
     pub country: i32,
 }
 
+pub(super) fn catalog_index(dir: &Path) -> Vec<IndexedAirbase> {
+    crate::harvest::read_catalog(&dir.join("catalog.Group"))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|record| IndexedAirbase {
+            name: record.name,
+            x: record.x,
+            z: record.z,
+            file: record.file,
+            country: record.country,
+        })
+        .collect()
+}
+
 /// One airfield open on the Airfield tab. `planes` is that field's spawn
 /// list, not the air-start bank.
 #[derive(Clone)]
@@ -152,25 +166,32 @@ impl super::GroupGeneratorApp {
     }
 
     fn airfield_left_panel(&mut self, ui: &mut egui::Ui) {
-        shell::settings_section(ui, "airfield_harvester", "Harvester", "file or watch", true, |ui| {
-            shell::section_title(ui, "Get the file", None);
-            numbered_step(
-                ui,
-                1,
-                "In game, open a Freeflight mission and take off from the airfield.",
-            );
-            numbered_step(
-                ui,
-                2,
-                "Open /missions/_gen.mission in the mission editor. Select the field, then File › Save Selection to File.",
-            );
-            numbered_step(ui, 3, "Load that file here.");
-            if shell::link(ui, "Help ›").clicked() {
-                self.open_help(HelpTopic::Airfield);
-            }
-            ui.add_space(6.0);
-            self.harvest_section(ui);
-        });
+        shell::settings_section(
+            ui,
+            "airfield_harvester",
+            "Harvester",
+            "file or watch",
+            true,
+            |ui| {
+                shell::section_title(ui, "Get the file", None);
+                numbered_step(
+                    ui,
+                    1,
+                    "In game, open a Freeflight mission and take off from the airfield.",
+                );
+                numbered_step(
+                    ui,
+                    2,
+                    "Open /missions/_gen.mission in the mission editor. Select the field, then File › Save Selection to File.",
+                );
+                numbered_step(ui, 3, "Load that file here.");
+                if shell::link(ui, "Help ›").clicked() {
+                    self.open_help(HelpTopic::Airfield);
+                }
+                ui.add_space(6.0);
+                self.harvest_section(ui);
+            },
+        );
         shell::section_title(ui, "Friendly plane coalition", None);
         shell::segmented(
             ui,
@@ -798,7 +819,10 @@ impl super::GroupGeneratorApp {
         let visible = groups
             .into_iter()
             .filter(|group| {
-                !self.airbase_hidden.iter().any(|hidden| hidden == &group.path)
+                !self
+                    .airbase_hidden
+                    .iter()
+                    .any(|hidden| hidden == &group.path)
                     && !self
                         .catalog_hidden
                         .iter()
@@ -983,13 +1007,8 @@ impl super::GroupGeneratorApp {
                 inside.push(i);
             }
         }
-        let mut gaps = uncovered_in_area(
-            &self.airbase_index,
-            &self.airbases,
-            area,
-            &front,
-            salients,
-        );
+        let mut gaps =
+            uncovered_in_area(&self.airbase_index, &self.airbases, area, &front, salients);
         gaps.retain(|gap| !self.catalog_hidden.iter().any(|file| file == &gap.file));
         if inside.is_empty() && gaps.is_empty() && starts.is_empty() {
             shell::hint(ui, "None yet. Harvest airfields, or load a file.", false);
@@ -1483,7 +1502,7 @@ impl super::GroupGeneratorApp {
     /// Does not select a field. Map export uses this so it places the same
     /// airfields the Airfield tab lists.
     pub(super) fn ensure_airbase_list(&mut self) {
-        if !self.airbase_scan_dir.is_empty() {
+        if !self.airbase_scan_dir.is_empty() || self.map_open_rx.is_some() {
             return;
         }
         let dir = self.harvest_db_dir.trim().to_string();
@@ -1593,10 +1612,16 @@ impl super::GroupGeneratorApp {
     }
 
     fn rescan_airbases(&mut self, dir: &Path) {
-        let loaded: Vec<_> = provisions::harvested_airfield_paths(dir)
-            .into_iter()
-            .filter_map(|path| provisions::load_group(&path).ok())
-            .collect();
+        let loaded = provisions::load_harvested_airfields(dir).groups;
+        self.install_airfield_scan(loaded, catalog_index(dir));
+    }
+
+    /// Take groups a worker already parsed and build the airbase list.
+    pub(super) fn install_airfield_scan(
+        &mut self,
+        loaded: Vec<MapRefGroup>,
+        index: Vec<IndexedAirbase>,
+    ) {
         let mut pool = Vec::new();
         for group in loaded {
             pool.push(PooledAirbase {
@@ -1630,17 +1655,8 @@ impl super::GroupGeneratorApp {
         }
         self.airbase_pool = pool;
         self.airbase_side_stamp = None;
-        self.airbase_index = crate::harvest::read_catalog(&dir.join("catalog.Group"))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|record| IndexedAirbase {
-                name: record.name,
-                x: record.x,
-                z: record.z,
-                file: record.file,
-                country: record.country,
-            })
-            .collect();
+        self.airbase_index = index;
+        self.airbase_scan_dir = self.harvest_db_dir.trim().to_string();
         self.reconcile_airbase_sides();
     }
 
@@ -1763,9 +1779,7 @@ impl super::GroupGeneratorApp {
     ) -> provisions::AirfieldPlacement {
         let front = self.front_for_sides();
         let salients = self.salients_for_sides();
-        provisions::place_matching_coalition(groups, |x, z| {
-            !on_dprk_side(&front, salients, x, z)
-        })
+        provisions::place_matching_coalition(groups, |x, z| !on_dprk_side(&front, salients, x, z))
     }
 
     /// Inside the map area, and the file's country holds that side of the front.
@@ -2313,6 +2327,19 @@ fn plane_summary(plane: &AirStartPlane, field_spawn: bool) -> String {
     )
 }
 
+/// What the name box stores. A space at the end has to survive a keystroke,
+/// or the next word cannot be typed. It is dropped when the box loses focus.
+fn plane_name_from_edit(shown: &str, auto: &str, commit: bool) -> String {
+    let trimmed = shown.trim();
+    if trimmed.is_empty() || (commit && trimmed == auto) || (!commit && shown == auto) {
+        String::new()
+    } else if commit {
+        trimmed.to_string()
+    } else {
+        shown.to_string()
+    }
+}
+
 /// Shared aircraft form. `field_spawn` draws the ground-start choice and
 /// skips altitude, which a field spawn always writes as 0.
 fn plane_card(ui: &mut egui::Ui, plane: &mut AirStartPlane, salt: &str, field_spawn: bool) {
@@ -2355,12 +2382,10 @@ fn plane_card(ui: &mut egui::Ui, plane: &mut AirStartPlane, salt: &str, field_sp
             "Filled in from the start and the load. Type over it to keep your own. Clear it to restore the automatic name.",
         );
     if edit.changed() {
-        let typed = shown.trim();
-        if typed.is_empty() || typed == auto {
-            plane.name.clear();
-        } else {
-            plane.name = typed.to_string();
-        }
+        plane.name = plane_name_from_edit(&shown, &auto, false);
+    }
+    if edit.lost_focus() {
+        plane.name = plane_name_from_edit(&plane.name, &auto, true);
     }
     ui.add_space(4.0);
     if field_spawn {
@@ -2610,4 +2635,25 @@ fn harvest_log_lines(out: &HarvestOutcome) -> Vec<String> {
         .unwrap_or("");
     lines.push(format!("  raw mission archived as raw/{raw}"));
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plane_name_from_edit;
+
+    #[test]
+    fn a_space_survives_while_the_aircraft_name_is_typed() {
+        let auto = "In air - Clean";
+        assert_eq!(plane_name_from_edit("Strike ", auto, false), "Strike ");
+        assert_eq!(
+            plane_name_from_edit("Strike patrol", auto, false),
+            "Strike patrol"
+        );
+        assert_eq!(
+            plane_name_from_edit("Strike patrol ", auto, true),
+            "Strike patrol"
+        );
+        assert_eq!(plane_name_from_edit(auto, auto, false), "");
+        assert_eq!(plane_name_from_edit("  ", auto, false), "");
+    }
 }

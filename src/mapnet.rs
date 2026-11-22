@@ -254,6 +254,22 @@ pub fn railroads() -> &'static Network {
     N.get_or_init(|| Network::from_editor_ini(include_str!("../assets/gamedata/railroads.ini")))
 }
 
+/// True after [`warm_networks`] has finished. The map draws roads only then,
+/// so the first map frame does not parse the ini files.
+pub fn networks_ready() -> bool {
+    NETWORKS_READY.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Parse the road and rail files off the UI thread. Later `roads()` /
+/// `railroads()` calls reuse that result.
+pub fn warm_networks() {
+    let _ = roads();
+    let _ = railroads();
+    NETWORKS_READY.store(true, std::sync::atomic::Ordering::Release);
+}
+
+static NETWORKS_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn network_for(rail: bool) -> &'static Network {
     if rail { railroads() } else { roads() }
 }

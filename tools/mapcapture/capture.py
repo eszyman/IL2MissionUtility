@@ -229,6 +229,37 @@ def changed_bbox(before: np.ndarray, after: np.ndarray, thresh: int = 14) -> tup
     return x0, y0, x1 - x0 + 1, y1 - y0 + 1
 
 
+def tiles_meet(west: np.ndarray, east: np.ndarray, step_px: float) -> bool:
+    """True when `east` continues the same ground `step_px` to the right of `west`.
+
+    The planned step comes from the measured scale. A zoom change after that
+    measurement makes the pictures cover less ground than the step, so the
+    shared edge is different terrain and the stitch tears.
+    """
+    if west.ndim != 3 or west.shape != east.shape:
+        return False
+    height, width = west.shape[:2]
+    overlap = int(round(width - step_px))
+    if overlap < 32 or overlap > width - 16:
+        return False
+    y0, y1 = 8, height - 8
+    x_west = width - overlap + 12
+    a = west[y0:y1, x_west : width - 12]
+    if a.size == 0 or a.shape[1] < 16:
+        return False
+    best = 1e9
+    for dy in range(-6, 7, 2):
+        for dx in range(-6, 7, 2):
+            yy, xx = y0 + dy, 12 + dx
+            if yy < 0 or xx < 0 or yy + a.shape[0] > height or xx + a.shape[1] > width:
+                continue
+            b = east[yy : yy + a.shape[0], xx : xx + a.shape[1]]
+            err = float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
+            if err < best:
+                best = err
+    return best <= 8.0
+
+
 def view_changed(previous: np.ndarray | None, shot: np.ndarray, thresh: float = 2.5) -> bool:
     """True when `shot` is not the same picture as `previous`.
 
@@ -302,22 +333,60 @@ def parse_status(text: str) -> dict:
         if zoom > 50:
             zoom /= 1000.0
         out["zoom"] = zoom
+    # Windows OCR often drops the closing parenthesis and the colon, which
+    # leaves "Mouse(m) 250490.96 213914.47" and "Zoom 250000.00 253000.00 2.758".
+    if out["mouse_x"] is None:
+        nums = _labeled_numbers(raw, r"(?:Mo?u?se|Ise)\b", r"Grid|Camera")
+        if len(nums) >= 2:
+            out["mouse_x"] = _coord(nums[0])
+            out["mouse_z"] = _coord(nums[1])
+    if out["cam_x"] is None:
+        nums = _labeled_numbers(raw, r"Camera\b", r"$")
+        if len(nums) >= 3:
+            out["cam_x"] = _coord(nums[0])
+            out["cam_z"] = _coord(nums[1])
+            zoom = float(nums[2])
+            if zoom > 50:
+                zoom /= 1000.0
+            out["zoom"] = zoom
     return out
 
 
-def status_strip(image: np.ndarray) -> np.ndarray:
-    """The light status bar along the bottom of an editor capture.
+def _labeled_numbers(text: str, label: str, stop: str) -> list[str]:
+    """Digit groups after a status label, before the next label."""
+    match = re.search(label + r"(.*?)(?:" + stop + r")", text, re.I | re.S)
+    if not match:
+        return []
+    return re.findall(r"\d+(?:\.\d+)?", match.group(1))
 
-    The row above the bar is the map, which is darker. Keeping that sliver in
-    the crop makes Windows OCR drop a coordinate.
+
+def status_strip(image: np.ndarray) -> np.ndarray:
+    """The status bar along the bottom of an editor capture.
+
+    The bar is a short bright band under the map. At the south edge the map
+    itself is a light beige, still brighter than 200, so a flat threshold
+    keeps that whole field. The object counts on the right are then read as
+    the camera Z. The bar starts at a near-white separator and is only about
+    24 rows tall.
     """
     row = image.mean(axis=(1, 2))
-    y = len(row) - 1
-    while y > 10 and row[y] > 200:
+    height = len(row)
+    if height < 16:
+        return image
+    floor = max(0, height - 48)
+    window = row[floor:]
+    bright = np.flatnonzero(window > 250)
+    if bright.size:
+        top = floor + int(bright[0])
+        if height - top > 40:
+            top = height - 32
+        return image[top:]
+    bg = float(np.percentile(row[-12:], 75))
+    y = height - 1
+    limit = max(0, height - 36)
+    while y > limit and row[y] > bg - 30:
         y -= 1
-    top = y + 1
-    if len(row) - top < 8:
-        top = max(0, len(row) - 24)
+    top = min(y + 1, height - 8)
     return image[top:]
 
 
@@ -920,6 +989,9 @@ def read_status(image: np.ndarray, save_path: Path) -> dict:
         img = Image.fromarray(np.ascontiguousarray(crop))
         if index:
             img = img.resize((img.width * 3, img.height * 3), Image.Resampling.LANCZOS)
+        elif img.height < 64:
+            # The bar is only ~24 px. Windows OCR drops it unless it is enlarged.
+            img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
         path = save_path if index == 0 else save_path.with_name(f"{save_path.stem}_{index}.png")
         parsed = parse_status(_ocr_padded(img, path))
         merged["text"] += (" | " if merged["text"] else "") + parsed["text"]
@@ -1149,8 +1221,15 @@ class Session:
             # Blank ground at the south edge does not change pixels. The status
             # bar is what shows the camera actually arrived.
             say(f"Picture unchanged. Checking the camera for X {x:.0f}, Z {z:.0f}.")
-            if self._camera_at(shot, x, z) or (previous is not None and self._camera_at(previous, x, z)):
-                return shot
+            # Blank ground does not change pixels, and the status numbers can
+            # update a moment after the grab that decided nothing moved.
+            for _ in range(4):
+                if self._camera_at(shot, x, z) or (
+                    previous is not None and self._camera_at(previous, x, z)
+                ):
+                    return shot
+                time.sleep(0.4)
+                shot = self.grab_client()
             caught = CaptureError("the camera did not move. The Move Camera values were not applied.")
             if attempt == 2:
                 raise caught
@@ -1405,6 +1484,19 @@ def capture_tiles(session: Session, cal: dict, plan: list[dict], limit: int | No
             view = shot[vy:vy + vh, vx:vx + vw]
             if float(view.mean()) < 4:
                 raise CaptureError("the map image is black. Leave the editor visible on the screen, not covered and not minimized.")
+            west_key = (tile["row"], tile["col"] - 1)
+            west = done.get(west_key)
+            if west is not None:
+                west_path = session.out / "tiles" / west["file"]
+                if west_path.exists():
+                    west_view = np.asarray(Image.open(west_path).convert("RGB"))
+                    step_px = (cz - west["cz"]) / mpp_z
+                    if not tiles_meet(west_view, view, step_px):
+                        raise CaptureError(
+                            "this picture does not meet the tile to its west. "
+                            "The zoom changed after the scale was measured, so the photos leave gaps and the stitch tears. "
+                            "Leave the zoom where you want it. Move this capture folder aside, then run the same command with --recalibrate."
+                        )
             name = f"r{tile['row']:04d}_c{tile['col']:04d}.png"
             Image.fromarray(view).save(session.out / "tiles" / name)
             z_left, x_top = tile_origin(cx, cz, anchor_col, anchor_row, mpp_z, mpp_x)
@@ -1731,6 +1823,13 @@ def selftest() -> None:
     assert abs((mid_x[0] + mid_x[1]) / 2 - 249_600) < 1
     assert abs((mid_z[0] + mid_z[1]) / 2 - 249_600) < 1
 
+    ground = np.random.default_rng(1).integers(0, 255, (180, 900, 3), dtype=np.uint8)
+    west_view = ground[:, 0:600]
+    assert tiles_meet(west_view, ground[:, 180:780], 180)
+    slipped = ground[:, 182:782]
+    assert tiles_meet(west_view, slipped, 180)
+    assert not tiles_meet(west_view, ground[:, 320:920], 180)
+
     noise = np.random.default_rng(0).integers(0, 255, (240, 320, 3), dtype=np.uint8)
     shifted = np.roll(noise, 15, axis=1)
     box = changed_bbox(noise, shifted, thresh=8)
@@ -1757,10 +1856,22 @@ def selftest() -> None:
     assert abs(live["mouse_z"] - 245345.49) < 0.02
     assert live["cam_x"] == 250_000 and live["cam_z"] == 253_000
     assert abs(live["zoom"] - 1.222) < 0.001
+    dropped = parse_status(
+        "Ready Mouse(m) 250490.96 213914.47 Grid(m): 5000 Camera (X Z Zoom 250000.00 253000.00 2.758 (0)"
+    )
+    assert abs(dropped["mouse_x"] - 250490.96) < 0.02
+    assert abs(dropped["mouse_z"] - 213914.47) < 0.02
+    assert dropped["cam_x"] == 250_000 and dropped["cam_z"] == 253_000
+    assert abs(dropped["zoom"] - 2.758) < 0.001
     light = np.full((40, 80, 3), 240, np.uint8)
     light[:12] = 40
     assert status_strip(light).shape[0] < 40
     assert status_strip(light).mean() > 200
+    # South-edge beige is brighter than 200. The strip stays the status band.
+    beige = np.full((220, 400, 3), 213, np.uint8)
+    beige[-24:] = 240
+    beige[-24] = 255
+    assert status_strip(beige).shape[0] <= 32
 
     mask = TerrainMask(4, 4, bytes([1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]))
     assert mask.has_land(MAP_MAX * 0.6, MAP_MAX * 0.7, MAP_MAX * 0.2, MAP_MAX * 0.4)

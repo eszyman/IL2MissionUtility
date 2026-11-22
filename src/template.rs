@@ -4161,7 +4161,8 @@ pub fn generate_template(opts: &TemplateOptions) -> Result<Il2Entity, String> {
     let spacing = opts.spacing.max(10.0) as f64;
     let per_group = opts.per_group.max(1) as usize;
     let path_altitude = path_waypoint_altitude(opts);
-    let coalitions = zone_watching_the_other_side(&opts.seats, opts.zone_coalition).plane_coalitions();
+    let coalitions =
+        zone_watching_the_other_side(&opts.seats, opts.zone_coalition).plane_coalitions();
     let wants_rtb = opts
         .seats
         .iter()
@@ -11365,9 +11366,11 @@ mod tests {
         assert!(loaded.options.seats[0].events.iter().any(|e| {
             e.kind == EntityEvent::OnPlaneBingoMainMG && e.then == EventThen::Order(4)
         }));
-        assert!(loaded.options.seats[0].events.iter().any(|e| {
-            e.kind == EntityEvent::OnPlaneBingoFuel && e.then == EventThen::Order(4)
-        }));
+        assert!(
+            loaded.options.seats[0].events.iter().any(|e| {
+                e.kind == EntityEvent::OnPlaneBingoFuel && e.then == EventThen::Order(4)
+            })
+        );
     }
 
     #[test]

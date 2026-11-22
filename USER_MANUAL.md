@@ -12,7 +12,7 @@ Use **Help** (or **F1**) on any page to open this manual at that topic. **Esc** 
 
 You author small, well-named templates in the IL-2 editor, then use this app to clone, randomize, and link them. The output is a `.Group` plus language sidecar files (`.eng`, `.chs`, …). Drop the group into a mission, move the copies onto the map, and save.
 
-### The six modes
+### Modes
 
 - **Template Builder** — author one memory-efficient unit group (activate or spawn, checkzones, per-unit orders) that Exclusive Activation and Army Generator can load.
 - **Army Generator** — many ground (or ship) copies; a waterfall picks an activate count, or **Spawn all** so every copy starts.
@@ -20,12 +20,13 @@ You author small, well-named templates in the IL-2 editor, then use this app to 
 - **Exclusive Activation** — several preplanned groups (bombers, recon, artillery) where only one plan can start at a time.
 - **Airfields** — strip Freeflight / single-player logic from an airfield exported from `_gen.mission` so it works in multiplayer.
 - **Map** — Korean War 1950–1953 map icons. Draw a box on the peninsula to clip the front, areas of influence, airfields, and towns.
+- **Mission** — write a `.mission` for the current base map: title, time, clouds, precipitation, sea state, and a briefing. Single-player, co-op, and deathmatch each keep their own package.
 
 ### Typical workflow
 
 1. Pick a mode.
 2. Load templates or set options (Map needs no extra template beyond `References/`).
-3. Click **Generate File** / **Generate Base Map** (or **Ctrl G**; **Ctrl O** is the tab's Load… / Add…, **Ctrl 1–5** switches tabs, **F1** opens this help) (Airfields: **Generate File**) and choose a save path.
+3. Click **Generate File** / **Generate Base Map** / **Create Mission** (or **Ctrl G**; **Ctrl O** is the tab's Load… / Add…, **Ctrl 1-6** switches tabs, **F1** opens this help) (Airfields: **Generate File**) and choose a save path.
 4. In the IL-2 mission editor, import the `.Group`. Keep the sidecar files next to it.
 5. Move groups from the parking grid onto the map. Do not break the MCU names this app relies on.
 
@@ -42,13 +43,37 @@ Country **500-series** (501 USSR, 502 DPRK, 503 PRC) sets the fighter pack's Zon
 
 ---
 
+## Mission
+
+### What it writes
+
+**Create Mission** is on this tab and on Map. It writes a `.mission` file and an `.eng` description. The file holds the base map from Map (the area, the front, and the units) plus the weather, time, and briefing of the package on screen. **Generate Base Map** still writes only the `.Group`.
+
+**Load mission…** (Ctrl O) reads a `.mission` this utility wrote, and the `.eng` beside it. It fills that type's title, time, weather, and briefing, and switches to that type. The base map on the Map tab stays as it is, and the Map strip still sets the season and date. A mission written another way is refused.
+
+### Packages
+
+**Single-player**, **Co-op**, and **Deathmatch** are three packages. Each keeps its own title, time, clouds, precipitation, sea state, and briefing. Switching types leaves the others as you set them. The file stores single as 0, co-op as 1, and deathmatch as 2.
+
+### Weather
+
+The center shows the mission title, the season and date from the Map strip, and the cloud type from the editor's list. Scroll that list to change type. The picture follows the mission hour. From 8pm through 6am it is one night frame. From 7am through 7pm each hour has its own picture of that cloud type. Minutes stay on the hour. Under it, a scale marks sea level, the highest measured ground in Korea (2,509 m), and the cloud base. Drag that line, or use Cloud base, to move the deck.
+
+Wind direction, wind speed, temperature, and pressure start at values typical of the Map season. Winter is 8 m/s from 330 deg, early spring 6 m/s from 320, late spring 4 m/s from 250, summer 5 m/s from 200, and fall 6 m/s from 340. Move any of those sliders to keep your own numbers. **Season typical** puts the season values back. Precipitation is rain or snow. Sea state runs from calm to high.
+
+### Briefing
+
+Select text and use **Bold**, **Italic**, or **Underline**. The description file stores that as basic HTML (`b`, `i`, `u`, `br`), after a weather line. The weather line uses the game's height and speed tags so the briefing can show meters or feet. The description then ends with an NDB table for the airfields in the base map, in the game's mono layout. Ident codes are Latin letters. That table is not part of the briefing text you edit.
+
+---
+
 ## Keyboard shortcuts
 
 Every shortcut also shows in its button's hover text.
 
 ### On every tab
 
-- **Ctrl G** — the tab's primary button: **Generate File**, or **Generate Base Map** on Map. Nothing happens while that button is disabled.
+- **Ctrl G** — the tab's primary button: **Generate File**, **Generate Base Map** on Map, or **Create Mission** on Mission. Nothing happens while that button is disabled.
 - **Ctrl O** — the tab's first header button, **Load…** or **Add…** (Fighter Pack has none). Load asks first when it would replace unsaved edits.
 - **Ctrl Z** — undo the last **Remove**, **Clear** or **Reset** on this tab (Template, Army Generator, Exclusive Activation, Map). The status bar names what it will undo, with an **Undo** link that does the same.
 - **Ctrl 1–6** — switch tab, in rail order.
@@ -466,7 +491,7 @@ Towns and buildings are **never** written as map icons. Airfields and scenery bl
 - **Year** (1950–1953) and **Season** (early spring, late spring, summer, fall, winter). Jump to the first dated mark in that year/season. The mark title and note describe that date (38th Parallel, June invasion, Inchon to the Yalu, Chosin, Hungnam, Ripper, MLR, Triangle Hill, Pork Chop, armistice DMZ, …).
 - **Front date** slider — a **non-uniform** dated timeline: week-to-week in early 1950, month-to-month through mid-1951, then seasonal after the MLR. Drag interpolates the preview between adjacent marks. **Generate Base Map** uses the nearest mark (not a coarse season average). **Left/Right** arrow keys step one mark; **Home/End** jump to the first/last date. The slider is a full-width row so you can hit a specific interesting date.
 - **Editor map** — the selected date recommends the IL-2 landscape to load (Spring / Summer / Autumn / Winter + year), for example `Editor map: Winter 1950 (IL-2 landscape)`.
-- **Korea map** — the preview opens on the low-quality map (`assets/DD052_en_map_01_LowQ.jpg`) at 100% scale so pan and zoom stay responsive. The high-resolution map (`assets/DD052_en_map_01.jpg`) loads in the background and is used for detail once you zoom in. **Scroll** to zoom, **right-drag** to pan, or use **− / + / Reset view / Lock AO / Reset AO** at the map's bottom-right. **Lock AO** keeps the box you drew: dragging empty map no longer redraws it, and **Reset AO** stays off until you unlock. Loading a base map can still restore that file's box. With **Select AO / move units** (tool 1), left-drag draws the AO box while it is unlocked. The whole suggested front stays visible (thinner outside the box). The front stays about **8 km south of the Yalu**. DPRK (north) influence continues **past the Yalu** to the north of the box; USA (south) influence never crosses the river. Cities, the Yalu, and the 38th parallel are preview-only.
+- **Korea map** — the opening view paints one small picture of the editor map (`References/MapCapture/lod0/korea_editor_map_extents.png`), so the first frame stays responsive and the map edges match the editor. Zooming in uses the low-detail editor tiles, then the high-detail tiles. Without that capture, the low-quality image is used until you zoom, and the high-resolution image loads only then. **Scroll** to zoom, **right-drag** to pan, or use **− / + / Reset view / Lock AO / Reset AO** at the map's bottom-right. **Lock AO** keeps the box you drew: dragging empty map no longer redraws it, and **Reset AO** stays off until you unlock. Loading a base map can still restore that file's box. With **Select AO / move units** (tool 1), left-drag draws the AO box while it is unlocked. The whole suggested front stays visible (thinner outside the box). The front stays about **8 km south of the Yalu**. DPRK (north) influence continues **past the Yalu** to the north of the box; USA (south) influence never crosses the river. Cities, the Yalu, and the 38th parallel are preview-only.
 - **Draw front** — sketch a replacement FLOT **west to east** (left to right) so the line cannot fold over itself. The timeline slider clears it. Consecutive vertices that share the same X/Z are omitted on export so `LineType` 13 (IconId 0) can render.
 - **Salient** — click or drag a bulge that leaves the front and returns. A **light** dot shows where the stroke starts on the front; a **dark** dot shows where it will rejoin. Click the dark dot or **right-click** to finish; after that the next start dot follows the new front (including the salient). Strokes are cropped to the AO. Self-crossing strokes are discarded. Export writes **LineType 4** (`SalientReference.Group`: dashed border, hashed infill) in the **opposite** colour of the side it cuts into (into red → blue, into blue → red). Influence is computed from the **base** front, then the salient polygon is subtracted from the side it enters. Use this for Hungnam / Wonsan-style pockets; those dates no longer seed a pocket automatically.
 - **Attack arrow** — drag **from tail to tip**. Colour follows the side the tail sits on: DPRK red north of the front, NATO blue south of it. In the file the arrow icon keeps the base-map colours (DPRK RGB **155, 0, 0**, NATO RGB **0, 120, 150**). These arrows are previewed and **exported** as `LineType` 11 (`CorrectedAttack_arrow.Group`). The **second-to-last** icon is titled **Attack**.
