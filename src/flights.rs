@@ -158,7 +158,7 @@ pub fn configure_aircraft(root: &mut Il2Entity, cfg: &FlightConfig) -> Result<()
         }
     }
     let mut rtb = rtb.ok_or("builtin template has no RTB - 1")?;
-    let gates = gates.ok_or("template has no NodeGates group — load a linked fighter pack")?;
+    let gates = gates.ok_or("template has no NodeGates group — load an Automatic Fighters file")?;
     rtb.set_objects(entity_ids);
     wire_zones_to_gates(&mut group1, &gates);
     root.children.push(rtb);

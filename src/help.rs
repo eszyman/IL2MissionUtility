@@ -56,7 +56,7 @@ impl HelpTopic {
             HelpTopic::Overview => "Overview",
             HelpTopic::Shortcuts => "Keyboard shortcuts",
             HelpTopic::Template => "Template Builder",
-            HelpTopic::Fighter => "Fighter Pack",
+            HelpTopic::Fighter => "Automatic Fighters",
             HelpTopic::Exclusive => "Exclusive Activation",
             HelpTopic::Recon => "Army Generator",
             HelpTopic::Airfield => "Airfields",

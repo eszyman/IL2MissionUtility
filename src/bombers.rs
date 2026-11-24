@@ -134,7 +134,15 @@ fn is_node_gates(entity: &Il2Entity) -> bool {
     entity.block_type == "Group" && entity.name() == Some("NodeGates")
 }
 
+fn looks_like_fighter_pack(root: &Il2Entity) -> bool {
+    root.children.iter().any(|c| c.name() == Some("NodeGates"))
+        && root.children.iter().any(|c| c.name() == Some("Group 1"))
+}
+
 fn looks_like_exclusive_here(root: &Il2Entity) -> bool {
+    if looks_like_fighter_pack(root) {
+        return false;
+    }
     if root.name() == Some("Exclusive Activation") {
         return true;
     }

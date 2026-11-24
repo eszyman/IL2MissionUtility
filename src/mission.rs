@@ -3,15 +3,15 @@
 //! Map mode writes a `.Group`. This module wraps that group in the mission
 //! file the editor opens: Options (map, season, clock, clouds, precipitation,
 //! sea state, mission type) plus the language sidecar for the title and the
-//! description. The description is basic HTML (`b`, `i`, `u`, `br`), which
-//! is what the in-game briefing renders. The first use of a group label
+//! description. The description is basic HTML (`b`, `i`, `u`, `br`, mono).
+//! The first use of a group label
 //! keeps its index. A later object that points at the same index gets a
 //! copy, because the editor refuses a mission where two objects share a
 //! localization index. The title and description are appended after that.
 //!
-//! It does not parse the embedded `.Group` and it does not place units.
-//! Load reads the Options header and the English sidecar only. The UI draws
-//! the sky; this module describes it, writes it, and reads it back.
+//! Load reads the Options header, the English sidecar, and the embedded
+//! group text. The UI parses that group and restores the Map tab. This
+//! module describes the sky, writes the file, and reads it back.
 //!
 //! ## Public API
 //! * `MissionKind` / `MissionPackage` / `MissionWork` — three packages
@@ -20,7 +20,7 @@
 //! * `fn sample_slice` — west-east Korea heights
 //! * `KOREA_HIGHEST_GROUND_M` — highest measured ground, for the altitude scale
 //! * `fn render_mission` / `fn stamp_briefing` / `fn uniquify_locale` / `fn describe`
-//! * `fn load_utility_mission` — a file this utility wrote
+//! * `fn load_utility_mission` / `fn embedded_group` — a file this utility wrote
 //! * `fn ndb_chart` — mono NDB table for airfields used in the group
 //!
 //! ## Used by
@@ -213,6 +213,16 @@ impl CloudPreset {
         }
     }
 
+    /// The briefing name for this family. Heavy and overcast are both Overcast.
+    pub fn cover_word(self) -> &'static str {
+        match &self.name()[..2] {
+            "00" => "Clear",
+            "01" => "Partly Cloudy",
+            "02" => "Mostly Cloudy",
+            _ => "Overcast",
+        }
+    }
+
     /// `CloudHeight` written for this family. The user does not edit it.
     pub fn file_height_m(self) -> i32 {
         match &self.name()[..2] {
@@ -231,10 +241,8 @@ pub const KOREA_HIGHEST_GROUND_M: f32 = 2509.0;
 
 /// `PrecType` in the mission file.
 ///
-/// The harvested Korea freeflight (`References/_gen.Mission`) writes
-/// `PrecType = 1` and its English sidecar calls that weather "heavy rain".
-/// Snow is the other value. A 2019 note from the developer listed the
-/// opposite pair; this exporter follows the file the current game wrote.
+/// `References/_gen.Mission` writes `PrecType = 1` with heavy rain.
+/// `0` is no rain: none when `PrecLevel` is 0, snow when the level is above 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Precip {
     None,
@@ -253,8 +261,8 @@ impl Precip {
 
     pub fn code(self) -> i32 {
         match self {
-            Precip::Rain | Precip::None => 1,
-            Precip::Snow => 0,
+            Precip::Rain => 1,
+            Precip::None | Precip::Snow => 0,
         }
     }
 }
@@ -277,23 +285,24 @@ pub enum StyleBit {
     Bold,
     Italic,
     Underline,
+    Mono,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Mark {
-    start: usize,
-    end: usize,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Style {
     bold: bool,
     italic: bool,
     underline: bool,
+    mono: bool,
 }
 
-impl Mark {
-    fn has(&self, bit: StyleBit) -> bool {
+impl Style {
+    fn has(self, bit: StyleBit) -> bool {
         match bit {
             StyleBit::Bold => self.bold,
             StyleBit::Italic => self.italic,
             StyleBit::Underline => self.underline,
+            StyleBit::Mono => self.mono,
         }
     }
 
@@ -302,26 +311,42 @@ impl Mark {
             StyleBit::Bold => self.bold = on,
             StyleBit::Italic => self.italic = on,
             StyleBit::Underline => self.underline = on,
+            StyleBit::Mono => self.mono = on,
         }
     }
 
-    fn any(&self) -> bool {
-        self.bold || self.italic || self.underline
-    }
-
-    fn same_style(&self, other: &Mark) -> bool {
-        self.bold == other.bold && self.italic == other.italic && self.underline == other.underline
+    fn any(self) -> bool {
+        self.bold || self.italic || self.underline || self.mono
     }
 }
 
-/// One styled piece of a briefing, in reading order.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BriefRun {
+struct Mark {
+    start: usize,
+    end: usize,
+    style: Style,
+}
+
+impl Mark {
+    fn same_style(&self, other: &Mark) -> bool {
+        self.style == other.style
+    }
+}
+
+/// One styled piece of briefing text, covering the editor string in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BriefPiece {
     pub text: String,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
-    pub line_break: bool,
+    pub mono: bool,
+}
+
+/// One preview line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BriefLine {
+    pub pieces: Vec<BriefPiece>,
 }
 
 /// Briefing text. The editor shows `text`; Create Mission writes [`Briefing::to_html`].
@@ -341,18 +366,25 @@ impl Default for Briefing {
 }
 
 impl Briefing {
+    /// Briefing text with no marks.
+    pub fn empty() -> Self {
+        Self {
+            text: String::new(),
+            marks: Vec::new(),
+        }
+    }
+
     /// Turn `bit` on for the byte range, or off when the whole range already has it.
     pub fn toggle(&mut self, start: usize, end: usize, bit: StyleBit) {
         if start >= end || end > self.text.len() {
             return;
         }
         let on = !self.range_has(start, end, bit);
-        self.paint(start, end, bit, on);
+        self.restyle(start, end, |style| style.set(bit, on));
     }
 
-    /// Styled pieces in order, for the on-screen briefing. A run with
-    /// `line_break` is only the break; `text` is empty.
-    pub fn runs(&self) -> Vec<BriefRun> {
+    /// Styled pieces covering `text` exactly, for the entry box.
+    pub fn pieces(&self) -> Vec<BriefPiece> {
         let mut cuts = vec![0, self.text.len()];
         for mark in &self.marks {
             cuts.push(mark.start);
@@ -366,74 +398,100 @@ impl Briefing {
             if a >= b {
                 continue;
             }
-            let (bold, italic, underline) = self.style_at(a);
-            let chunk = &self.text[a..b];
-            let mut start = 0usize;
-            for (offset, ch) in chunk.char_indices() {
-                if ch == '\n' {
-                    if offset > start {
-                        out.push(BriefRun {
-                            text: chunk[start..offset].to_string(),
-                            bold,
-                            italic,
-                            underline,
-                            line_break: false,
-                        });
+            out.push(self.piece(a, b));
+        }
+        out
+    }
+
+    /// Lines as the briefing shows them.
+    pub fn preview_lines(&self) -> Vec<BriefLine> {
+        let mut out = Vec::new();
+        for (a, b) in line_ranges(&self.text) {
+            let mut pieces = Vec::new();
+            if a < b {
+                let mut cuts = vec![a, b];
+                for mark in &self.marks {
+                    if mark.end > a && mark.start < b {
+                        cuts.push(mark.start.max(a));
+                        cuts.push(mark.end.min(b));
                     }
-                    out.push(BriefRun {
-                        text: String::new(),
-                        bold: false,
-                        italic: false,
-                        underline: false,
-                        line_break: true,
-                    });
-                    start = offset + ch.len_utf8();
+                }
+                cuts.sort_unstable();
+                cuts.dedup();
+                for pair in cuts.windows(2) {
+                    if pair[0] < pair[1] {
+                        pieces.push(self.piece(pair[0], pair[1]));
+                    }
                 }
             }
-            if start < chunk.len() {
-                out.push(BriefRun {
-                    text: chunk[start..].replace('\r', ""),
-                    bold,
-                    italic,
-                    underline,
-                    line_break: false,
-                });
-            }
+            out.push(BriefLine { pieces });
         }
         out
     }
 
     /// The user's briefing from the description HTML. The weather preamble
-    /// is not part of this text. Tags are `b`, `i`, `u`, and `br`.
+    /// is not part of this text. Tags are `b`, `i`, `u`, `br`, and `style` (mono).
+    /// A `span` or a list is skipped: the game prints those tags as text.
     pub fn from_html(html: &str) -> Result<Self, String> {
         let mut text = String::new();
         let mut marks = Vec::new();
-        let mut bold = false;
-        let mut italic = false;
-        let mut underline = false;
+        let mut style = Style::default();
         let mut mark_at: Option<usize> = None;
         let mut rest = html;
         while !rest.is_empty() {
             if rest.starts_with('<') {
-                let (tag, next) = html_tag(rest)?;
+                let (tag, attrs, next) = html_tag(rest)?;
                 match tag {
                     "br" => text.push('\n'),
-                    "b" | "i" | "u" | "/b" | "/i" | "/u" => {
-                        close_mark(&text, &mut marks, &mut mark_at, bold, italic, underline);
+                    "b" | "/b" | "i" | "/i" | "u" | "/u" => {
+                        close_mark(&text, &mut marks, &mut mark_at, style);
                         match tag {
-                            "b" if !bold => bold = true,
-                            "/b" if bold => bold = false,
-                            "i" if !italic => italic = true,
-                            "/i" if italic => italic = false,
-                            "u" if !underline => underline = true,
-                            "/u" if underline => underline = false,
+                            "b" if !style.bold => style.bold = true,
+                            "/b" if style.bold => style.bold = false,
+                            "i" if !style.italic => style.italic = true,
+                            "/i" if style.italic => style.italic = false,
+                            "u" if !style.underline => style.underline = true,
+                            "/u" if style.underline => style.underline = false,
                             _ => {
                                 return Err(
                                     "The briefing HTML opens or closes a style twice.".into()
                                 );
                             }
                         }
-                        if bold || italic || underline {
+                        if style.any() {
+                            mark_at = Some(text.len());
+                        }
+                    }
+                    "span" | "/span" | "ul" | "/ul" | "ol" | "/ol" | "/li" => {}
+                    "li" => {
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            close_mark(&text, &mut marks, &mut mark_at, style);
+                            text.push('\n');
+                            if style.any() {
+                                mark_at = Some(text.len());
+                            }
+                        }
+                    }
+                    "style" => {
+                        if !attrs.contains("Style.RichText.Mono") {
+                            return Err(
+                                "The briefing has a font this utility does not write.".into()
+                            );
+                        }
+                        if style.mono {
+                            return Err("The briefing HTML opens or closes a style twice.".into());
+                        }
+                        close_mark(&text, &mut marks, &mut mark_at, style);
+                        style.mono = true;
+                        mark_at = Some(text.len());
+                    }
+                    "/style" => {
+                        if !style.mono {
+                            return Err("The briefing HTML opens or closes a style twice.".into());
+                        }
+                        close_mark(&text, &mut marks, &mut mark_at, style);
+                        style.mono = false;
+                        if style.any() {
                             mark_at = Some(text.len());
                         }
                     }
@@ -456,34 +514,42 @@ impl Briefing {
             text.push(ch);
             rest = &rest[ch.len_utf8()..];
         }
-        if bold || italic || underline {
+        if style.any() {
             return Err("The briefing HTML leaves a style open.".into());
         }
-        close_mark(&text, &mut marks, &mut mark_at, false, false, false);
-        Ok(Briefing { text, marks })
+        close_mark(&text, &mut marks, &mut mark_at, Style::default());
+        let mut briefing = Briefing { text, marks };
+        briefing.strip_bullet_prefixes();
+        Ok(briefing)
     }
 
     pub fn to_html(&self) -> String {
-        let mut cuts = vec![0, self.text.len()];
-        for mark in &self.marks {
-            cuts.push(mark.start);
-            cuts.push(mark.end);
-        }
-        cuts.sort_unstable();
-        cuts.dedup();
+        let lines = line_ranges(&self.text);
         let mut out = String::new();
-        for pair in cuts.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            if a >= b {
-                continue;
+        for (index, (a, b)) in lines.iter().enumerate() {
+            if index > 0 {
+                out.push_str("<br>");
             }
-            let piece = html_escape_breaks(&self.text[a..b]);
-            if piece.is_empty() {
-                continue;
-            }
-            out.push_str(&wrap_style(&piece, self.style_at(a)));
+            let skip = bullet_prefix_len(&self.text[*a..*b]);
+            out.push_str(&self.styled_range(*a + skip, *b));
         }
         out
+    }
+
+    /// Drop a leading `• ` left by the old list button. The game shows that
+    /// character next to a tag it does not understand.
+    fn strip_bullet_prefixes(&mut self) {
+        let ranges = line_ranges(&self.text);
+        let edits: Vec<(usize, usize)> = ranges
+            .into_iter()
+            .filter_map(|(a, b)| {
+                let skip = bullet_prefix_len(&self.text[a..b]);
+                if skip == 0 { None } else { Some((a, a + skip)) }
+            })
+            .collect();
+        for (a, b) in edits.into_iter().rev() {
+            self.splice(a, b, "");
+        }
     }
 
     /// Keep marks aligned when the text edit replaces `text`.
@@ -551,12 +617,59 @@ impl Briefing {
         self.merge_marks();
     }
 
-    fn style_at(&self, at: usize) -> (bool, bool, bool) {
+    fn piece(&self, a: usize, b: usize) -> BriefPiece {
+        let style = self.style_at(a);
+        BriefPiece {
+            text: self.text[a..b].to_string(),
+            bold: style.bold,
+            italic: style.italic,
+            underline: style.underline,
+            mono: style.mono,
+        }
+    }
+
+    fn styled_range(&self, start: usize, end: usize) -> String {
+        if start >= end {
+            return String::new();
+        }
+        let mut cuts = vec![start, end];
+        for mark in &self.marks {
+            if mark.end > start && mark.start < end {
+                cuts.push(mark.start.max(start));
+                cuts.push(mark.end.min(end));
+            }
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut out = String::new();
+        for pair in cuts.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if a >= b {
+                continue;
+            }
+            let piece = html_escape_breaks(&self.text[a..b]);
+            if piece.is_empty() {
+                continue;
+            }
+            out.push_str(&wrap_style(&piece, self.style_at(a)));
+        }
+        out
+    }
+
+    fn splice(&mut self, start: usize, end: usize, insert: &str) {
+        let mut next = String::new();
+        next.push_str(&self.text[..start]);
+        next.push_str(insert);
+        next.push_str(&self.text[end..]);
+        self.rebase(&next);
+    }
+
+    fn style_at(&self, at: usize) -> Style {
         self.marks
             .iter()
             .find(|mark| mark.start <= at && at < mark.end)
-            .map(|mark| (mark.bold, mark.italic, mark.underline))
-            .unwrap_or((false, false, false))
+            .map(|mark| mark.style)
+            .unwrap_or_default()
     }
 
     fn range_has(&self, start: usize, end: usize, bit: StyleBit) -> bool {
@@ -568,7 +681,7 @@ impl Briefing {
             .collect();
         marks.sort_by_key(|mark| mark.start);
         for mark in marks {
-            if mark.start > at || !mark.has(bit) {
+            if mark.start > at || !mark.style.has(bit) {
                 return false;
             }
             at = at.max(mark.end);
@@ -579,7 +692,7 @@ impl Briefing {
         false
     }
 
-    fn paint(&mut self, start: usize, end: usize, bit: StyleBit, on: bool) {
+    fn restyle(&mut self, start: usize, end: usize, edit: impl Fn(&mut Style)) {
         let mut next = Vec::new();
         for mark in self.marks.drain(..) {
             if mark.end <= start || mark.start >= end {
@@ -603,17 +716,19 @@ impl Briefing {
             if a >= b {
                 continue;
             }
-            let mut mid = Mark {
-                start: a,
-                end: b,
-                ..mark
-            };
-            mid.set(bit, on);
-            if mid.any() {
-                next.push(mid);
+            let mut style = mark.style;
+            edit(&mut style);
+            if style.any() {
+                next.push(Mark {
+                    start: a,
+                    end: b,
+                    style,
+                });
             }
         }
-        if on {
+        let mut gap_style = Style::default();
+        edit(&mut gap_style);
+        if gap_style.any() {
             let mut covered: Vec<(usize, usize)> = next
                 .iter()
                 .filter(|mark| mark.end > start && mark.start < end)
@@ -632,15 +747,11 @@ impl Briefing {
                 gaps.push((at, end));
             }
             for (a, b) in gaps {
-                let mut mark = Mark {
+                next.push(Mark {
                     start: a,
                     end: b,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                };
-                mark.set(bit, true);
-                next.push(mark);
+                    style: gap_style,
+                });
             }
         }
         self.marks = next;
@@ -666,29 +777,20 @@ impl Briefing {
     }
 }
 
-fn close_mark(
-    text: &str,
-    marks: &mut Vec<Mark>,
-    mark_at: &mut Option<usize>,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-) {
+fn close_mark(text: &str, marks: &mut Vec<Mark>, mark_at: &mut Option<usize>, style: Style) {
     let Some(start) = mark_at.take() else {
         return;
     };
-    if start < text.len() && (bold || italic || underline) {
+    if start < text.len() && style.any() {
         marks.push(Mark {
             start,
             end: text.len(),
-            bold,
-            italic,
-            underline,
+            style,
         });
     }
 }
 
-fn html_tag(input: &str) -> Result<(&str, &str), String> {
+fn html_tag(input: &str) -> Result<(&str, &str, &str), String> {
     let rest = input
         .strip_prefix('<')
         .ok_or_else(|| "The briefing HTML has an unclosed tag.".to_string())?;
@@ -696,11 +798,14 @@ fn html_tag(input: &str) -> Result<(&str, &str), String> {
         .find('>')
         .ok_or_else(|| "The briefing HTML has an unclosed tag.".to_string())?;
     let raw = rest[..end].trim();
-    let tag = raw.strip_suffix('/').unwrap_or(raw).trim();
-    if tag.is_empty() {
+    let raw = raw.strip_suffix('/').unwrap_or(raw).trim();
+    if raw.is_empty() {
         return Err("The briefing HTML has an empty tag.".into());
     }
-    Ok((tag, &rest[end + 1..]))
+    let split = raw.find(char::is_whitespace).unwrap_or(raw.len());
+    let name = &raw[..split];
+    let attrs = raw[split..].trim();
+    Ok((name, attrs, &rest[end + 1..]))
 }
 
 fn html_entity(input: &str) -> Result<(char, &str), String> {
@@ -742,19 +847,41 @@ fn html_escape_breaks(text: &str) -> String {
     out
 }
 
-fn wrap_style(piece: &str, style: (bool, bool, bool)) -> String {
-    let (bold, italic, underline) = style;
+fn wrap_style(piece: &str, style: Style) -> String {
     let mut out = piece.to_string();
-    if underline {
-        out = format!("<u>{out}</u>");
-    }
-    if italic {
-        out = format!("<i>{out}</i>");
-    }
-    if bold {
+    if style.bold {
         out = format!("<b>{out}</b>");
     }
+    if style.italic {
+        out = format!("<i>{out}</i>");
+    }
+    if style.underline {
+        out = format!("<u>{out}</u>");
+    }
+    if style.mono {
+        out = format!("<style style=\"Style.RichText.Mono\">{out}</style>");
+    }
     out
+}
+
+/// `(start, end)` of each line, not including the newline.
+fn line_ranges(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (index, ch) in text.char_indices() {
+        if ch == '\n' {
+            out.push((start, index));
+            start = index + ch.len_utf8();
+        }
+    }
+    out.push((start, text.len()));
+    out
+}
+
+fn bullet_prefix_len(line: &str) -> usize {
+    line.strip_prefix("\u{2022} ")
+        .map(|rest| line.len() - rest.len())
+        .unwrap_or(0)
 }
 
 /// One saved mission: title, clock, weather, briefing.
@@ -778,6 +905,8 @@ pub struct MissionPackage {
     pub temperature_c: i32,
     /// Millimeters of mercury, the unit the atmosphere dialog uses.
     pub pressure_mmhg: i32,
+    /// 0 is clear air, 1 is the thickest haze. Written with two decimal places.
+    pub haze: f32,
     /// Set when the user edits wind, temperature, or pressure.
     /// While this is false, those three follow the Map season.
     pub climate_custom: bool,
@@ -799,6 +928,7 @@ impl MissionPackage {
             wind_speed_mps: 5,
             temperature_c: 24,
             pressure_mmhg: 752,
+            haze: 0.0,
             climate_custom: false,
             briefing: Briefing::default(),
         };
@@ -817,6 +947,8 @@ impl MissionPackage {
         self.pressure_mmhg = self.pressure_mmhg.clamp(700, 790);
         self.wind_from_deg = self.wind_from_deg.rem_euclid(360);
         self.wind_speed_mps = self.wind_speed_mps.min(25);
+        self.haze = (self.haze * 100.0).round() / 100.0;
+        self.haze = self.haze.clamp(0.0, 1.0);
         self.clouds = CloudPreset::new(self.clouds.0);
     }
 
@@ -854,6 +986,9 @@ pub struct MissionWork {
     pub packages: [MissionPackage; 3],
     /// Byte selection in the briefing, remembered so Bold can use it.
     pub sel: Option<(usize, usize)>,
+    /// Day, month, year for the briefing and the mission file.
+    /// None follows the Map strip.
+    pub date_override: Option<(u8, u8, u16)>,
     pub dragging_clouds: bool,
     /// Meters between the pointer and the cloud base when a drag starts.
     pub cloud_grab_m: f32,
@@ -869,6 +1004,7 @@ impl Default for MissionWork {
                 MissionPackage::for_kind(MissionKind::Deathmatch),
             ],
             sel: None,
+            date_override: None,
             dragging_clouds: false,
             cloud_grab_m: 0.0,
         }
@@ -916,6 +1052,20 @@ impl MissionScene {
 
     pub fn date(self) -> String {
         format!("{}.{}.{}", self.day, self.month, self.year)
+    }
+
+    /// `25 June 1950`. The briefing uses this; the file still stores [`Self::date`].
+    pub fn long_date(self) -> String {
+        format!("{} {} {}", self.day, month_name(self.month), self.year)
+    }
+
+    pub fn with_date(self, day: u8, month: u8, year: u16) -> Self {
+        Self {
+            day,
+            month,
+            year,
+            ..self
+        }
     }
 
     /// Wind, temperature, and pressure typical of this season on the Korea map.
@@ -973,28 +1123,45 @@ pub fn wind_to_deg(from_deg: i32) -> i32 {
     (from_deg + 180).rem_euclid(360)
 }
 
-fn wind_layers(package: &MissionPackage) -> String {
-    let base = package.wind_speed_mps.min(25);
+/// Altitude in meters, the direction the wind blows toward, and speed.
+/// The file stores the toward-heading. The briefing says where it blows from.
+fn wind_rows(package: &MissionPackage) -> [(i32, i32, u32); 5] {
+    let speed = package.wind_speed_mps.min(25);
     let to = wind_to_deg(package.wind_from_deg);
-    let rows = [
-        (0, to, base),
-        (500, to + 10, (base + 2).min(25)),
-        (1000, to + 15, (base + 4).min(25)),
-        (2000, to + 25, (base + 6).min(25)),
-        (5000, to + 30, (base + 8).min(25)),
-    ];
+    let row = |alt: i32, turn: i32, extra: u32| {
+        (alt, (to + turn).rem_euclid(360), (speed + extra).min(25))
+    };
+    [
+        row(0, 0, 0),
+        row(500, 10, 2),
+        row(1000, 15, 4),
+        row(2000, 25, 6),
+        row(5000, 30, 8),
+    ]
+}
+
+fn wind_layers(package: &MissionPackage) -> String {
     let mut out = String::from("  WindLayers");
     out.push_str(NEWLINE);
     out.push_str("  {");
     out.push_str(NEWLINE);
-    for (alt, dir, speed) in rows {
-        let dir = dir.rem_euclid(360);
+    for (alt, dir, speed) in wind_rows(package) {
         out.push_str(&format!("    {alt} :     {dir} :     {speed};"));
         out.push_str(NEWLINE);
     }
     out.push_str("  }");
     out.push_str(NEWLINE);
     out
+}
+
+/// `0` is the word the game writes for `Turbulence = 0`.
+fn turbulence_phrase(level: i32) -> &'static str {
+    match level {
+        ..=0 => "No turbulence",
+        1 => "Light turbulence",
+        2 => "Moderate turbulence",
+        _ => "Severe turbulence",
+    }
 }
 
 fn precip_phrase(package: &MissionPackage) -> String {
@@ -1017,29 +1184,156 @@ fn precip_phrase(package: &MissionPackage) -> String {
     format!("{weight}{word}")
 }
 
-/// Weather, map, season, and clock, then the user's briefing. One line, HTML.
-pub fn describe(package: &MissionPackage, scene: &MissionScene) -> String {
-    let prefix = scene.prefix();
-    let base = package.cloud_base_m.round().max(0.0) as i32;
-    let speed = package.wind_speed_mps.min(25);
-    let weather = format!(
-        "<u>landscape_korea_{prefix}</u> &middot; {season} &middot; {date} &middot; {time}<br><u>Weather</u>: {clouds} at <m-ft-v>{base}</m-ft-v> <m-ft-u/>, {precip}, sea state {sea}<br>Wind at ground level: From {from} deg, <ms-mph-v>{speed}</ms-mph-v> <ms-mph-u/><br>Temperature {temp} C. Pressure {pressure} mmHg.<br><br>",
-        season = scene.season.label(),
-        date = scene.date(),
-        time = package.clock(),
-        clouds = package.clouds.name(),
-        precip = precip_phrase(package),
-        sea = sea_state_name(package.sea_state).to_lowercase(),
-        from = package.wind_from_deg.rem_euclid(360),
-        temp = package.temperature_c,
-        pressure = package.pressure_mmhg,
-    );
-    let body = package.briefing.to_html();
-    if body.is_empty() {
-        weather
-    } else {
-        format!("{weather}{body}")
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+pub fn month_name(month: u8) -> &'static str {
+    MONTHS
+        .get(month.saturating_sub(1) as usize)
+        .copied()
+        .unwrap_or("June")
+}
+
+pub fn days_in_month(month: u8, year: u16) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year.is_multiple_of(4) => 29,
+        2 => 28,
+        _ => 30,
     }
+}
+
+/// `d.m.yyyy` as stored in Options, or nothing when it is not that form.
+pub fn parse_file_date(text: &str) -> Option<(u8, u8, u16)> {
+    let mut parts = text.split('.');
+    let day: u8 = parts.next()?.parse().ok()?;
+    let month: u8 = parts.next()?.parse().ok()?;
+    let year: u16 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) {
+        return None;
+    }
+    let max = days_in_month(month, year);
+    if !(1..=max).contains(&day) {
+        return None;
+    }
+    Some((day, month, year))
+}
+
+/// The weather block, as the player reads it. Labels are drawn underlined.
+pub struct WeatherBrief {
+    pub date: String,
+    pub weather: String,
+    pub wind: String,
+    /// The words after `Temperature:`.
+    pub temperature: String,
+    /// Ground wind, then 500, 1000, 2000, and 5000 m.
+    pub balloon: Vec<String>,
+    pub turbulence: &'static str,
+}
+
+struct WeatherParts {
+    date: String,
+    cover: &'static str,
+    base: i32,
+    precip: String,
+    sea: String,
+    from: i32,
+    speed: u32,
+    temp: i32,
+    pressure: i32,
+}
+
+fn weather_parts(package: &MissionPackage, scene: &MissionScene) -> WeatherParts {
+    WeatherParts {
+        date: scene.long_date(),
+        cover: package.clouds.cover_word(),
+        base: package.cloud_base_m.round().max(0.0) as i32,
+        precip: precip_phrase(package),
+        sea: sea_state_name(package.sea_state).to_lowercase(),
+        from: package.wind_from_deg.rem_euclid(360),
+        speed: package.wind_speed_mps.min(25),
+        temp: package.temperature_c,
+        pressure: package.pressure_mmhg,
+    }
+}
+
+pub fn weather_brief(package: &MissionPackage, scene: &MissionScene) -> WeatherBrief {
+    let w = weather_parts(package, scene);
+    WeatherBrief {
+        date: w.date,
+        weather: format!(
+            "{} at {} m, {}, {} sea state",
+            w.cover, w.base, w.precip, w.sea
+        ),
+        wind: format!("Wind at ground level, from {} deg, {}m/s", w.from, w.speed),
+        temperature: format!("{} C. Pressure {} mmHg.", w.temp, w.pressure),
+        balloon: wind_rows(package)
+            .into_iter()
+            .map(|(alt, to, speed)| balloon_text(alt, (to + 180).rem_euclid(360), speed))
+            .collect(),
+        turbulence: turbulence_phrase(0),
+    }
+}
+
+fn balloon_text(alt: i32, from: i32, speed: u32) -> String {
+    let wind = format!("From {from}°, {speed}m/s");
+    if alt == 0 {
+        format!("Wind at ground level: {wind}")
+    } else {
+        format!("Wind at {alt} m: {wind}")
+    }
+}
+
+fn balloon_html(alt: i32, from: i32, speed: u32) -> String {
+    let wind = format!("From {from}°, <ms-mph-v>{speed}</ms-mph-v><ms-mph-u/>");
+    if alt == 0 {
+        format!("Wind at ground level: {wind}")
+    } else {
+        format!("Wind at <m-ft-v>{alt}</m-ft-v> <m-ft-u/>: {wind}")
+    }
+}
+
+fn weather_html(package: &MissionPackage, scene: &MissionScene) -> String {
+    let w = weather_parts(package, scene);
+    let mut out = format!(
+        "<u>Date:</u> {date}<br><u>Weather:</u> {cover} at <m-ft-v>{base}</m-ft-v> <m-ft-u/>, {precip}, {sea} sea state<br>Wind at ground level, from {from} deg, <ms-mph-v>{speed}</ms-mph-v><ms-mph-u/><br><u>Temperature:</u> {temp} C. Pressure {pressure} mmHg.<br><br><u>Weather balloon report:</u><br>",
+        date = w.date,
+        cover = w.cover,
+        base = w.base,
+        precip = w.precip,
+        sea = w.sea,
+        from = w.from,
+        speed = w.speed,
+        temp = w.temp,
+        pressure = w.pressure,
+    );
+    for (alt, to, speed) in wind_rows(package) {
+        out.push_str(&balloon_html(alt, (to + 180).rem_euclid(360), speed));
+        out.push_str("<br>");
+    }
+    out.push_str(turbulence_phrase(0));
+    out.push_str("<br><br>");
+    out
+}
+
+/// The date, weather, balloon report, then the user's briefing. One line, HTML.
+pub fn describe(package: &MissionPackage, scene: &MissionScene) -> String {
+    let mut out = weather_html(package, scene);
+    out.push_str(&package.briefing.to_html());
+    out
 }
 
 /// Description HTML plus the NDB table for airfields named in `group`.
@@ -1057,29 +1351,58 @@ pub fn with_ndb_chart(html: &str, group: &str) -> String {
 /// group. Ident codes are Latin. An empty string means none of the chart's
 /// fields are in the group.
 pub fn ndb_chart(group: &str) -> String {
-    let names = group_name_keys(group);
-    let rows: Vec<&Ndb> = NDB
-        .iter()
-        .filter(|row| names.iter().any(|name| name.contains(row.key)))
-        .collect();
+    ndb_html(&matching_ndb(&group_name_keys(group)))
+}
+
+/// Plain chart rows for the preview. `names` are file stems or field names.
+/// An empty list means none of the chart's fields were named.
+pub fn ndb_lines_for_names(names: &[String]) -> Vec<String> {
+    let keys: Vec<String> = names.iter().map(|name| name_key(name)).collect();
+    let rows = matching_ndb(&keys);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![ndb_header_line()];
+    for row in rows {
+        lines.push(ndb_row_line(row));
+    }
+    lines
+}
+
+fn matching_ndb<'a>(keys: &[String]) -> Vec<&'a Ndb> {
+    NDB.iter()
+        .filter(|row| keys.iter().any(|name| name.contains(row.key)))
+        .collect()
+}
+
+fn ndb_header_line() -> String {
+    "|Airfield          | frq | cn | cd   |ltr1|ltr2|on map|".to_string()
+}
+
+fn ndb_row_line(row: &Ndb) -> String {
+    format!(
+        "|{name:<18}| {frq:<3} | {cn:<2} | {cd:<4} |{ltr1}|{ltr2}| {map} |",
+        name = row.name,
+        frq = row.frq,
+        cn = row.cn,
+        cd = row.cd,
+        ltr1 = row.ltr1,
+        ltr2 = row.ltr2,
+        map = row.map,
+    )
+}
+
+fn ndb_html(rows: &[&Ndb]) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    let mut out = String::from(
-        "<style style=\"Style.RichText.Mono\">|Airfield          | frq | cn | cd   |ltr1|ltr2|on map|",
+    let mut out = format!(
+        "<u>Airfield NDB List:</u><br><style style=\"Style.RichText.Mono\">{}",
+        ndb_header_line()
     );
     for row in rows {
         out.push_str("<br>");
-        out.push_str(&format!(
-            "|{name:<18}| {frq:<3} | {cn:<2} | {cd:<4} |{ltr1}|{ltr2}| {map} |",
-            name = row.name,
-            frq = row.frq,
-            cn = row.cn,
-            cd = row.cd,
-            ltr1 = row.ltr1,
-            ltr2 = row.ltr2,
-            map = row.map,
-        ));
+        out.push_str(&ndb_row_line(row));
     }
     out.push_str("</style>");
     out
@@ -1507,11 +1830,21 @@ fn name_key(name: &str) -> String {
 }
 
 fn strip_ndb_chart(html: &str) -> &str {
-    let marker = "<br><br><style style=\"Style.RichText.Mono\">";
-    if let Some(index) = html.find(marker) {
-        return &html[..index];
+    // The chart is the mono block that starts with the airfield header.
+    // A mono span in the briefing does not. The label above it is not mono.
+    let marker = "<style style=\"Style.RichText.Mono\">|Airfield";
+    let Some(index) = html.find(marker) else {
+        return html;
+    };
+    let mut cut = index;
+    let label = "<u>Airfield NDB List:</u><br>";
+    if html[..cut].ends_with(label) {
+        cut -= label.len();
     }
-    html
+    if html[..cut].ends_with("<br><br>") {
+        cut -= "<br><br>".len();
+    }
+    &html[..cut]
 }
 
 /// Append title, description, and author past any group labels. Returns the
@@ -1635,7 +1968,6 @@ pub fn render_mission(
     } else {
         package.prec_level.min(10)
     };
-    let haze = (0.15 + f64::from(prec_level) * 0.06).min(1.0);
     let mut out = String::new();
     out.push_str("# Mission File Version = 1.0;");
     out.push_str(NEWLINE);
@@ -1672,7 +2004,7 @@ pub fn render_mission(
         "  TempPressLevel = 0;".to_string(),
         format!("  Temperature = {};", package.temperature_c),
         format!("  Pressure = {};", package.pressure_mmhg),
-        format!("  Haze = {haze:.1};"),
+        format!("  Haze = {:.2};", package.haze),
         "  LayerFog = 0;".to_string(),
         "  CloudsShift = 0;".to_string(),
     ] {
@@ -1712,8 +2044,8 @@ pub fn render_mission(
 }
 
 /// A mission this utility wrote, restored to the package the Mission tab edits.
-/// The embedded base map is not read. The date is reported so the Map strip
-/// can stay where it is.
+/// The date is reported so the Map strip can follow it. The group after
+/// Options is [`embedded_group`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadedMission {
     pub kind: MissionKind,
@@ -1723,7 +2055,7 @@ pub struct LoadedMission {
 }
 
 /// Read Options and the English sidecar. A file whose author is not
-/// [`UTILITY_AUTHOR`] is refused. The group after Options is left unread.
+/// [`UTILITY_AUTHOR`] is refused.
 pub fn load_utility_mission(text: &str, english: &LocaleTable) -> Result<LoadedMission, String> {
     let fields = match options_header(text) {
         Ok((_, fields)) => fields,
@@ -1749,11 +2081,6 @@ pub fn load_utility_mission(text: &str, english: &LocaleTable) -> Result<LoadedM
         return Err("This mission has no title.".into());
     }
     let desc = english.get(fields.integer("LCDesc")?).unwrap_or("");
-    let user_html = desc
-        .split_once("mmHg.<br><br>")
-        .map(|(_, rest)| rest)
-        .ok_or_else(|| "The description is not a briefing this utility wrote.".to_string())?;
-    let briefing = Briefing::from_html(strip_ndb_chart(user_html))?;
     let (hour, minute) = clock_hm(fields.text("Time")?)?;
     let clouds = cloud_from_config(fields.text("CloudConfig")?)?;
     let (wind_to, speed) = fields.surface_wind()?;
@@ -1766,6 +2093,9 @@ pub fn load_utility_mission(text: &str, english: &LocaleTable) -> Result<LoadedM
     } else {
         Precip::Rain
     };
+    let date = fields.text("Date")?.to_string();
+    let (day, month, year) = parse_file_date(&date)
+        .ok_or_else(|| "The mission date is not one this utility writes.".to_string())?;
     let mut package = MissionPackage::for_kind(kind);
     package.title = title;
     package.hour = hour;
@@ -1783,14 +2113,48 @@ pub fn load_utility_mission(text: &str, english: &LocaleTable) -> Result<LoadedM
     package.wind_speed_mps = speed.max(0) as u32;
     package.temperature_c = fields.integer("Temperature")?;
     package.pressure_mmhg = fields.integer("Pressure")?;
+    package.haze = fields.number("Haze")? as f32;
     package.climate_custom = true;
-    package.briefing = briefing;
     package.clamp_weather();
+    let scene = MissionScene {
+        season: Season::Summer,
+        year,
+        month,
+        day,
+    };
+    let weather = weather_html(&package, &scene);
+    let user_html = if let Some(rest) = desc.strip_prefix(&weather) {
+        rest
+    } else {
+        desc.split_once("mmHg.<br><br>")
+            .map(|(_, rest)| rest)
+            .ok_or_else(|| "The description is not a briefing this utility wrote.".to_string())?
+    };
+    package.briefing = Briefing::from_html(strip_ndb_chart(user_html))?;
     Ok(LoadedMission {
         kind,
         package,
-        date: fields.text("Date")?.to_string(),
+        date,
     })
+}
+
+/// The base-map group written after Options, without the `# end of file` trailer.
+pub fn embedded_group(text: &str) -> Result<&str, String> {
+    let rest = match options_header(text) {
+        Ok((rest, _)) => rest,
+        Err(_) => {
+            return Err("This file does not have the mission header the utility writes.".into());
+        }
+    };
+    let rest = rest.trim();
+    let body = rest
+        .strip_suffix("# end of file")
+        .map(str::trim_end)
+        .unwrap_or(rest);
+    if body.is_empty() {
+        return Err("This mission has no group after the header.".into());
+    }
+    Ok(body)
 }
 
 struct OptionFields {
@@ -1807,6 +2171,12 @@ impl OptionFields {
     }
 
     fn integer(&self, key: &str) -> Result<i32, String> {
+        self.text(key)?
+            .parse()
+            .map_err(|_| format!("The mission header has a {key} this utility does not write."))
+    }
+
+    fn number(&self, key: &str) -> Result<f64, String> {
         self.text(key)?
             .parse()
             .map_err(|_| format!("The mission header has a {key} this utility does not write."))
@@ -2157,8 +2527,15 @@ mod tests {
 
     #[test]
     fn rain_matches_the_harvested_freeflight() {
+        assert_eq!(Precip::None.code(), 0);
         assert_eq!(Precip::Rain.code(), 1);
         assert_eq!(Precip::Snow.code(), 0);
+        let mut rain = MissionPackage::for_kind(MissionKind::Single);
+        rain.precip = Precip::Rain;
+        rain.prec_level = 8;
+        let text = render_mission(MissionKind::Single, &rain, &scene(), 0, 1, 2, "");
+        assert!(text.contains("PrecType = 1;"), "{text}");
+        assert!(text.contains("PrecLevel = 8;"), "{text}");
         assert_eq!(MissionKind::Single.code(), 0);
         assert_eq!(MissionKind::Coop.code(), 1);
         assert_eq!(MissionKind::Deathmatch.code(), 2);
@@ -2183,7 +2560,9 @@ mod tests {
         assert!(text.contains("Date = 8.6.1952;"));
         assert!(text.contains("SeaState = 2;"));
         assert!(text.contains("PrecLevel = 0;"));
-        assert!(text.contains("PrecType = 1;"));
+        assert!(text.contains("PrecType = 0;"));
+        assert!(text.contains("Haze = 0.00;"));
+        assert!(text.contains("Turbulence = 0;"));
         assert!(text.contains("501 : 1;"));
         assert!(text.contains("601 : 2;"));
         assert!(text.contains("Temperature = 24;"));
@@ -2196,10 +2575,33 @@ mod tests {
     fn description_is_html_and_does_not_clobber_group_labels() {
         let package = MissionPackage::for_kind(MissionKind::Single);
         let html = describe(&package, &scene());
-        assert!(html.contains("<u>Weather</u>"), "{html}");
+        assert!(
+            html.contains("<u>Date:</u> 8 June 1952<br><u>Weather:</u> Partly Cloudy at "),
+            "{html}"
+        );
+        assert!(html.contains("slight sea state"), "{html}");
+        assert!(
+            html.contains("Wind at ground level, from 200 deg, <ms-mph-v>5</ms-mph-v><ms-mph-u/>"),
+            "{html}"
+        );
+        assert!(!html.contains("sea state slight"), "{html}");
+        assert!(!html.contains("<ul"), "{html}");
+        assert!(!html.contains("&middot;"), "{html}");
+        assert!(!html.contains("landscape_korea"), "{html}");
+        assert!(!html.contains("01_light"), "{html}");
         assert!(html.contains("<m-ft-v>700</m-ft-v>"), "{html}");
         assert!(html.contains("Pressure 752 mmHg"), "{html}");
         assert!(html.contains("<ms-mph-v>"), "{html}");
+        assert!(html.contains("<u>Weather balloon report:</u>"), "{html}");
+        assert!(
+            html.contains("Wind at ground level: From 200°, <ms-mph-v>5</ms-mph-v><ms-mph-u/>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("Wind at <m-ft-v>500</m-ft-v> <m-ft-u/>: From 210°, <ms-mph-v>7</ms-mph-v><ms-mph-u/>"),
+            "{html}"
+        );
+        assert!(html.contains("No turbulence<br><br>"), "{html}");
         assert!(html.contains("Primary objective"), "{html}");
         assert!(!html.contains('\n'));
 
@@ -2211,7 +2613,12 @@ mod tests {
         assert_eq!((name, desc, author), (1, 2, 3));
         assert_eq!(tables["eng"].get(0), Some("Seoul"));
         assert_eq!(tables["eng"].get(1), Some("Dawn"));
-        assert!(tables["eng"].get(2).unwrap().contains("<u>Weather</u>"));
+        assert!(
+            tables["eng"]
+                .get(2)
+                .unwrap()
+                .contains("<u>Weather:</u> Partly Cloudy")
+        );
     }
 
     #[test]
@@ -2232,6 +2639,11 @@ mod tests {
     #[test]
     fn choosing_a_preset_offers_that_familys_base() {
         assert_eq!(CloudPreset::new(0).suggested_base_m(), 500.0);
+        assert_eq!(CloudPreset::new(0).cover_word(), "Clear");
+        assert_eq!(CloudPreset::new(10).cover_word(), "Partly Cloudy");
+        assert_eq!(CloudPreset::new(20).cover_word(), "Mostly Cloudy");
+        assert_eq!(CloudPreset::new(30).cover_word(), "Overcast");
+        assert_eq!(CloudPreset::new(40).cover_word(), "Overcast");
         assert_eq!(CloudPreset::new(10).name(), "01_light_00");
         assert_eq!(CloudPreset::new(30).suggested_base_m(), 800.0);
         assert_eq!(CloudPreset::new(49).name(), "04_overcast_09");
@@ -2377,6 +2789,7 @@ mod tests {
         assert_eq!(loaded.package.pressure_mmhg, 752);
         assert!(loaded.package.climate_custom);
         assert_eq!(loaded.date, "8.6.1952");
+        assert_eq!(embedded_group(&text).expect("group"), "Group\r\n{\r\n}");
         assert_eq!(
             loaded.package.briefing.to_html(),
             package.briefing.to_html()
@@ -2394,7 +2807,9 @@ mod tests {
     fn ndb_chart_lists_only_fields_in_the_group_in_latin() {
         let group = "Group\r\n{\r\n  Name = \"K-14_Kimpo_AF\";\r\n  Name = \"K-17_Ongjin\";\r\n  Name = \"K-47_Chuncheon_AF\";\r\n}\r\n";
         let chart = ndb_chart(group);
-        assert!(chart.starts_with("<style style=\"Style.RichText.Mono\">"));
+        assert!(
+            chart.starts_with("<u>Airfield NDB List:</u><br><style style=\"Style.RichText.Mono\">")
+        );
         assert!(chart.ends_with("</style>"));
         assert!(chart.contains("|K-17_Ongjin       | 280 | 13 | OZh  |--- |...-| 3312 |"));
         assert!(chart.contains("|K-14_Kimpo        | 250 | 10 | KP   |-.- |.--.| 3724 |"));
@@ -2421,5 +2836,71 @@ mod tests {
         let loaded = load_utility_mission(&text, &tables["eng"]).expect("load");
         assert_eq!(loaded.package.briefing.to_html(), "Hold the line");
         assert!(!loaded.package.briefing.to_html().contains("OZh"));
+    }
+
+    #[test]
+    fn mono_round_trips_and_lists_are_dropped() {
+        let mut briefing = Briefing::empty();
+        briefing.rebase("Hold the line\nThen home");
+        briefing.toggle(0, "Hold".len(), StyleBit::Bold);
+        briefing.toggle("Hold ".len(), "Hold the".len(), StyleBit::Mono);
+        let html = briefing.to_html();
+        assert_eq!(
+            html,
+            "<b>Hold</b> <style style=\"Style.RichText.Mono\">the</style> line<br>Then home"
+        );
+        assert!(!html.contains("<ul"), "{html}");
+        assert!(!html.contains('\n'), "{html}");
+        let back = Briefing::from_html(&html).expect("parse");
+        assert_eq!(back.to_html(), html);
+
+        let listed = Briefing::from_html("<ul><li>• Hello</li><li>There</li></ul>").expect("parse");
+        assert_eq!(listed.text, "Hello\nThere");
+        assert_eq!(listed.to_html(), "Hello<br>There");
+        let numbered = Briefing::from_html("<ol><li>One</li><li>Two</li></ol>").expect("parse");
+        assert_eq!(numbered.text, "One\nTwo");
+    }
+
+    #[test]
+    fn a_color_span_is_dropped() {
+        let html = "Welcome to <span style=\"color:red;\"><b>Broken Props</b></span>";
+        let briefing = Briefing::from_html(html).expect("parse");
+        assert_eq!(briefing.text, "Welcome to Broken Props");
+        assert_eq!(briefing.to_html(), "Welcome to <b>Broken Props</b>");
+        assert!(!briefing.to_html().contains("span"));
+    }
+
+    #[test]
+    fn the_balloon_report_is_not_part_of_the_editable_brief() {
+        let mut package = MissionPackage::for_kind(MissionKind::Single);
+        package.title = "Dawn".into();
+        package.haze = 0.8;
+        package.briefing.rebase("Hold the line");
+        let html = describe(&package, &scene());
+        assert!(html.starts_with("<u>Date:</u> 8 June 1952"), "{html}");
+        assert!(
+            html.contains("<u>Temperature:</u> 24 C. Pressure 752 mmHg."),
+            "{html}"
+        );
+        assert!(html.contains("Hold the line"), "{html}");
+        assert!(!html.contains("Standing orders"), "{html}");
+
+        let mut tables = HashMap::new();
+        let (name, desc, author) = stamp_briefing(&mut tables, "Dawn", &html);
+        let text = render_mission(
+            MissionKind::Single,
+            &package,
+            &scene(),
+            name,
+            desc,
+            author,
+            "Group\r\n{\r\n}\r\n",
+        );
+        assert!(text.contains("Haze = 0.80;"));
+        assert!(text.contains("PrecType = 0;"));
+        let loaded = load_utility_mission(&text, &tables["eng"]).expect("load");
+        assert_eq!(loaded.package.briefing.to_html(), "Hold the line");
+        assert!((loaded.package.haze - 0.8).abs() < 0.001);
+        assert_eq!(parse_file_date(&loaded.date), Some((8, 6, 1952)));
     }
 }

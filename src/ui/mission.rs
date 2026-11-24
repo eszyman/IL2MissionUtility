@@ -21,6 +21,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, S
 
 use crate::locale::{decode_locale_bytes, parse_locale, write_sidecars};
 use crate::mission::{self, CloudPreset, MissionKind, MissionScene, Precip, StyleBit};
+use crate::parser::{parse_group_file, parse_il2_document};
 use crate::shell;
 use crate::theme::{self, c};
 
@@ -50,8 +51,9 @@ impl super::GroupGeneratorApp {
     /// Write the active package and the current base map as a `.mission`.
     pub(super) fn create_mission(&mut self) {
         let kind = self.mission.active;
-        let scene = self.mission_scene();
-        self.mission.packages[kind.index()].follow_season(scene);
+        let map_scene = self.mission_scene();
+        self.mission.packages[kind.index()].follow_season(map_scene);
+        let scene = self.mission_scene_dated();
         let package = self.mission.packages[kind.index()].clone();
         if package.title.trim().is_empty() {
             self.status = Status::Error("Give the mission a title.".into());
@@ -117,8 +119,8 @@ impl super::GroupGeneratorApp {
         self.add_terrain_note(built.terrain_note);
     }
 
-    /// Read a `.mission` this utility wrote into the package of that type.
-    /// The base map on the Map tab is left as it is.
+    /// Read a `.mission` this utility wrote into the package of that type,
+    /// and put the group after the header onto the Map tab.
     pub(super) fn load_mission(&mut self) {
         let Some(path) = dialog::FileDialog::new()
             .add_filter("IL-2 Mission", &["mission"])
@@ -161,18 +163,59 @@ impl super::GroupGeneratorApp {
                 self.mission.packages[kind.index()] = loaded.package;
                 self.mission.sel = None;
                 self.mission.dragging_clouds = false;
+                if let Some(date) = mission::parse_file_date(&loaded.date) {
+                    self.mission.date_override = Some(date);
+                }
                 let file = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("mission");
+                let group_text = match mission::embedded_group(&text) {
+                    Ok(group) => group,
+                    Err(err) => {
+                        self.status = Status::Error(err);
+                        return;
+                    }
+                };
+                let entity = match parse_group_file(group_text)
+                    .or_else(|_| parse_il2_document(group_text))
+                {
+                    Ok(entity) => entity,
+                    Err(err) => {
+                        self.status = Status::Error(format!(
+                            "The group in the mission could not be read: {err}"
+                        ));
+                        return;
+                    }
+                };
+                let summary = match self.install_base_map(entity, &path) {
+                    Ok(summary) => summary,
+                    Err(err) => {
+                        self.status = Status::Error(err);
+                        return;
+                    }
+                };
                 self.status = Status::Info(format!(
-                    "Loaded {file} ({}, {}). File date {}. The Map tab still holds the base map, and its strip still sets the season and date.",
+                    "Loaded {file} ({}, {}). {summary}",
                     kind.label(),
                     self.mission.package().clock(),
-                    loaded.date
                 ));
             }
             Err(err) => self.status = Status::Error(err),
+        }
+    }
+
+    /// Into-wind heading for the active package, in degrees. Wind from 200
+    /// means takeoff heading 200. Calm wind returns `None`, and the ramp
+    /// stays at the end nearer the buildings.
+    pub(in crate::ui) fn mission_takeoff_heading(&mut self) -> Option<f64> {
+        let scene = self.mission_scene();
+        self.mission.package_mut().follow_season(scene);
+        let pkg = self.mission.package();
+        if pkg.wind_speed_mps == 0 {
+            None
+        } else {
+            Some(f64::from(pkg.wind_from_deg.rem_euclid(360)))
         }
     }
 
@@ -183,6 +226,15 @@ impl super::GroupGeneratorApp {
             year: mark.year,
             month: mark.month,
             day: mark.day,
+        }
+    }
+
+    /// Map season, with the briefing date when one has been set.
+    fn mission_scene_dated(&self) -> MissionScene {
+        let scene = self.mission_scene();
+        match self.mission.date_override {
+            Some((day, month, year)) => scene.with_date(day, month, year),
+            None => scene,
         }
     }
 
@@ -213,7 +265,7 @@ impl super::GroupGeneratorApp {
         }
         ui.add_space(8.0);
         ui.separator();
-        shell::hint(ui, "Season and date follow the Map strip.", false);
+        self.mission_date(ui);
         ui.add_space(6.0);
 
         let scene = self.mission_scene();
@@ -285,6 +337,18 @@ impl super::GroupGeneratorApp {
         if pkg.precip != Precip::None {
             labeled_slider(ui, "Level", &mut pkg.prec_level, 1..=10);
         }
+        ui.add_space(4.0);
+        ui.label("Haze");
+        let mut haze = pkg.haze;
+        ui.add(
+            egui::Slider::new(&mut haze, 0.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2)
+                .trailing_fill(true),
+        );
+        if (haze - pkg.haze).abs() > 0.001 {
+            pkg.haze = haze;
+        }
         ui.add_space(6.0);
         ui.separator();
 
@@ -351,15 +415,86 @@ impl super::GroupGeneratorApp {
         );
     }
 
-    fn mission_briefing(&mut self, ui: &mut egui::Ui) {
-        ui.label(section_heading("Briefing"));
+    fn mission_date(&mut self, ui: &mut egui::Ui) {
+        ui.label(section_heading("Date"));
+        let scene = self.mission_scene();
+        let shown = self
+            .mission
+            .date_override
+            .unwrap_or((scene.day, scene.month, scene.year));
+        ui.label(
+            mission::MissionScene {
+                season: scene.season,
+                year: shown.2,
+                month: shown.1,
+                day: shown.0,
+            }
+            .long_date(),
+        );
+        let max_day = u32::from(mission::days_in_month(shown.1, shown.2));
+        let mut day = u32::from(shown.0).min(max_day);
+        let mut month = shown.1;
+        let mut year = shown.2;
+        let day_before = day;
+        labeled_slider(ui, "Day", &mut day, 1..=max_day);
+        let mut month_changed = false;
+        egui::ComboBox::from_id_salt("mission_month")
+            .selected_text(mission::month_name(month))
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for value in 1..=12 {
+                    if ui
+                        .selectable_label(month == value, mission::month_name(value))
+                        .clicked()
+                    {
+                        month = value;
+                        month_changed = true;
+                    }
+                }
+            });
+        let mut year_changed = false;
+        egui::ComboBox::from_id_salt("mission_year")
+            .selected_text(year.to_string())
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for value in crate::frontlines::YEARS {
+                    if ui
+                        .selectable_label(year == value, value.to_string())
+                        .clicked()
+                    {
+                        year = value;
+                        year_changed = true;
+                    }
+                }
+            });
+        if day != day_before || month_changed || year_changed {
+            let max_day = mission::days_in_month(month, year);
+            let day = (day as u8).clamp(1, max_day);
+            self.mission.date_override = Some((day, month, year));
+        }
+        if self.mission.date_override.is_some()
+            && ui
+                .add_sized(
+                    Vec2::new(ui.available_width(), 28.0),
+                    egui::Button::new("Map date"),
+                )
+                .on_hover_text("Use the date on the Map strip again.")
+                .clicked()
+        {
+            self.mission.date_override = None;
+        }
         shell::hint(
             ui,
-            "Select words, then a style. The description file stores basic HTML.",
+            "Season still follows the Map strip. The date starts there. Change it to keep your own in the briefing and the file.",
             false,
         );
+    }
+
+    fn mission_briefing(&mut self, ui: &mut egui::Ui) {
+        ui.label(section_heading("Briefing"));
+        shell::hint(ui, "Select words, then a style. The entry shows it.", false);
         ui.add_space(4.0);
-        let mut style = None;
+        let mut action = None;
         ui.horizontal(|ui| {
             for (bit, label) in [
                 (StyleBit::Bold, "Bold"),
@@ -370,57 +505,112 @@ impl super::GroupGeneratorApp {
                     .add_sized(Vec2::new(84.0, 28.0), egui::Button::new(label))
                     .clicked()
                 {
-                    style = Some(bit);
+                    action = Some(BriefAction::Bit(bit));
                 }
             }
         });
-        if let Some(bit) = style {
-            match self.mission.sel {
-                Some((a, b)) if a != b => {
-                    let (start, end) = (a.min(b), a.max(b));
-                    self.mission.package_mut().briefing.toggle(start, end, bit);
-                }
-                _ => {
-                    self.status = Status::Info(
-                        "Select briefing text, then Bold, Italic, or Underline.".into(),
-                    );
-                }
+        ui.horizontal(|ui| {
+            if ui
+                .add_sized(Vec2::new(84.0, 28.0), egui::Button::new("Mono"))
+                .clicked()
+            {
+                action = Some(BriefAction::Bit(StyleBit::Mono));
             }
+        });
+        if let Some(action) = action {
+            self.apply_brief_action(action);
         }
-        ui.add_space(4.0);
+        ui.add_space(8.0);
+        ui.label(section_heading("Your text"));
         let kind = self.mission.active.index();
-        let mut text = self.mission.package().briefing.text.clone();
-        let output = egui::TextEdit::multiline(&mut text)
-            .id(egui::Id::new(("mission_brief", kind)))
-            .desired_width(f32::INFINITY)
-            .desired_rows(8)
-            .hint_text("Briefing")
-            .show(ui);
-        if output.response.changed() {
-            self.mission.package_mut().briefing.rebase(&text);
-        }
-        if output.response.has_focus()
-            && let Some(range) = output.cursor_range
-        {
-            let cursors = range.sorted_cursors();
-            let text_now = &self.mission.package().briefing.text;
-            let a = byte_at(text_now, cursors[0].index);
-            let b = byte_at(text_now, cursors[1].index);
-            self.mission.sel = Some((a, b));
-        }
+        self.edit_brief(ui, ("mission_brief", kind), 8, "Briefing");
         ui.add_space(8.0);
         ui.separator();
         ui.label(section_heading("In the file"));
         shell::hint(
             ui,
-            "The weather line is written first, then this text, as HTML.",
+            "The date and weather, the balloon report, your text, then the airfield chart.",
             false,
         );
-        preview_briefing(ui, &self.mission.package().briefing);
+        self.preview_mission_brief(ui);
+    }
+
+    fn apply_brief_action(&mut self, action: BriefAction) {
+        let Some((a, b)) = self.mission.sel else {
+            self.status = Status::Info("Click the briefing, then a style.".into());
+            return;
+        };
+        if a == b {
+            self.status =
+                Status::Info("Select briefing text, then Bold, Italic, Underline, or Mono.".into());
+            return;
+        }
+        let index = self.mission.active.index();
+        let brief = &mut self.mission.packages[index].briefing;
+        let (start, end) = (a.min(b), a.max(b));
+        let BriefAction::Bit(bit) = action;
+        brief.toggle(start, end, bit);
+    }
+
+    fn preview_mission_brief(&self, ui: &mut egui::Ui) {
+        let scene = self.mission_scene_dated();
+        let weather = mission::weather_brief(self.mission.package(), &scene);
+        let body = self.mission.package().briefing.preview_lines();
+        paint_underlined_lead(ui, "Date:", &format!(" {}", weather.date));
+        paint_underlined_lead(ui, "Weather:", &format!(" {}", weather.weather));
+        ui.label(weather.wind);
+        paint_underlined_lead(ui, "Temperature:", &format!(" {}", weather.temperature));
+        ui.add_space(8.0);
+        paint_underlined_lead(ui, "Weather balloon report:", "");
+        for line in &weather.balloon {
+            ui.label(line);
+        }
+        ui.label(weather.turbulence);
+        ui.add_space(8.0);
+        paint_brief_lines(ui, &body);
+        ui.add_space(8.0);
+        let names = self.briefing_field_names();
+        let chart = mission::ndb_lines_for_names(&names);
+        if chart.is_empty() {
+            shell::hint(
+                ui,
+                "No airfield in this area, so the radio chart is left out.",
+                false,
+            );
+        } else {
+            paint_underlined_lead(ui, "Airfield NDB List:", "");
+            ui.add_space(4.0);
+            egui::ScrollArea::horizontal()
+                .id_salt("mission_ndb_preview")
+                .show(ui, |ui| {
+                    for line in chart {
+                        ui.label(RichText::new(line).font(FontId::monospace(12.0)));
+                    }
+                });
+        }
+    }
+
+    fn briefing_field_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for slot in &self.airbases {
+            if !self.airbase_in_play(slot) {
+                continue;
+            }
+            if let Some(stem) = slot.path.file_stem().and_then(|stem| stem.to_str()) {
+                names.push(stem.to_string());
+            }
+            if !slot.info.name.eq_ignore_ascii_case("group")
+                && !slot.info.name.eq_ignore_ascii_case("airfield")
+                && !slot.info.name.is_empty()
+            {
+                names.push(slot.info.name.clone());
+            }
+        }
+        names
     }
 
     fn mission_center(&mut self, ui: &mut egui::Ui) {
-        let scene = self.mission_scene();
+        let scene = self.mission_scene_dated();
         let mut title = self.mission.package().title.clone();
         ui.horizontal(|ui| {
             ui.label(section_heading("Title"));
@@ -444,7 +634,7 @@ impl super::GroupGeneratorApp {
                 preset.name(),
                 scene.prefix(),
                 scene.season.label(),
-                scene.date(),
+                scene.long_date(),
                 self.mission.package().clock()
             ))
             .color(c::NEUTRAL_700),
@@ -469,6 +659,35 @@ impl super::GroupGeneratorApp {
             self.mission.package_mut().cloud_base_m = next;
         }
     }
+
+    fn edit_brief(&mut self, ui: &mut egui::Ui, id: impl std::hash::Hash, rows: usize, hint: &str) {
+        let snapshot = self.mission.package().briefing.clone();
+        let mut text = snapshot.text.clone();
+        let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+            let mut styled = snapshot.clone();
+            styled.rebase(buf.as_str());
+            brief_galley(ui, &styled, wrap)
+        };
+        let output = egui::TextEdit::multiline(&mut text)
+            .id(egui::Id::new(id))
+            .desired_width(f32::INFINITY)
+            .desired_rows(rows)
+            .hint_text(hint)
+            .layouter(&mut layouter)
+            .show(ui);
+        if output.response.changed() {
+            self.mission.package_mut().briefing.rebase(&text);
+        }
+        if output.response.has_focus()
+            && let Some(range) = output.cursor_range
+        {
+            let cursors = range.sorted_cursors();
+            let text_now = &self.mission.package().briefing.text;
+            let a = byte_at(text_now, cursors[0].index);
+            let b = byte_at(text_now, cursors[1].index);
+            self.mission.sel = Some((a, b));
+        }
+    }
 }
 
 fn byte_at(text: &str, chars: usize) -> usize {
@@ -478,42 +697,96 @@ fn byte_at(text: &str, chars: usize) -> usize {
         .unwrap_or(text.len())
 }
 
-fn preview_briefing(ui: &mut egui::Ui, briefing: &mission::Briefing) {
-    let runs = briefing.runs();
-    let mut line: Vec<&mission::BriefRun> = Vec::new();
-    let flush = |ui: &mut egui::Ui, line: &[&mission::BriefRun]| {
-        if line.is_empty() {
+enum BriefAction {
+    Bit(StyleBit),
+}
+
+fn brief_galley(
+    ui: &egui::Ui,
+    brief: &mission::Briefing,
+    wrap: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap;
+    let ink = ui.visuals().text_color();
+    let pieces = brief.pieces();
+    if pieces.is_empty() {
+        job.append(
+            "",
+            0.0,
+            egui::TextFormat {
+                font_id: FontId::proportional(13.0),
+                color: ink,
+                ..Default::default()
+            },
+        );
+    }
+    for piece in &pieces {
+        let font_id = if piece.mono {
+            FontId::monospace(13.0)
+        } else if piece.bold {
+            FontId::new(13.0, theme::bold_family())
+        } else {
+            FontId::proportional(13.0)
+        };
+        job.append(
+            &piece.text,
+            0.0,
+            egui::TextFormat {
+                font_id,
+                color: ink,
+                italics: piece.italic,
+                underline: if piece.underline {
+                    Stroke::new(1.0_f32, ink)
+                } else {
+                    Stroke::NONE
+                },
+                ..Default::default()
+            },
+        );
+    }
+    ui.fonts(|fonts| fonts.layout_job(job))
+}
+
+fn paint_underlined_lead(ui: &mut egui::Ui, lead: &str, rest: &str) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.label(RichText::new(lead).underline());
+        if !rest.is_empty() {
+            ui.label(rest);
+        }
+    });
+}
+
+fn paint_brief_lines(ui: &mut egui::Ui, lines: &[mission::BriefLine]) {
+    for line in lines {
+        if line.pieces.is_empty() {
             ui.add_space(8.0);
-            return;
+            continue;
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            for run in line {
-                let mut rich = RichText::new(&run.text);
-                if run.bold {
-                    rich = rich.strong();
-                }
-                if run.italic {
-                    rich = rich.italics();
-                }
-                if run.underline {
-                    rich = rich.underline();
-                }
-                ui.label(rich);
+            for piece in &line.pieces {
+                ui.label(piece_rich(piece));
             }
         });
-    };
-    for run in &runs {
-        if run.line_break {
-            flush(ui, &line);
-            line.clear();
-        } else if !run.text.is_empty() {
-            line.push(run);
-        }
     }
-    if !line.is_empty() {
-        flush(ui, &line);
+}
+
+fn piece_rich(piece: &mission::BriefPiece) -> RichText {
+    let mut rich = RichText::new(&piece.text);
+    if piece.mono {
+        rich = rich.font(FontId::monospace(13.0));
+    } else if piece.bold {
+        rich = rich.font(FontId::new(13.0, theme::bold_family()));
     }
+    if piece.italic {
+        rich = rich.italics();
+    }
+    if piece.underline {
+        rich = rich.underline();
+    }
+    rich
 }
 
 fn show_cloud_type(ui: &mut egui::Ui, preset: CloudPreset, hour: u32) {

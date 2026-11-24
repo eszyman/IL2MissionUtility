@@ -647,7 +647,10 @@ const THRESHOLD_SLACK_M: f64 = 12.0;
 /// the base end: the `RunwayEnd` threshold closer to the buildings.
 ///
 /// The fakefield stays on the taxi node just short of that threshold, off
-/// the centerline, facing the runway. It is not slid along the ramp and it
+/// the centerline, facing the runway. When the takeoff heading is known and
+/// a node sits on the right of that heading, that node is used, and the
+/// nose is 90° right of the takeoff so a right turn faces into the wind.
+/// It is not slid along the ramp and it
 /// is not moved onto a Type 3 pad. Engine running (`parking_snap` false)
 /// writes `StartType` 1 and `SnapTo` 0 on the 80 m runway-spawn model.
 /// Engine off, parking writes `StartType` 2 and `SnapTo` 2 and leaves the
@@ -694,11 +697,12 @@ fn ramp_spot(
     let far = 1 - departure;
     let depart = &nodes[ends[departure]];
     let far_node = &nodes[ends[far]];
-    let spot_i = hold_short(&nodes, depart, far_node)?;
+    let spot_i = hold_short(&nodes, depart, far_node, takeoff_heading.is_some())?;
+    let toward = heading_toward_runway(&nodes[spot_i], depart, far_node);
     let spot = SpawnSpot {
         x: nodes[spot_i].x,
         z: nodes[spot_i].z,
-        heading_deg: heading_toward_runway(&nodes[spot_i], depart, far_node),
+        heading_deg: nose_for_takeoff(toward, takeoff_heading),
     };
     Ok((air, spot))
 }
@@ -846,14 +850,22 @@ fn building_centroid(group: &Il2Entity, skip_airfield: i32) -> Result<(f64, f64)
     Ok((sx / n, sz / n))
 }
 
-fn hold_short(nodes: &[TaxiNode], departure: &TaxiNode, far: &TaxiNode) -> Result<usize, String> {
+fn hold_short(
+    nodes: &[TaxiNode],
+    departure: &TaxiNode,
+    far: &TaxiNode,
+    prefer_right: bool,
+) -> Result<usize, String> {
     let (ux, uz) = unit_toward(departure, far)?;
     let mut best: Option<(f64, usize)> = None;
+    let mut right: Option<(f64, usize)> = None;
     for (i, node) in nodes.iter().enumerate() {
         if node.runway {
             continue;
         }
-        let along = (node.x - departure.x) * ux + (node.z - departure.z) * uz;
+        let dx = node.x - departure.x;
+        let dz = node.z - departure.z;
+        let along = dx * ux + dz * uz;
         if along.abs() > THRESHOLD_SLACK_M {
             continue;
         }
@@ -861,9 +873,33 @@ fn hold_short(nodes: &[TaxiNode], departure: &TaxiNode, far: &TaxiNode) -> Resul
         if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
             best = Some((d, i));
         }
+        // Right of the takeoff direction: a nose pointed at the runway then
+        // turns right onto the into-wind heading.
+        let side = -uz * dx + ux * dz;
+        if side > 1.0 && right.as_ref().is_none_or(|(bd, _)| d < *bd) {
+            right = Some((d, i));
+        }
+    }
+    if prefer_right && let Some((_, i)) = right {
+        return Ok(i);
     }
     best.map(|(_, i)| i)
         .ok_or_else(|| "No taxi node sits just short of the runway threshold.".into())
+}
+
+/// Nose points at the runway. When the takeoff heading is known and that
+/// facing is already a right turn onto it, snap to exactly 90° right of
+/// the takeoff so the turn lines up with the wind.
+fn nose_for_takeoff(toward_runway: f64, takeoff_heading: Option<f64>) -> f64 {
+    let Some(takeoff) = takeoff_heading else {
+        return toward_runway;
+    };
+    let right_nose = (takeoff - 90.0).rem_euclid(360.0);
+    if heading_delta(right_nose, toward_runway) <= 45.0 {
+        right_nose
+    } else {
+        toward_runway
+    }
 }
 
 /// Heading from `spawn` toward the nearest point on the runway segment.
@@ -1861,6 +1897,12 @@ Group\r\n{\r\n  Airfield\r\n  {\r\n    Name = \"K-22_Onchon_AF\";\r\n    Index =
         assert!(
             (heading_delta(wind_spot.heading_deg, 324.0) - 90.0).abs() < 15.0,
             "{}",
+            wind_spot.heading_deg
+        );
+        let right_turn = (324.0 - wind_spot.heading_deg).rem_euclid(360.0);
+        assert!(
+            right_turn < 180.0,
+            "a right turn from {:.1} should face takeoff 324, turn {right_turn:.1}",
             wind_spot.heading_deg
         );
         let moved = dist2(base_spot.x, base_spot.z, wind_spot.x, wind_spot.z).sqrt();

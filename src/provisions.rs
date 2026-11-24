@@ -401,9 +401,11 @@ pub fn group_has_airfield(root: &Il2Entity) -> bool {
 
 /// One group per field. The side comes from `nato_at` (the front). The other
 /// country's file stays on disk and is not used in its place.
+/// `either_at` keeps one NATO file and one DPRK file when the field sits in a salient.
 pub fn place_matching_coalition(
     groups: Vec<MapRefGroup>,
     nato_at: impl Fn(f64, f64) -> bool,
+    either_at: impl Fn(f64, f64) -> bool,
 ) -> AirfieldPlacement {
     let mut buckets: BTreeMap<String, Vec<MapRefGroup>> = BTreeMap::new();
     let mut pos: BTreeMap<String, (f64, f64)> = BTreeMap::new();
@@ -419,6 +421,31 @@ pub fn place_matching_coalition(
         notes: Vec::new(),
     };
     for (key, copies) in buckets {
+        if let Some((x, z)) = pos.get(&key)
+            && either_at(*x, *z)
+        {
+            let nato = pick_coalition_airfields(copies.clone(), true);
+            let dprk = pick_coalition_airfields(copies, false);
+            if nato.groups.is_empty() && dprk.groups.is_empty() {
+                continue;
+            }
+            if nato.groups.is_empty() {
+                placed.notes.push(format!(
+                    "{key} is inside a salient. There is no NATO harvest, so only the DPRK group was kept."
+                ));
+            } else if dprk.groups.is_empty() {
+                placed.notes.push(format!(
+                    "{key} is inside a salient. There is no DPRK harvest, so only the NATO group was kept."
+                ));
+            } else {
+                placed.notes.push(format!(
+                    "{key} is inside a salient, so both the NATO and DPRK groups were kept."
+                ));
+            }
+            placed.groups.extend(nato.groups);
+            placed.groups.extend(dprk.groups);
+            continue;
+        }
         let want = if let Some((x, z)) = pos.get(&key) {
             nato_at(*x, *z)
         } else if let Some(nato) = agreed_coalition(&copies) {
@@ -575,16 +602,26 @@ mod tests {
             "DPRK 502 is kept ahead of PRC 503"
         );
 
-        let placed =
-            place_matching_coalition(vec![usa, country_file("K-23_Pyongyang_AF", 503)], |x, _| {
-                x < 200_000.0
-            });
+        let placed = place_matching_coalition(
+            vec![usa, country_file("K-23_Pyongyang_AF", 503)],
+            |x, _| x < 200_000.0,
+            |_, _| false,
+        );
         assert_eq!(placed.groups.len(), 1);
         assert!(
             placed.groups[0]
                 .path
                 .ends_with("K-23_Pyongyang_AF_503.Group")
         );
+    }
+
+    #[test]
+    fn a_salient_keeps_both_coalitions() {
+        let usa = country_file("K-14_Kimpo_AF", 601);
+        let dprk = country_file("K-14_Kimpo_AF", 502);
+        let placed = place_matching_coalition(vec![usa, dprk], |_, _| true, |_, _| true);
+        assert_eq!(placed.groups.len(), 2);
+        assert!(placed.notes.iter().any(|note| note.contains("both")));
     }
 
     #[test]

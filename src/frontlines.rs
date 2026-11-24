@@ -1527,6 +1527,7 @@ const MAP_LAYER_NAMES: &[&str] = &[
     "Defensive positions",
     "Areas to attack",
     "Naval routes",
+    "Objectives",
 ];
 
 /// True when `root` looks like a file written by [`generate_front`].
@@ -1584,7 +1585,7 @@ pub fn inspect_base_map(root: &Il2Entity) -> Result<ImportedBaseMap, String> {
         if looks_like_fighter_pack(child) {
             let spots = fighter_group_spots(child);
             if spots.is_empty() {
-                notes.push(format!("Fighter pack \"{name}\" has no \"Group N\" group with a checkzone named \"Zone IN\"."));
+                notes.push(format!("Automatic Fighters \"{name}\" has no \"Group N\" group with a checkzone named \"Zone IN\"."));
                 continue;
             }
             let (eastern, wave) = parse_fighter_label(name, child);

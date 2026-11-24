@@ -856,9 +856,16 @@ pub fn dock_tab_widths<T>(
 }
 
 // ── Page chrome ─────────────────────────────────────────────────────────────
-/// Left mode rail. Returns true if Help was clicked.
-pub fn mode_rail(ui: &mut Ui, labels: &[&str], selected: &mut usize) -> bool {
+/// What the mode rail's bottom controls did this frame.
+pub struct RailClick {
+    pub help: bool,
+    pub reset: bool,
+}
+
+/// Left mode rail. Help and Reset all sit at the bottom of the rail.
+pub fn mode_rail(ui: &mut Ui, labels: &[&str], selected: &mut usize) -> RailClick {
     let mut help = false;
+    let mut reset = false;
     ui.add_space(14.0);
     ui.label(RichText::new("IL-2 GROUP\nGENERATOR").font(FontId::new(17.0, heading_family())));
     ui.add_space(12.0);
@@ -918,8 +925,21 @@ pub fn mode_rail(ui: &mut Ui, labels: &[&str], selected: &mut usize) -> bool {
             }
             kbd(ui, "F1");
         });
+        ui.add_space(6.0);
+        if ui
+            .add_sized(
+                [ui.available_width(), 28.0],
+                egui::Button::new("Reset all"),
+            )
+            .on_hover_text(
+                "Clear the template, map, missions, airfields, and every other setting.",
+            )
+            .clicked()
+        {
+            reset = true;
+        }
     });
-    help
+    RailClick { help, reset }
 }
 
 // ── Readiness (README §10) ──────────────────────────────────────────────────

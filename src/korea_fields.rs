@@ -6,7 +6,7 @@
 //! A field harvested only for the other coalition is still missing.
 
 use crate::aircraft::country_is_nato;
-use crate::mapclip::{WorldAabb, on_dprk_side};
+use crate::mapclip::{WorldAabb, in_salient_zone, on_dprk_side};
 
 const GAME_MARK: &str = "game file landscape_Korea_FullScene.Group (AIRFIELDS mark)";
 const REFERENCE: &str = "reference doc docs/historical-reference/korea-1950-53-unit-reference.md";
@@ -126,6 +126,7 @@ pub struct AoHarvest {
 
 /// Fields inside `area`, and whether a harvest exists for the coalition that
 /// holds that point. A harvest for the other coalition does not count.
+/// A field inside a salient counts either harvest, and is labeled for both.
 pub fn ao_harvest(
     hits: &[HarvestHit],
     area: WorldAabb,
@@ -144,11 +145,24 @@ pub fn ao_harvest(
             outside += 1;
             continue;
         }
+        let in_zone = in_salient_zone(front, salients, x, z);
         let nato = !on_dprk_side(front, salients, x, z);
+        let coalition = if in_zone {
+            "NATO or DPRK"
+        } else if nato {
+            "NATO"
+        } else {
+            "DPRK"
+        };
+        let harvested = if in_zone {
+            harvested_for(field.name, hits, true) || harvested_for(field.name, hits, false)
+        } else {
+            harvested_for(field.name, hits, nato)
+        };
         inside.push(FieldStatus {
             name: field.name,
-            coalition: if nato { "NATO" } else { "DPRK" },
-            harvested: harvested_for(field.name, hits, nato),
+            coalition,
+            harvested,
             source: field.source,
         });
     }
@@ -263,5 +277,30 @@ mod tests {
         assert!(!names_match("K-23 Pyongyang", "K-24_Pyongyang_AF"));
         assert!(names_match("Sariwon", "Sariwon_AF"));
         assert!(!names_match("Uiju", "K-30_Sinuiju_AF"));
+    }
+
+    #[test]
+    fn a_field_inside_a_salient_counts_either_harvest() {
+        let hits = vec![HarvestHit {
+            name: "K-23_Pyongyang_AF".into(),
+            country: 601,
+        }];
+        let area = WorldAabb::from_corners(100_000.0, 160_000.0, 280_000.0, 280_000.0);
+        let front = vec![(200_000.0, 0.0), (200_000.0, 500_000.0)];
+        let pocket = vec![
+            (260_000.0, 170_000.0),
+            (280_000.0, 170_000.0),
+            (280_000.0, 190_000.0),
+            (260_000.0, 190_000.0),
+            (260_000.0, 170_000.0),
+        ];
+        let report = ao_harvest(&hits, area, &front, &[pocket]);
+        let pyongyang = report
+            .inside
+            .iter()
+            .find(|row| row.name.starts_with("K-23"))
+            .unwrap();
+        assert_eq!(pyongyang.coalition, "NATO or DPRK");
+        assert!(pyongyang.harvested);
     }
 }

@@ -32,6 +32,7 @@ mod mapnet;
 mod mapshipping;
 mod mission;
 mod model_spec;
+mod objectives;
 mod pack;
 mod parser;
 mod payloads;

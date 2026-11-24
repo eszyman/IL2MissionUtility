@@ -171,6 +171,7 @@ const MODES: [(AppMode, &str); 6] = [
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TaskView {
     Tasking,
+    Objectives,
     Exclusive,
     Fighters,
 }
@@ -186,6 +187,7 @@ enum ReconSubmode {
 enum Confirm {
     ResetTemplate,
     ResetFighter,
+    ResetAll,
     LoadTemplate,
     LoadBaseMap,
 }
@@ -748,6 +750,14 @@ struct GroupGeneratorApp {
     /// While set, dragging empty map does not redraw `front_aabb`, and Reset AO is off.
     /// Load base map can still restore a saved box.
     ao_locked: bool,
+    /// The main front stays put while the date changes. Salients are not locked.
+    front_locked: bool,
+    /// Slider value the dated front was locked at. `None` when the lock holds a drawn line.
+    locked_front_t: Option<f32>,
+    /// The main front stroke is hidden. Salients still use `cleared_base`.
+    front_cleared: bool,
+    /// Front the salients were drawn against, kept after Clear front.
+    cleared_base: Vec<(f64, f64)>,
     map_drag_uv: Option<Pos2>,
     /// The AO box at the start of an unlocked empty-map drag, so release can undo it.
     ao_drag_before: Option<WorldAabb>,
@@ -907,6 +917,21 @@ struct GroupGeneratorApp {
     map_ground_east: Option<MapGroundLayout>,
     map_ground_nato: Option<MapGroundLayout>,
     map_armies: Vec<MapArmySlot>,
+    /// Placed units whose destruction counts toward the other side's objective.
+    objective_checked: Vec<crate::objectives::ObjectiveSource>,
+    /// Share of the selected objects that must be destroyed, 1–100. Default 33.
+    objective_nato_pct: u32,
+    objective_dprk_pct: u32,
+    /// Automatic fighters the other side must lose. 0 leaves them out.
+    objective_nato_aircraft: u32,
+    objective_dprk_aircraft: u32,
+    /// Mission aircraft the other side must lose. 0 leaves them out.
+    objective_nato_mission: u32,
+    objective_dprk_mission: u32,
+    objective_nato_picks: Vec<crate::objectives::ObjectivePick>,
+    objective_dprk_picks: Vec<crate::objectives::ObjectivePick>,
+    /// Map click adds a target for this side's objective. Esc leaves the map.
+    objective_pick: Option<crate::objectives::ObjectiveSide>,
     ground_drag: Option<GroundHit>,
     ground_heading_drag: Option<GroundHit>,
     wp_drag: Option<(GroundHit, usize)>,
@@ -1111,6 +1136,10 @@ impl Default for GroupGeneratorApp {
             front_t: timeline_index(1951, Season::LateSpring) as f32,
             front_aabb: WorldAabb::full_map(),
             ao_locked: false,
+            front_locked: false,
+            locked_front_t: None,
+            front_cleared: false,
+            cleared_base: Vec::new(),
             map_drag_uv: None,
             ao_drag_before: None,
             map_lo_tex: None,
@@ -1224,6 +1253,16 @@ impl Default for GroupGeneratorApp {
             map_ground_east: None,
             map_ground_nato: None,
             map_armies: Vec::new(),
+            objective_checked: Vec::new(),
+            objective_nato_pct: 33,
+            objective_dprk_pct: 33,
+            objective_nato_aircraft: 0,
+            objective_dprk_aircraft: 0,
+            objective_nato_mission: 0,
+            objective_dprk_mission: 0,
+            objective_nato_picks: Vec::new(),
+            objective_dprk_picks: Vec::new(),
+            objective_pick: None,
             ground_drag: None,
             ground_heading_drag: None,
             wp_drag: None,
@@ -1302,8 +1341,12 @@ impl GroupGeneratorApp {
             .show(ctx, |ui| {
                 let mut idx = MODES.iter().position(|(m, _)| *m == self.mode).unwrap_or(0);
                 let labels = MODES.map(|(_, label)| label);
-                if shell::mode_rail(ui, &labels, &mut idx) {
+                let rail = shell::mode_rail(ui, &labels, &mut idx);
+                if rail.help {
                     self.open_help(self.page_help_topic());
+                }
+                if rail.reset {
+                    self.confirm = Some(Confirm::ResetAll);
                 }
                 self.set_mode(MODES[idx].0);
             });
@@ -1381,6 +1424,7 @@ impl GroupGeneratorApp {
         }
         if self.mode == AppMode::Map {
             self.drop_target_pick();
+            self.objective_pick = None;
             self.cancel_map_tool();
         }
         // Each tab keeps its own status line: park the outgoing one, restore the incoming one.
@@ -1423,6 +1467,8 @@ impl GroupGeneratorApp {
             if keys.escape {
                 if self.target_pick.is_some() {
                     self.cancel_target_pick();
+                } else if self.objective_pick.is_some() {
+                    self.cancel_objective_pick();
                 } else {
                     self.cancel_map_tool();
                 }
@@ -1589,7 +1635,7 @@ impl GroupGeneratorApp {
             ),
             AppMode::Recon => ("Army Generator", None, "Generate File"),
             AppMode::Fighter => (
-                "Fighter Pack",
+                "Automatic Fighters",
                 Some(
                     file_label(&self.custom_path, false).unwrap_or_else(|| "Built-in logic".into()),
                 ),
@@ -1624,7 +1670,7 @@ impl GroupGeneratorApp {
                         file_label(&self.custom_path, false)
                             .unwrap_or_else(|| "Built-in logic".into()),
                     ),
-                    TaskView::Tasking => None,
+                    TaskView::Tasking | TaskView::Objectives => None,
                 };
                 ("Mission Tasking", file, "Generate File")
             }
@@ -1678,8 +1724,9 @@ impl GroupGeneratorApp {
                         &mut new_task,
                         &[
                             (TaskView::Tasking, "Tasking"),
+                            (TaskView::Objectives, "Objectives"),
                             (TaskView::Exclusive, "Exclusive plans"),
-                            (TaskView::Fighters, "Fighter packs"),
+                            (TaskView::Fighters, "Automatic fighters"),
                         ],
                     );
                 }
@@ -1743,7 +1790,7 @@ impl GroupGeneratorApp {
                         .clicked();
                     load = ui
                         .button("Load base map…")
-                        .on_hover_text("Reload a previously generated Korea base map: AO, front, attack arrows, units, fighters, air starts, and airfield aircraft. Objectives are not stored in the file.  (Ctrl O)")
+                        .on_hover_text("Reload a previously generated Korea base map: AO, front, attack arrows, units, fighters, air starts, and airfield aircraft. Preview objective markers are not stored. Mission objectives from the Objectives sub-mode are restored.  (Ctrl O)")
                         .clicked();
                 }
                 AppMode::Mission => {
@@ -2013,9 +2060,10 @@ impl GroupGeneratorApp {
             AppMode::Template => self.tpl_undo.label(),
             AppMode::Recon => self.recon_undo.label(),
             AppMode::Exclusive => self.bomber_undo.label(),
-            // Placement edits made from Mission Tasking live on the map stack.
-            AppMode::Map | AppMode::AirTasking => self.map_undo_label(),
-            AppMode::Fighter | AppMode::Airfield | AppMode::Mission => None,
+            // Placement edits made from Mission Tasking, including Automatic
+            // fighters, live on the map stack.
+            AppMode::Map | AppMode::AirTasking | AppMode::Fighter => self.map_undo_label(),
+            AppMode::Airfield | AppMode::Mission => None,
         }
     }
 
@@ -2045,7 +2093,7 @@ impl GroupGeneratorApp {
                     self.bomber_selected = selected;
                 }
             }
-            AppMode::Map | AppMode::AirTasking => match self.map_undo_kind() {
+            AppMode::Map | AppMode::AirTasking | AppMode::Fighter => match self.map_undo_kind() {
                 Some(MapAction::Clear) => {
                     if let Some(f) = self.map_undo.take() {
                         self.restore_map_forces(f);
@@ -2055,7 +2103,7 @@ impl GroupGeneratorApp {
                 Some(MapAction::Drawing) => self.remove_last_mark(),
                 None => return,
             },
-            AppMode::Fighter | AppMode::Airfield | AppMode::Mission => return,
+            AppMode::Airfield | AppMode::Mission => return,
         }
         if let Some(label) = label {
             self.status = Status::Info(format!("Undone: {label}."));
@@ -2112,7 +2160,7 @@ impl GroupGeneratorApp {
                 )
             }
             Confirm::ResetFighter => (
-                "Reset Fighter Pack?",
+                "Reset Automatic Fighters?",
                 "This sets linked groups, flights, aircraft types and skills, country, altitudes and timers back to their defaults.".to_string(),
                 "Reset",
             ),
@@ -2126,12 +2174,18 @@ impl GroupGeneratorApp {
                 "The map has changes that are not in a generated base map. Loading replaces the AO, front, arrows and placed forces.".to_string(),
                 "Load…",
             ),
+            Confirm::ResetAll => (
+                "Clear everything?",
+                "This wipes the template, map, missions, airfields, and every other setting. You can then load a group or mission, or start from scratch.".to_string(),
+                "Clear",
+            ),
         };
         let mut open = true;
         if shell::confirm_dialog(ctx, &mut open, title, &body, button) {
             match kind {
                 Confirm::ResetTemplate => self.reset_template_confirmed(),
                 Confirm::ResetFighter => self.reset_fighter_pack(),
+                Confirm::ResetAll => self.reset_utility(),
                 Confirm::LoadTemplate => self.load_template_now(),
                 Confirm::LoadBaseMap => self.run_io(AppMode::Map, |s| s.load_base_map()),
             }
@@ -2606,7 +2660,7 @@ impl GroupGeneratorApp {
     // ── Fighter Pack (README §5.3) ─────────────────────────────────────────
 
     fn fighter_page(&mut self, ctx: &egui::Context) {
-        side_panel(ctx, "fighter_left", true, 270.0, |ui| {
+        side_panel(ctx, "fighter_left", true, 304.0, |ui| {
             self.fighter_types_panel(ui)
         });
         side_panel(ctx, "fighter_right", false, 304.0, |ui| {
@@ -2638,6 +2692,14 @@ impl GroupGeneratorApp {
     }
 
     fn fighter_types_panel(&mut self, ui: &mut egui::Ui) {
+        self.task_fighters(ui);
+        ui.add_space(4.0);
+        ui.separator();
+        ui.add_space(4.0);
+        self.fighter_pack_controls(ui);
+    }
+
+    fn fighter_aircraft_types(&mut self, ui: &mut egui::Ui) {
         let n = self.type_enabled.iter().filter(|e| **e).count();
         shell::section_title(ui, &format!("Aircraft types · {n} selected"), None);
         shell::hint(
@@ -2677,6 +2739,17 @@ impl GroupGeneratorApp {
         });
         if n == 0 {
             shell::warning(ui, "Select at least one aircraft type.");
+        }
+    }
+
+    fn fighter_pack_controls(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().slider_width = 110.0;
+        shell::section_title(ui, "Pack", None);
+        labeled_slider(ui, "Linked groups", &mut self.linked_groups, 1..=10);
+        stepped_count(ui, "Flights", &mut self.flight_count, 1..=10);
+        stepped_count(ui, "Max in a flight", &mut self.max_in_flight, 1..=8);
+        if shell::hint(ui, "Each flight is one randomizer slot.", true) {
+            self.open_help(HelpTopic::Fighter);
         }
     }
 
@@ -3016,16 +3089,10 @@ impl GroupGeneratorApp {
     }
 
     fn fighter_settings_panel(&mut self, ui: &mut egui::Ui) {
-        ui.spacing_mut().slider_width = 110.0;
-        shell::section_title(ui, "Pack", None);
-        labeled_slider(ui, "Linked groups", &mut self.linked_groups, 1..=10);
-        stepped_count(ui, "Flights", &mut self.flight_count, 1..=10);
-        stepped_count(ui, "Max in a flight", &mut self.max_in_flight, 1..=8);
-        if shell::hint(ui, "Each flight is one randomizer slot.", true) {
-            self.open_help(HelpTopic::Fighter);
-        }
+        self.fighter_aircraft_types(ui);
         ui.add_space(4.0);
         ui.separator();
+        ui.spacing_mut().slider_width = 110.0;
 
         shell::section_title(ui, "Country", None);
         ui.horizontal(|ui| {
@@ -3141,6 +3208,16 @@ impl GroupGeneratorApp {
         );
     }
 
+    /// Rail Reset all: the same state as a fresh launch.
+    fn reset_utility(&mut self) {
+        *self = Self::default();
+        self.mark_saved(AppMode::Template);
+        self.mark_saved(AppMode::Map);
+        self.status = Status::Info(
+            "Cleared everything. Load a group or mission, or start from scratch.".into(),
+        );
+    }
+
     /// Header Reset on Fighter Pack: back to the startup settings.
     fn reset_fighter_pack(&mut self) {
         let d = Self::default();
@@ -3156,12 +3233,19 @@ impl GroupGeneratorApp {
         self.delete_orders = d.delete_orders;
         self.altitude_min = d.altitude_min;
         self.altitude_max = d.altitude_max;
-        self.status = Status::Info("Fighter Pack reset to the default settings.".into());
+        self.status = Status::Info("Automatic Fighters reset to the default settings.".into());
     }
 
     // ── Air Tasking ────────────────────────────────────────────────────────
 
     fn air_page(&mut self, ctx: &egui::Context) {
+        if self.task_view == TaskView::Objectives {
+            side_panel(ctx, "objective_left", true, 290.0, |ui| {
+                self.objective_units_panel(ui)
+            });
+            center_panel(ctx, "objective_center", |ui| self.objective_targets_panel(ui));
+            return;
+        }
         if self.map_missions.is_empty() {
             self.air_selected = None;
         } else if self
@@ -3178,9 +3262,9 @@ impl GroupGeneratorApp {
     }
 
     fn air_plans_panel(&mut self, ui: &mut egui::Ui) {
-        // The map Forces dock keeps visibility and objectives. Placement of
-        // fighters, packages, and army groups lives here; the map parks them.
-        self.task_fighters(ui);
+        // The map Forces dock keeps visibility and objectives. Automatic
+        // fighters are placed from that sub-mode; this column only lists them.
+        self.task_fighter_list(ui);
         ui.separator();
         shell::section_title(ui, "Air support library", Some("opens in the middle"));
         for (index, def) in airtask::builtin_library().iter().enumerate() {
@@ -4366,7 +4450,7 @@ impl GroupGeneratorApp {
                         || entity.find_by_name("NodeGates").is_none()
                     {
                         self.status = Status::Error(
-                            "File is not a linked fighter pack (needs Group 1 and NodeGates)."
+                            "File is not an Automatic Fighters group (needs Group 1 and NodeGates)."
                                 .into(),
                         );
                         return;
@@ -5501,7 +5585,7 @@ fn labeled_slider(
 }
 
 /// `labeled_slider` whose value box carries a unit, e.g. "60%".
-fn labeled_slider_suffix(
+pub(super) fn labeled_slider_suffix(
     ui: &mut egui::Ui,
     label: &str,
     value: &mut u32,

@@ -8,8 +8,9 @@
 //! at the top of the right column. The list then splits airbases and every
 //! air start inside the map area from the rest, then by DPRK or NATO, and
 //! marks a field with no runway group as data required. A harvested file
-//! whose country sits on the wrong side of the front is left out. With no
-//! front drawn on the map, that line is the 38th parallel.
+//! whose country sits on the wrong side of the front is left out. A field
+//! inside a salient can be placed as NATO or as DPRK. With no front drawn
+//! on the map, that line is the 38th parallel.
 //!
 //! `ui.rs` is the anchor. It owns the app struct (the `airfield_*` /
 //! `air_start*` / `harvest_*` fields), the mode rail, and the shortcuts,
@@ -38,7 +39,7 @@ use crate::frontlines::MapRefGroup;
 use crate::harvest::{GenWatcher, HarvestOutcome, find_gen_file, harvest_file, place_field_spawn};
 use crate::help::HelpTopic;
 use crate::korea_fields::{self, HarvestHit};
-use crate::mapclip::{WorldAabb, on_dprk_side};
+use crate::mapclip::{WorldAabb, in_salient_zone, on_dprk_side};
 use crate::parser::parse_il2_document;
 use crate::provisions::{self, guess_nato};
 use crate::serialize::serialize_group;
@@ -739,7 +740,10 @@ impl super::GroupGeneratorApp {
                 continue;
             }
             let id = provisions::airfield_identity(&slot.root, &slot.path);
-            let key = korea_fields::k_code(&id.key).unwrap_or(id.key);
+            let base = korea_fields::k_code(&id.key).unwrap_or(id.key);
+            let at = airbase_point(&slot.root);
+            let in_zone = at.is_some_and(|(x, z)| in_salient_zone(&front, salients, x, z));
+            let key = coalition_bucket(base, in_zone, id.country.and_then(country_is_nato));
             let country = id.country.unwrap_or(0);
             push(
                 key,
@@ -768,11 +772,17 @@ impl super::GroupGeneratorApp {
             }
             if let Some(nato) = country_is_nato(record.country) {
                 let on_dprk = on_dprk_side(&front, salients, record.x, record.z);
-                if nato == on_dprk {
+                let in_zone = in_salient_zone(&front, salients, record.x, record.z);
+                if !in_zone && nato == on_dprk {
                     continue;
                 }
             }
-            let key = korea_fields::k_code(&record.name).unwrap_or_else(|| record.name.clone());
+            let base = korea_fields::k_code(&record.name).unwrap_or_else(|| record.name.clone());
+            let key = coalition_bucket(
+                base,
+                in_salient_zone(&front, salients, record.x, record.z),
+                country_is_nato(record.country),
+            );
             push(
                 key,
                 AirCopy {
@@ -783,7 +793,11 @@ impl super::GroupGeneratorApp {
             );
         }
         let (key, copies) = buckets.into_iter().find(|(_, copies)| copies.len() >= 2)?;
-        let title = key.to_ascii_uppercase();
+        let title = key
+            .split('|')
+            .next()
+            .unwrap_or(&key)
+            .to_ascii_uppercase();
         Some(AirDup { key, title, copies })
     }
 
@@ -959,7 +973,7 @@ impl super::GroupGeneratorApp {
         shell::section_title(ui, "Airbases", Some(&count.to_string()));
         shell::hint(
             ui,
-            "DPRK is north of the front and NATO is south. A country on the wrong side of that line is left out. With no front drawn, the line is the 38th parallel. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.",
+            "DPRK is north of the front and NATO is south. A country on the wrong side of that line is left out. A field inside a salient can be placed as NATO or as DPRK. With no front drawn, the line is the 38th parallel. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.",
             false,
         );
         if self.front_aabb == WorldAabb::full_map() {
@@ -1020,9 +1034,7 @@ impl super::GroupGeneratorApp {
             let mut dprk_slots = Vec::new();
             let mut nato_slots = Vec::new();
             for i in inside {
-                let dprk = airbase_point(&self.airbases[i].root)
-                    .is_some_and(|(x, z)| on_dprk_side(&front, salients, x, z));
-                if dprk {
+                if slot_listed_dprk(&self.airbases[i], &front, salients) {
                     dprk_slots.push(i);
                 } else {
                     nato_slots.push(i);
@@ -1031,7 +1043,7 @@ impl super::GroupGeneratorApp {
             let mut dprk_gaps = Vec::new();
             let mut nato_gaps = Vec::new();
             for gap in gaps {
-                if on_dprk_side(&front, salients, gap.x, gap.z) {
+                if gap.dprk {
                     dprk_gaps.push(gap);
                 } else {
                     nato_gaps.push(gap);
@@ -1779,7 +1791,11 @@ impl super::GroupGeneratorApp {
     ) -> provisions::AirfieldPlacement {
         let front = self.front_for_sides();
         let salients = self.salients_for_sides();
-        provisions::place_matching_coalition(groups, |x, z| !on_dprk_side(&front, salients, x, z))
+        provisions::place_matching_coalition(
+            groups,
+            |x, z| !on_dprk_side(&front, salients, x, z),
+            |x, z| in_salient_zone(&front, salients, x, z),
+        )
     }
 
     /// Inside the map area, and the file's country holds that side of the front.
@@ -1878,7 +1894,8 @@ impl super::GroupGeneratorApp {
             self.status = Status::Error("Add an aircraft to the field spawn first.".into());
             return;
         }
-        let spot = match place_field_spawn(&mut root, &planes, None, Some(country)) {
+        let takeoff = self.mission_takeoff_heading();
+        let spot = match place_field_spawn(&mut root, &planes, takeoff, Some(country)) {
             Ok(spot) => spot,
             Err(err) => {
                 self.status = Status::Error(err);
@@ -2175,8 +2192,33 @@ fn airbase_matches_side(
     let Some((x, z)) = airbase_point(root) else {
         return true;
     };
+    if in_salient_zone(front, salients, x, z) {
+        return true;
+    }
     let nato = guess_nato(root, path);
     nato != on_dprk_side(front, salients, x, z)
+}
+
+fn coalition_bucket(base: String, in_zone: bool, nato: Option<bool>) -> String {
+    if in_zone {
+        let side = if nato == Some(true) { "NATO" } else { "DPRK" };
+        format!("{base}|{side}")
+    } else {
+        base
+    }
+}
+
+fn slot_listed_dprk(
+    slot: &AirbaseSlot,
+    front: &[(f64, f64)],
+    salients: &[Vec<(f64, f64)>],
+) -> bool {
+    let nato = provisions::guess_nato(&slot.root, &slot.path);
+    match airbase_point(&slot.root) {
+        Some((x, z)) if in_salient_zone(front, salients, x, z) => !nato,
+        Some((x, z)) => on_dprk_side(front, salients, x, z),
+        None => !nato,
+    }
 }
 
 fn same_airbase_file(path: &Path, file: &str) -> bool {
@@ -2219,8 +2261,7 @@ struct AirDup {
 struct AreaGap {
     name: String,
     file: String,
-    x: f64,
-    z: f64,
+    dprk: bool,
 }
 
 /// Catalog rows inside the area whose group file was not loaded.
@@ -2243,15 +2284,24 @@ fn uncovered_in_area(
             {
                 return false;
             }
+            let in_zone = in_salient_zone(front, salients, record.x, record.z);
             if let Some(nato) = country_is_nato(record.country) {
                 let on_dprk = on_dprk_side(front, salients, record.x, record.z);
-                if nato == on_dprk {
+                if !in_zone && nato == on_dprk {
                     return false;
                 }
             }
             true
         })
         .map(|record| AreaGap {
+            dprk: {
+                let nato = country_is_nato(record.country);
+                if in_salient_zone(front, salients, record.x, record.z) {
+                    nato != Some(true)
+                } else {
+                    on_dprk_side(front, salients, record.x, record.z)
+                }
+            },
             file: record.file.clone(),
             name: if record.name.is_empty() {
                 Path::new(&record.file)
@@ -2262,8 +2312,6 @@ fn uncovered_in_area(
             } else {
                 record.name.clone()
             },
-            x: record.x,
-            z: record.z,
         })
         .collect()
 }

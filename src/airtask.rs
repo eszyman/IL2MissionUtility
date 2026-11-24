@@ -267,6 +267,214 @@ impl Default for AirOptions {
     }
 }
 
+fn options_desc(options: &AirOptions) -> String {
+    let trigger = match options.trigger {
+        AirTrigger::Clock => "clock",
+        AirTrigger::Zone => "zone",
+    };
+    let spread = match options.spread {
+        AirSpread::Even => "even",
+        AirSpread::Front => "front",
+        AirSpread::Middle => "middle",
+        AirSpread::End => "end",
+    };
+    format!(
+        "\"Options trigger={trigger} window={} delay={} period={} quiet={} chance={} budget={} nato={} dprk={} extend={} launches={} spread={spread} while={} zoneopen={}\"",
+        options.window_min,
+        options.first_delay_min,
+        options.period_min,
+        options.quiet_pct,
+        options.zone_chance_pct,
+        options.budget,
+        options.nato_active,
+        options.dprk_active,
+        options.extension_min,
+        options.launches,
+        u32::from(options.launch_while_active),
+        options.zone_open_min,
+    )
+}
+
+/// Launch settings written into Air Tasking. A stamped Desc is exact. An older
+/// file is read from the timers that setting produced.
+pub fn recall_air_options(root: &Il2Entity) -> Option<AirOptions> {
+    let logic = root.find_by_name(LOGIC_GROUP)?;
+    let desc = logic.property("Desc").unwrap_or("").trim_matches('"');
+    if let Some(options) = options_from_desc(desc) {
+        return Some(options);
+    }
+    Some(infer_air_options(logic))
+}
+
+fn options_from_desc(desc: &str) -> Option<AirOptions> {
+    let rest = desc.strip_prefix("Options ")?;
+    let mut options = AirOptions::default();
+    for part in rest.split_whitespace() {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        match key {
+            "trigger" => {
+                options.trigger = if value == "zone" {
+                    AirTrigger::Zone
+                } else {
+                    AirTrigger::Clock
+                };
+            }
+            "window" => options.window_min = value.parse().unwrap_or(options.window_min),
+            "delay" => options.first_delay_min = value.parse().unwrap_or(options.first_delay_min),
+            "period" => options.period_min = value.parse().unwrap_or(options.period_min),
+            "quiet" => options.quiet_pct = value.parse().unwrap_or(options.quiet_pct),
+            "chance" => options.zone_chance_pct = value.parse().unwrap_or(options.zone_chance_pct),
+            "budget" => options.budget = value.parse().unwrap_or(options.budget),
+            "nato" => options.nato_active = value.parse().unwrap_or(options.nato_active),
+            "dprk" => options.dprk_active = value.parse().unwrap_or(options.dprk_active),
+            "extend" => options.extension_min = value.parse().unwrap_or(options.extension_min),
+            "launches" => options.launches = value.parse().unwrap_or(options.launches),
+            "spread" => {
+                options.spread = match value {
+                    "front" => AirSpread::Front,
+                    "middle" => AirSpread::Middle,
+                    "end" => AirSpread::End,
+                    _ => AirSpread::Even,
+                };
+            }
+            "while" => options.launch_while_active = value != "0",
+            "zoneopen" => options.zone_open_min = value.parse().unwrap_or(options.zone_open_min),
+            _ => {}
+        }
+    }
+    Some(options)
+}
+
+fn infer_air_options(logic: &Il2Entity) -> AirOptions {
+    let mut options = AirOptions::default();
+    if let Some(window) = timer_minutes(logic, WINDOW_NAME) {
+        options.window_min = window.clamp(5, 360);
+    }
+    if logic.find_by_name("Mark 1").is_some() {
+        options.trigger = AirTrigger::Clock;
+        if let Some(quiet) = random_named(logic, "Quiet Slot") {
+            options.quiet_pct = quiet.min(100);
+        }
+        if let Some(chance) = random_named(logic, "Zone Chance") {
+            options.zone_chance_pct = chance.min(100);
+        }
+        let nato = count_prefix(logic, "NATO Credit ");
+        let dprk = count_prefix(logic, "DPRK Credit ");
+        if nato > 0 || dprk > 0 {
+            options.launch_while_active = true;
+            options.nato_active = nato.max(1);
+            options.dprk_active = dprk.max(1);
+        }
+        let mut marks = Vec::new();
+        logic.for_each(&mut |entity| {
+            if entity.block_type != "MCU_Timer" {
+                return;
+            }
+            let Some(rest) = entity.name().and_then(|name| name.strip_prefix("Mark ")) else {
+                return;
+            };
+            let Ok(n) = rest.parse::<u32>() else {
+                return;
+            };
+            let Some(secs) = entity
+                .property("Time")
+                .and_then(|time| time.parse::<f64>().ok())
+            else {
+                return;
+            };
+            marks.push((n, secs));
+        });
+        marks.sort_by_key(|(n, _)| *n);
+        if let Some((_, secs)) = marks.first() {
+            options.first_delay_min = (*secs / 60.0).round() as u32;
+        }
+        if marks.len() >= 2 {
+            let gap = ((marks[1].1 - marks[0].1) / 60.0).round() as u32;
+            options.period_min = gap.max(1);
+        }
+        return options;
+    }
+    if logic.find_by_name(CLOCK_FIRST).is_some() {
+        options.trigger = AirTrigger::Zone;
+        if let Some(delay) = timer_minutes(logic, CLOCK_FIRST) {
+            options.first_delay_min = delay;
+        }
+        if let Some(period) = timer_minutes(logic, "Period") {
+            options.period_min = period.max(1);
+        }
+        if let Some(quiet) = random_named(logic, QUIET_SLOT) {
+            options.quiet_pct = quiet.min(100);
+        }
+        if let Some(chance) = random_named(logic, ZONE_CHANCE) {
+            options.zone_chance_pct = chance.min(100);
+        }
+        if let Some(budget) = counter_named(logic, "NATO Budget") {
+            options.budget = budget.max(1);
+        }
+        if let Some(extend) = timer_minutes(logic, "Plan 1 Extend") {
+            options.extension_min = extend;
+        }
+        if let Some(open) = timer_seconds(logic, "Plan 1 Zone Window") {
+            let period_s = f64::from(options.period_min.max(1)) * 60.0;
+            options.zone_open_min = if (open - period_s).abs() < 1.0 {
+                0
+            } else {
+                (open / 60.0).round() as u32
+            };
+        }
+    }
+    options
+}
+
+fn timer_minutes(root: &Il2Entity, name: &str) -> Option<u32> {
+    timer_seconds(root, name).map(|secs| (secs / 60.0).round() as u32)
+}
+
+fn timer_seconds(root: &Il2Entity, name: &str) -> Option<f64> {
+    root.find_by_name(name)
+        .filter(|entity| entity.block_type == "MCU_Timer")
+        .and_then(|entity| entity.property("Time"))
+        .and_then(|time| time.parse().ok())
+}
+
+fn random_named(root: &Il2Entity, name: &str) -> Option<u32> {
+    let mut found = None;
+    root.for_each(&mut |entity| {
+        if found.is_some() || entity.block_type != "MCU_Timer" {
+            return;
+        }
+        let Some(label) = entity.name() else {
+            return;
+        };
+        if label == name || label.strip_prefix(name).is_some_and(|rest| rest.starts_with(' ')) {
+            found = entity.property("Random").and_then(|value| value.parse().ok());
+        }
+    });
+    found
+}
+
+fn counter_named(root: &Il2Entity, name: &str) -> Option<u32> {
+    root.find_by_name(name)
+        .filter(|entity| entity.block_type == "MCU_Counter")
+        .and_then(|entity| entity.property("Counter"))
+        .and_then(|value| value.parse().ok())
+}
+
+fn count_prefix(root: &Il2Entity, prefix: &str) -> u32 {
+    let mut n = 0u32;
+    root.for_each(&mut |entity| {
+        if entity
+            .name()
+            .is_some_and(|name| name.starts_with(prefix) && name[prefix.len()..].parse::<u32>().is_ok())
+        {
+            n += 1;
+        }
+    });
+    n
+}
+
 /// One historical sortie. The flight is built by the current strike template,
 /// not by the 1950 file this name comes from.
 #[derive(Clone, Debug)]
@@ -1348,7 +1556,7 @@ fn link_timer_only(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2En
     logic_group.set_property("Index", next_id.to_string());
     next_id += 1;
     logic_group.set_name(LOGIC_GROUP);
-    logic_group.set_property("Desc", "\"\"");
+    logic_group.set_property("Desc", &options_desc(options));
     logic_group.children = logic;
     let _ = next_id;
 
@@ -2274,7 +2482,7 @@ pub fn link_air_task(plans: &[AirTaskInput], options: &AirOptions) -> Result<Il2
     logic_group.set_property("Index", next_id.to_string());
     next_id += 1;
     logic_group.set_name(LOGIC_GROUP);
-    logic_group.set_property("Desc", "\"\"");
+    logic_group.set_property("Desc", &options_desc(&options));
     logic_group.children = logic;
 
     let mut out = Il2Entity::new("Group");
@@ -3379,5 +3587,60 @@ mod tests {
         assert_eq!(mark, vec!["Launch 2".to_string()]);
         let chance = names_of(&group, &only(&group, "Zone Chance 2").targets);
         assert!(chance.iter().any(|name| name == "Plan 2 Gate"));
+    }
+
+    #[test]
+    fn launch_settings_come_back_from_the_file() {
+        let mut options = AirOptions::default();
+        options.window_min = 90;
+        options.first_delay_min = 10;
+        options.period_min = 15;
+        options.quiet_pct = 25;
+        options.zone_chance_pct = 80;
+        options.launch_while_active = true;
+        let mut plan = input(&one("NATO strike", true), 0, 1);
+        plan.runs = 12;
+        let group = link_air_task(std::slice::from_ref(&plan), &options).unwrap();
+        let group = parse_group_file(&serialize_group(&group)).expect("round trip");
+        assert_eq!(recall_air_options(&group), Some(options.clone()));
+
+        let mut older = group;
+        older
+            .find_by_name_mut(LOGIC_GROUP)
+            .unwrap()
+            .set_property("Desc", "\"\"");
+        let got = recall_air_options(&older).unwrap();
+        assert_eq!(got.trigger, AirTrigger::Clock);
+        assert_eq!(got.window_min, 90);
+        assert_eq!(got.first_delay_min, 10);
+        assert_eq!(got.period_min, 15);
+        assert_eq!(got.quiet_pct, 25);
+        assert_eq!(got.zone_chance_pct, 80);
+        assert!(got.launch_while_active);
+
+        options.trigger = AirTrigger::Zone;
+        options.launch_while_active = false;
+        options.budget = 3;
+        options.extension_min = 4;
+        options.zone_open_min = 2;
+        options.first_delay_min = 5;
+        options.period_min = 10;
+        options.window_min = 60;
+        let zone = linked(1, &options);
+        let zone = parse_group_file(&serialize_group(&zone)).expect("zone round trip");
+        assert_eq!(recall_air_options(&zone), Some(options.clone()));
+        let mut older = zone;
+        older
+            .find_by_name_mut(LOGIC_GROUP)
+            .unwrap()
+            .set_property("Desc", "\"\"");
+        let got = recall_air_options(&older).unwrap();
+        assert_eq!(got.trigger, AirTrigger::Zone);
+        assert_eq!(got.window_min, 60);
+        assert_eq!(got.first_delay_min, 5);
+        assert_eq!(got.period_min, 10);
+        assert_eq!(got.budget, 3);
+        assert_eq!(got.extension_min, 4);
+        assert_eq!(got.zone_open_min, 2);
     }
 }

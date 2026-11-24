@@ -15,7 +15,7 @@
 //! * Influence: `influence_polygons(_in/_stretched)`,
 //!   `influence_minus_salients`, `influence_fill_quads(_ex)`
 //! * Salients: `SalientPatch`, `apply_salients`, `detached_salient_patch`
-//! * Front: `snap_to_front`, `point_north_of_front`, `on_dprk_side`, `FRONT_PLACE_BAND`,
+//! * Front: `snap_to_front`, `point_north_of_front`, `on_dprk_side`, `in_salient_zone`, `FRONT_PLACE_BAND`,
 //!   `can_extend_salient`, `can_extend_west_east`, `prepare_front`
 //! * `stroke_self_intersects` / `ring_self_intersects`
 //!
@@ -1000,6 +1000,18 @@ pub fn on_dprk_side(front: &[(f64, f64)], salients: &[Vec<(f64, f64)>], x: f64, 
     point_north_of_front(&composite, x, z)
 }
 
+/// True when `(x, z)` is inside a salient bulge or a detached pocket.
+/// The side of the front does not matter: both coalitions can hold that ground.
+pub fn in_salient_zone(front: &[(f64, f64)], salients: &[Vec<(f64, f64)>], x: f64, z: f64) -> bool {
+    if front.len() < 2 || salients.is_empty() {
+        return false;
+    }
+    let (_, patches) = apply_salients(front.to_vec(), salients);
+    patches
+        .iter()
+        .any(|patch| ring_contains_xz(&patch.ring, x, z))
+}
+
 fn ring_contains_xz(ring: &[(f64, f64)], x: f64, z: f64) -> bool {
     if ring.len() < 3 {
         return false;
@@ -1160,6 +1172,24 @@ mod tests {
             on_dprk_side(&front, &[south_pocket], 55.0, 100.0),
             "a pocket south of the front is DPRK"
         );
+    }
+
+    #[test]
+    fn a_point_inside_a_salient_ring_is_in_the_zone() {
+        let front = vec![(100.0, 0.0), (100.0, 400.0)];
+        let bulge = vec![(100.0, 50.0), (160.0, 100.0), (100.0, 150.0)];
+        assert!(in_salient_zone(&front, &[bulge.clone()], 140.0, 100.0));
+        assert!(!in_salient_zone(&front, &[bulge], 180.0, 100.0));
+        assert!(!in_salient_zone(&front, &[], 140.0, 100.0));
+        let pocket = vec![
+            (40.0, 50.0),
+            (70.0, 50.0),
+            (70.0, 150.0),
+            (40.0, 150.0),
+            (40.0, 50.0),
+        ];
+        assert!(in_salient_zone(&front, &[pocket.clone()], 55.0, 100.0));
+        assert!(!in_salient_zone(&front, &[pocket], 20.0, 100.0));
     }
 
     #[test]

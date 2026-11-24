@@ -296,7 +296,7 @@ impl Harness {
         match label {
             "Fighter Pack" => {
                 self.click("Mission Tasking");
-                self.click("Fighter packs");
+                self.click("Automatic fighters");
             }
             "Exclusive Activation" => {
                 self.click("Mission Tasking");
@@ -450,6 +450,19 @@ fn mission_packages_keep_their_own_title_and_map_can_create_one() {
 }
 
 #[test]
+fn mission_wind_is_the_takeoff_heading() {
+    let mut app = GroupGeneratorApp::default();
+    app.mission.package_mut().climate_custom = true;
+    app.mission.package_mut().wind_from_deg = 90;
+    app.mission.package_mut().wind_speed_mps = 12;
+    assert_eq!(app.mission_takeoff_heading(), Some(90.0));
+    app.mission.package_mut().wind_from_deg = -10;
+    assert_eq!(app.mission_takeoff_heading(), Some(350.0));
+    app.mission.package_mut().wind_speed_mps = 0;
+    assert_eq!(app.mission_takeoff_heading(), None);
+}
+
+#[test]
 fn load_mission_button_restores_a_utility_file() {
     use crate::frontlines::Season;
     use crate::locale::{encode_locale_utf16le, serialize_locale};
@@ -478,13 +491,14 @@ fn load_mission_button_restores_a_utility_file() {
         name,
         desc,
         author,
-        "Group\r\n{\r\n}\r\n",
+        "Group\r\n{\r\n  Name = \"Korea Base Map\";\r\n}\r\n",
     );
     let path = h.dir.join("Furball.mission");
     std::fs::write(&path, text).unwrap();
     let eng = encode_locale_utf16le(&serialize_locale(&tables["eng"]));
     std::fs::write(path.with_extension("eng"), eng).unwrap();
 
+    h.app.custom_front_xz = vec![(1.0, 2.0), (3.0, 4.0)];
     h.tab("Mission");
     dialog::answer(vec![path]);
     h.click("Load mission…");
@@ -492,9 +506,13 @@ fn load_mission_button_restores_a_utility_file() {
     assert_eq!(h.app.mission.package().title, "Furball");
     assert_eq!(h.app.mission.package().hour, 16);
     assert_eq!(h.app.mission.package().wind_speed_mps, 5);
+    assert!(
+        h.app.custom_front_xz.is_empty(),
+        "the group in the mission replaces the map front"
+    );
     assert!(matches!(
         h.app.status,
-        Status::Info(ref text) if text.contains("Furball.mission")
+        Status::Info(ref text) if text.contains("Furball.mission") && text.contains("Loaded base map")
     ));
 }
 
@@ -2249,6 +2267,71 @@ fn airfield_drops_the_coalition_on_the_wrong_side_of_the_front() {
 }
 
 #[test]
+fn salient_airfield_can_be_either_coalition() {
+    let mut h = Harness::new("salient_airfield");
+    let db = PathBuf::from(&h.app.harvest_db_dir);
+    std::fs::create_dir_all(&db).unwrap();
+    let write = |name: &str, country: i32, x: &str, z: &str| {
+        std::fs::write(
+            db.join(format!("{name}_{country}.Group")),
+            tiny_airfield_at(name, x, z, &country.to_string()),
+        )
+        .unwrap();
+    };
+    write("Pocket", 601, "160000.000", "150000.000");
+    write("Pocket", 502, "160000.000", "150000.000");
+    write("South", 601, "142000.000", "150000.000");
+    write("South", 502, "142000.000", "150000.000");
+    write("North", 601, "190000.000", "220000.000");
+    write("North", 502, "190000.000", "220000.000");
+    h.app.front_aabb =
+        crate::mapclip::WorldAabb::from_corners(130_000.0, 100_000.0, 200_000.0, 250_000.0);
+    h.app.custom_front_xz = vec![(148_000.0, 0.0), (148_000.0, 499_200.0)];
+    h.app.salients = vec![vec![
+        (155_000.0, 140_000.0),
+        (170_000.0, 140_000.0),
+        (170_000.0, 160_000.0),
+        (155_000.0, 160_000.0),
+        (155_000.0, 140_000.0),
+    ]];
+    h.tab("Airfield");
+    let in_play = |h: &Harness| -> Vec<String> {
+        h.app
+            .airbases
+            .iter()
+            .filter(|slot| h.app.airbase_in_play(slot))
+            .map(|slot| {
+                slot.path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect()
+    };
+    let listed = in_play(&h);
+    assert!(
+        listed.iter().any(|name| name == "Pocket_601.Group")
+            && listed.iter().any(|name| name == "Pocket_502.Group"),
+        "a field inside the salient keeps both files: {listed:?}"
+    );
+    assert!(
+        listed.iter().any(|name| name == "South_601.Group")
+            && listed.iter().all(|name| name != "South_502.Group"),
+        "south of the front still drops DPRK: {listed:?}"
+    );
+    assert!(
+        listed.iter().any(|name| name == "North_502.Group")
+            && listed.iter().all(|name| name != "North_601.Group"),
+        "north of the front, outside the salient, still drops NATO: {listed:?}"
+    );
+    assert!(
+        !h.has("Airbase loaded twice"),
+        "both coalitions in a salient are not a duplicate load"
+    );
+}
+
+#[test]
 fn aircraft_copy_between_airfields() {
     let mut h = Harness::new("aircraft_copy");
     let db = PathBuf::from(&h.app.harvest_db_dir);
@@ -2578,7 +2661,7 @@ fn every_placed_air_start_is_listed_on_the_right() {
     assert!(h.has("CAP North · 80°"), "{:?}", h.labels());
     assert!(h.has("CAP South · 0°"), "{:?}", h.labels());
     assert!(h.has("Reserve · NATO"), "{:?}", h.labels());
-    let hint = h.find("DPRK is north of the front and NATO is south. A country on the wrong side of that line is left out. With no front drawn, the line is the 38th parallel. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.");
+    let hint = h.find("DPRK is north of the front and NATO is south. A country on the wrong side of that line is left out. A field inside a salient can be placed as NATO or as DPRK. With no front drawn, the line is the 38th parallel. Data required means that field has no runway group. Air starts are listed on the same side. Korea fields, under the list, are the sites in this area that still need a harvest.");
     let dprk = h
         .all("DPRK")
         .into_iter()
@@ -2699,7 +2782,7 @@ fn a_second_identical_generate_marks_the_tab_saved() {
 fn status_messages_retire_after_the_next_edit() {
     let mut h = Harness::new("agestatus");
     h.tab("Fighter Pack");
-    h.app.status = Status::Info("Fighter Pack reset to the default settings.".into());
+    h.app.status = Status::Info("Automatic Fighters reset to the default settings.".into());
     h.settle();
     assert!(
         !h.status().is_empty(),
@@ -3241,26 +3324,32 @@ fn map_places_fighters_from_the_forces_dock() {
     let mut h = Harness::new("placefighters");
     h.tab("Map");
     h.wait_for_map();
-    h.tab("Mission Tasking");
-    // The Fighters section's Place DPRK (Units has one too, further down).
-    let place = h
-        .all("Place DPRK")
-        .into_iter()
-        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
-        .expect("Place DPRK");
-    h.click_at(place.rect.center());
+    h.tab("Fighter Pack");
+    let place = h.find_prefix("PLACE ON THE MAP").rect;
+    let pack = h.find("PACK").rect;
+    let types = h.find_prefix("AIRCRAFT TYPES").rect;
+    assert!(
+        place.right() < types.left(),
+        "aircraft types is on the right ({:?} vs {:?})",
+        place,
+        types
+    );
+    assert!(
+        pack.right() < types.left() && place.top() < pack.top(),
+        "pack sits on the left under placement"
+    );
+    h.click("Place DPRK");
     let n = h.app.map_fighters.as_ref().map_or(0, |l| l.spots.len());
     assert!(n > 0, "no fighters placed: {}", h.status());
-    assert!(h.has_prefix("DPRK: "), "count line shows: {:?}", h.labels());
-    // Clear DPRK (the one in the Fighters section), then undo.
-    let fighters_top = h.find("AUTOMATIC FIGHTERS").rect.top();
-    let clear = h
-        .all("Clear DPRK")
-        .into_iter()
-        .filter(|n| !n.disabled && n.rect.top() > fighters_top)
-        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
-        .expect("fighters Clear DPRK");
-    h.click_at(clear.rect.center());
+    h.click("Tasking");
+    assert!(
+        h.has_prefix("DPRK · "),
+        "placed list shows: {:?}",
+        h.labels()
+    );
+    assert!(!h.has("Place DPRK"), "placement stays on Automatic fighters");
+    h.click("Automatic fighters");
+    h.click("Clear DPRK");
     assert!(h.app.map_fighters.is_none());
     h.key_with(Key::Z, CTRL);
     assert_eq!(h.app.map_fighters.as_ref().map_or(0, |l| l.spots.len()), n);
@@ -3295,32 +3384,95 @@ fn tasking_library_opens_in_the_center() {
 }
 
 #[test]
+fn tasking_objectives_list_placed_units() {
+    let mut h = Harness::new("objectives");
+    h.tab("Mission Tasking");
+    h.click("Objectives");
+    assert!(h.has("PLACED UNITS"));
+    assert!(h.has("NATO · 0 units"));
+    assert!(h.has("DPRK · 0 units"));
+    assert!(h.has("None placed."));
+    assert!(h.has("MAP OBJECTIVES"));
+    assert!(h.has("NATO OBJECTIVES"));
+    assert!(h.has("DPRK OBJECTIVES"));
+    assert!(h.has("MISSION AIRCRAFT"));
+    assert!(h.has("Target destruction percent to achieve primary objective"));
+    assert!(h.has("Automatic Fighters destroyed to achieve primary objective"));
+    assert!(h.has("Mission Aircraft destroyed to achieve primary objective"));
+    assert!(h.has("Pick NATO targets"));
+    assert!(h.has("Pick DPRK targets"));
+    assert!(h.has("Clear all"));
+    assert!(!h.has("NATO must destroy"));
+    h.app.objective_nato_picks.push(crate::objectives::ObjectivePick {
+        label: "Bridge".into(),
+        x: 1.0,
+        z: 2.0,
+        positions: vec![(1.0, 2.0)],
+    });
+    h.app.objective_dprk_picks.push(crate::objectives::ObjectivePick {
+        label: "Mine".into(),
+        x: 3.0,
+        z: 4.0,
+        positions: vec![(3.0, 4.0)],
+    });
+    h.settle();
+    h.click("Clear all");
+    assert!(h.app.objective_nato_picks.is_empty());
+    assert!(h.app.objective_dprk_picks.is_empty());
+}
+
+#[test]
+fn reset_all_asks_before_it_clears() {
+    let mut h = Harness::new("resetall");
+    h.tab("Mission Tasking");
+    h.app.objective_nato_pct = 50;
+    h.app.custom_front_xz = vec![(1.0, 2.0), (3.0, 4.0)];
+    h.settle();
+    h.click("Reset all");
+    assert!(h.app.confirm == Some(Confirm::ResetAll));
+    h.key(Key::Escape);
+    assert!(h.app.confirm.is_none());
+    assert_eq!(h.app.objective_nato_pct, 50);
+    assert_eq!(h.app.custom_front_xz.len(), 2);
+    h.click("Reset all");
+    let clear = h
+        .all("Clear")
+        .into_iter()
+        .max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .expect("confirm Clear");
+    h.click_at(clear.rect.center());
+    assert!(h.app.confirm.is_none());
+    assert!(h.app.map_missions.is_empty());
+    assert!(h.app.custom_front_xz.is_empty());
+    assert_eq!(h.app.objective_nato_pct, 33);
+    assert_eq!(h.app.objective_nato_mission, 0);
+    assert!(h.has("Reset all"));
+}
+
+#[test]
 fn map_load_fighter_pack_uses_fighter_icons() {
     let mut h = Harness::new("loadfighters");
     h.tab("Map");
     h.wait_for_map();
-    h.tab("Mission Tasking");
+    h.tab("Fighter Pack");
     h.app.fighter_waves = 2;
     h.app.fighter_fill = false;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("TemplateExamples/Eastern_Fighters_Random_5pack_V6.Group");
     dialog::answer(vec![path]);
-    let fighters_top = h.find("AUTOMATIC FIGHTERS").rect.top();
-    let units = h.find("UNITS").rect.top();
-    let load = h
-        .all("Load DPRK…")
-        .into_iter()
-        .filter(|n| n.rect.top() > fighters_top && n.rect.top() < units)
-        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
-        .expect("fighters Load DPRK");
-    h.click_at(load.rect.center());
+    h.click("Load DPRK…");
     let layout = h.app.map_fighters.as_ref().expect(&h.status());
     assert!(layout.eastern);
     let w1 = layout.spots.iter().filter(|s| s.wave == 1).count();
     let w2 = layout.spots.iter().filter(|s| s.wave == 2).count();
     assert_eq!((w1, w2), (5, 5), "{}", h.status());
     assert_eq!(h.app.map_imported_fighters.len(), 2);
-    assert!(h.has_prefix("DPRK: "), "count line shows: {:?}", h.labels());
+    h.click("Tasking");
+    assert!(
+        h.has_prefix("DPRK · "),
+        "placed list shows: {:?}",
+        h.labels()
+    );
 }
 
 #[test]
@@ -3839,7 +3991,7 @@ fn side_panel_controls_stay_inside_their_panel() {
     const PANELS: [(&str, f32, f32); 8] = [
         ("Template", 270.0, 304.0),
         ("Army Generator", 330.0, 300.0),
-        ("Fighter Pack", 270.0, 304.0),
+        ("Fighter Pack", 304.0, 304.0),
         ("Exclusive Activation", 290.0, 290.0),
         ("Airfields", 290.0, 270.0),
         ("Map", 56.0, 304.0),
@@ -4054,6 +4206,7 @@ fn timeline_mission(
         hidden: false,
         cap_minutes: 0,
         strike_cover: Vec::new(),
+        objective_mission: false,
     }
 }
 

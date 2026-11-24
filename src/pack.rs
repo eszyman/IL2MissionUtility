@@ -231,7 +231,7 @@ fn generate_pack_ex(
         .children
         .iter()
         .find(|c| c.name() == Some("NodeGates"))
-        .ok_or("template has no NodeGates group — load a linked fighter pack")?
+        .ok_or("template has no NodeGates group — load an Automatic Fighters file")?
         .clone();
     let cell1 = extract_gate_cell(&node_gates, 1)?;
 
