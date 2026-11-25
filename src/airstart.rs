@@ -646,9 +646,10 @@ fn prop_bit(entity: &Il2Entity, key: &str) -> Option<bool> {
     }
 }
 
-/// Flyable Korea aircraft. AI-only types (F-84, bombers, transports) stay off the field.
+/// Korea aircraft the Airfield tab can place on a field or an air start.
+/// Bombers and transports stay off the field.
 const FLYABLE: &[&str] = &[
-    "f51d", "f80c10", "f86a5", "il10", "mig15bis", "la11", "yak9p",
+    "f51d", "f80c10", "f84e", "f86a5", "il10", "mig15bis", "la11", "yak9p",
 ];
 
 /// Aircraft ids the bank can offer, in flyable order.
@@ -773,7 +774,7 @@ mod tests {
         assert_eq!(
             aircraft_ids(),
             vec![
-                "f51d", "f80c10", "f86a5", "il10", "mig15bis", "la11", "yak9p"
+                "f51d", "f80c10", "f84e", "f86a5", "il10", "mig15bis", "la11", "yak9p"
             ]
         );
     }

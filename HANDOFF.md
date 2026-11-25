@@ -1,7 +1,7 @@
 # HANDOFF — IL-2 Mission Utility (Claude working copy)
 
 > Read this first in every new session. Update the **Session log** and
-> **State** sections before you stop. Last updated: 2026-11-23.
+> **State** sections before you stop. Last updated: 2026-11-24.
 
 ## 1. Where things live
 
@@ -383,3 +383,4 @@ continue at delegation-loop step 3 (§2).
 | 2026-11-23 | Cursor | **Reset all, and object counts.** Reset all sits above Help and asks before it clears the utility back to a fresh start. Mission aircraft counts every plane, and a merged flight is multiplied by how many copies were in the file. Placed unit totals count active vehicles, ships, trains, planes, blocks, bridges, and airfields, not the group that holds them. Loading a mission or group still restores every objective. |
 | 2026-11-23 | Cursor | **Salient airfields can be either side.** A field inside a salient stays on the Airfield list as NATO and as DPRK, and both files can be written into the base map. Remove the one that should not be placed. Outside a salient, the other country's file is still left out. |
 | 2026-11-23 | Cursor | **Lock front and Clear front.** Lock front keeps the main line while the date changes. Salients stay as drawn. Clear front removes that line and leaves the salients; Ctrl Z brings the line back, and an unlocked date change shows the dated front again. Season marks sit under the year ticks on the date strip. |
+| 2026-11-24 | Cursor | **F-84E on airfields and air starts.** The Airfield aircraft list includes the F-84E Thunderjet with the other Korea types. Bombers and transports stay off that list. |
